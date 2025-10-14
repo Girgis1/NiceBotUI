@@ -1,0 +1,204 @@
+╔══════════════════════════════════════════════════════════════╗
+║                                                              ║
+║        ✅ POLICY CHECKPOINT DROPDOWN + STATUS UPDATE ✅      ║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝
+
+NEW FEATURES IMPLEMENTED
+-------------------------
+
+1. ✅ ONE-LINE STATUS DISPLAY
+   - Status, Time, and Position now on ONE horizontal line
+   - Cleaner, more compact display
+   - Better use of screen space
+
+2. ✅ POLICY CHECKPOINT DROPDOWN
+   - Auto-detects all available checkpoints
+   - Shows them in a dropdown menu
+   - Defaults to "last" or latest checkpoint
+   - Click to switch between checkpoints
+   - 🔄 Refresh button to rescan
+
+3. ✅ SMART CHECKPOINT SCANNING
+   - Automatically finds your training checkpoints
+   - Scans: outputs/train/TASK/checkpoints/
+   - Lists all folders with pretrained_model
+   - Sorts: "last" first, then newest to oldest
+
+4. ✅ EDITABLE IN SETTINGS
+   - Full policy path still editable in Settings
+   - Change base path, task name, etc.
+   - Dropdown updates automatically
+
+POLICY DROPDOWN FEATURES
+-------------------------
+
+📂 **What it shows:**
+- ✓ last (recommended - always latest)
+- 90000 (checkpoint at step 90000)
+- 80000 (checkpoint at step 80000)
+- 70000 (checkpoint at step 70000)
+- etc.
+
+🔄 **How it works:**
+1. Scans your policy path for checkpoints folder
+2. Lists all checkpoint subdirectories
+3. Shows "✓ last" with checkmark for the default
+4. Click dropdown to select different checkpoint
+5. Auto-saves to config.json
+
+▼ **Dropdown styling:**
+- Big touch-friendly (40px height)
+- White down arrow on right
+- Hover = blue border
+- Dark theme matching rest of UI
+
+EXAMPLE PATHS
+-------------
+
+If your config has:
+```json
+"policy": {
+  "path": "/home/daniel/lerobot/outputs/train/GrabBlock/checkpoints/80000/pretrained_model"
+}
+```
+
+The dropdown will scan:
+`/home/daniel/lerobot/outputs/train/GrabBlock/checkpoints/`
+
+And show:
+```
+✓ last
+90000
+80000  ← Currently selected
+70000
+60000
+```
+
+When you select "90000", it updates to:
+`/home/daniel/lerobot/outputs/train/GrabBlock/checkpoints/90000/pretrained_model`
+
+CHANGING POLICY IN SETTINGS
+----------------------------
+
+To change the BASE policy path:
+1. Click ⚙️ Settings
+2. Go to "Policy" tab
+3. Edit "Checkpoint Path" to point to different task:
+   - `/home/daniel/lerobot/outputs/train/PickPlace/checkpoints/last/pretrained_model`
+4. Click Save
+5. Dropdown will rescan and show PickPlace checkpoints!
+
+STATUS LINE UPDATE
+------------------
+
+**Before:** (3 lines)
+```
+Idle
+Time: 00:00
+(no position shown)
+```
+
+**After:** (1 line)
+```
+Idle        Time: 00:00        Position: —
+```
+
+Much cleaner! Position info will show during robot movement.
+
+REFRESH BUTTON
+--------------
+
+Click the 🔄 button to:
+- Rescan checkpoint directory
+- Pick up new checkpoints from training
+- Update dropdown list
+
+Useful when:
+- Training is still running
+- You just finished a training run
+- You added new checkpoints manually
+
+HOW TO USE
+----------
+
+### Normal workflow:
+1. Train your model: `lerobot train ...`
+2. Checkpoints save to: outputs/train/TASK/checkpoints/
+3. Open GUI
+4. Dropdown shows all checkpoints automatically!
+5. Select "✓ last" to use latest (recommended)
+6. Or select specific checkpoint (80000, 90000, etc.)
+7. Click START to run policy
+
+### Testing different checkpoints:
+1. Click dropdown
+2. Select "80000" to test checkpoint 80000
+3. Run it, see results
+4. Click dropdown again
+5. Select "90000" to test checkpoint 90000
+6. Compare performance!
+
+### When training completes:
+1. Click 🔄 to refresh
+2. New checkpoints appear
+3. Select latest to test
+
+CHECKPOINT SORTING
+------------------
+
+Checkpoints are sorted:
+1. "last" always FIRST (✓ marked)
+2. Numeric checkpoints in DESCENDING order (newest first)
+   - 90000
+   - 80000  
+   - 70000
+3. Non-numeric checkpoints alphabetically
+
+This ensures the latest checkpoint is always at the top!
+
+FALLBACK BEHAVIOR
+-----------------
+
+If no checkpoints directory found:
+- Dropdown shows: "⚠️ last" (or whatever is in config)
+- Dropdown is disabled (grayed out)
+- You can still edit full path in Settings
+
+This happens when:
+- Policy path doesn't follow standard structure
+- Path doesn't exist yet
+- Custom policy location
+
+TECHNICAL DETAILS
+-----------------
+
+**Path parsing:**
+The scanner navigates UP from your policy path until it finds
+a directory named "checkpoints", then scans its children.
+
+Works with:
+✓ `outputs/train/TASK/checkpoints/CKPT/pretrained_model`
+✓ `/home/USER/lerobot/outputs/train/TASK/checkpoints/CKPT/pretrained_model`
+✓ `custom/path/to/checkpoints/CKPT/pretrained_model`
+
+**Validation:**
+Only includes folders that contain `pretrained_model` subdirectory.
+
+**Auto-save:**
+Selecting a new checkpoint immediately saves to config.json
+and prints: "Policy changed to: /path/to/checkpoint"
+
+TRY IT NOW
+----------
+
+1. Open the app (running in background)
+2. Look for "Trained Policy:" dropdown below status
+3. Click the dropdown - see your checkpoints!
+4. Select different checkpoint
+5. Check terminal for: "Policy changed to: ..."
+6. Check config.json - path updated!
+
+Your policy management just got way easier! 🎉
+
+

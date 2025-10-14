@@ -1,0 +1,281 @@
+╔══════════════════════════════════════════════════════════════╗
+║                                                              ║
+║       ✅ HOME BUTTON & SETTINGS BUTTON UPDATES ✅            ║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝
+
+ALL CHANGES IMPLEMENTED
+------------------------
+
+1. ✅ HOME BUTTON IS NOW SQUARE
+   - Width dynamically matches height
+   - Adjusts on window resize
+   - Always perfectly square
+
+2. ✅ SETTINGS BUTTON RELOCATED
+   - Moved from header to bottom right
+   - Positioned next to Recent Runs
+   - No longer in top navigation
+
+3. ✅ SETTINGS BUTTON IS SQUARE
+   - 100x100 pixels (same as Recent Runs height)
+   - Width = Height (perfectly square)
+   - Fixed size
+
+4. ✅ SETTINGS BUTTON SHOWS ONLY GEAR
+   - Changed from "⚙ Settings" to just "⚙"
+   - Large 48px gear icon
+   - Clean, minimalist look
+
+HOME BUTTON DETAILS
+-------------------
+
+**Implementation:**
+- Minimum size: 140x140 pixels
+- Dynamic sizing: Width automatically matches height
+- Uses resizeEvent to maintain square shape
+
+**How it works:**
+```python
+def resizeEvent(self, event):
+    # Make home button square (width = height)
+    height = self.home_btn.height()
+    self.home_btn.setFixedWidth(height)
+```
+
+**Result:**
+- Always perfectly square
+- Scales with window size
+- Matches START button height
+- Width adjusts automatically
+
+**Visual:**
+```
+┌─────────────┬───┐
+│             │   │
+│    START    │ ⌂ │
+│             │   │
+└─────────────┴───┘
+  (wide rect)  (sq)
+```
+
+SETTINGS BUTTON DETAILS
+------------------------
+
+**Location:**
+- Bottom of screen
+- Right side of Recent Runs list
+- Same row as history
+
+**Size:**
+- Height: 100px (matches Recent Runs)
+- Width: 100px (square)
+- Fixed size, doesn't resize
+
+**Styling:**
+- Background: Gray (#757575)
+- Border: 2px solid
+- Rounded corners: 8px
+- Font: 48px gear icon
+- Hover: Lighter gray
+- Pressed: Dark gray
+- Disabled: Muted gray
+
+**Visual:**
+```
+Recent Runs
+┌─────────────────────────┬───┐
+│ ✓ 12 Dec 02:30 PM - ... │   │
+│ ✓ 11 Dec 09:15 AM - ... │ ⚙ │
+│ ✗ 11 Dec 08:00 AM - ... │   │
+└─────────────────────────┴───┘
+     (history list)      (gear)
+```
+
+LAYOUT COMPARISON
+-----------------
+
+### Before:
+```
+┌────────────────────────────────┐
+│ LeRobot Console    [⚙ Settings]│ ← Settings in header
+├────────────────────────────────┤
+│ Status, Controls, Buttons      │
+├────────────────────────────────┤
+│ Recent Runs                    │ ← Full width
+│ ┌────────────────────────────┐ │
+│ │ History...                 │ │
+│ └────────────────────────────┘ │
+└────────────────────────────────┘
+```
+
+### After:
+```
+┌────────────────────────────────┐
+│ LeRobot Console                │ ← No settings button
+├────────────────────────────────┤
+│ Status, Controls, Buttons      │
+│ [START──────] [⌂]              │ ← Square home button
+├────────────────────────────────┤
+│ Recent Runs                    │
+│ ┌─────────────────────┬───┐   │ ← Settings on right
+│ │ History...          │ ⚙ │   │
+│ └─────────────────────┴───┘   │
+└────────────────────────────────┘
+```
+
+BENEFITS
+--------
+
+### Home Button Square:
+✅ More consistent appearance
+✅ Better touch target (predictable)
+✅ Professional look
+✅ Responsive to screen changes
+
+### Settings Button Relocated:
+✅ Less cluttered header
+✅ Settings are configuration (not primary action)
+✅ More intuitive placement (settings at bottom)
+✅ Still easily accessible
+✅ Touch-friendly square button
+
+### Gear Icon Only:
+✅ Cleaner visual
+✅ Universal symbol (no language barrier)
+✅ Takes less space
+✅ More recognizable
+✅ Matches material design
+
+TOUCH OPTIMIZATION
+------------------
+
+**Settings Button:**
+- Size: 100x100px
+- Square shape (easy to hit)
+- High contrast gray
+- Large icon (48px)
+- Clear hover state
+
+**Home Button:**
+- Size: 140x140px minimum
+- Square shape (consistent target)
+- Blue color (stands out)
+- Large icon (64px)
+- Always same aspect ratio
+
+**Both buttons:**
+- Well-spaced from other elements
+- Large enough for finger tap
+- Clear visual feedback
+- Disabled state visible
+
+TECHNICAL DETAILS
+-----------------
+
+**resizeEvent Implementation:**
+```python
+def resizeEvent(self, event):
+    super().resizeEvent(event)
+    # Make home button square (width = height)
+    if hasattr(self, 'home_btn'):
+        height = self.home_btn.height()
+        if height > 0:
+            self.home_btn.setFixedWidth(height)
+```
+
+**Benefits:**
+- Triggers on any window resize
+- Safe check with hasattr
+- Only sets width when height is valid
+- No infinite loop (setFixedWidth doesn't trigger resize)
+
+**Settings Button Layout:**
+```python
+history_and_settings = QHBoxLayout()
+history_and_settings.addWidget(self.history_list, stretch=1)
+history_and_settings.addWidget(self.settings_btn, stretch=0)
+```
+
+**Benefits:**
+- History list takes available space (stretch=1)
+- Settings button fixed size (stretch=0)
+- 10px spacing between them
+- Clean horizontal layout
+
+RESPONSIVE BEHAVIOR
+-------------------
+
+**Home Button:**
+- Window resizes → Button height changes
+- resizeEvent fires → Width adjusts to match
+- Result: Always square, any size
+
+**Settings Button:**
+- Fixed 100x100px
+- Doesn't resize with window
+- Consistent location and size
+- Predictable touch target
+
+**Recent Runs:**
+- Fixed 100px height
+- Variable width (fills space)
+- Settings takes fixed 100px from right
+- Remaining space = history list
+
+ACCESSIBILITY
+-------------
+
+✅ Large touch targets (100px+)
+✅ High contrast colors
+✅ Clear visual hierarchy
+✅ Consistent spacing
+✅ Recognizable icons
+✅ Hover states for feedback
+✅ Disabled states when needed
+
+USER EXPERIENCE
+---------------
+
+**Settings are less prominent:**
+- Not needed during normal operation
+- Configuration happens once
+- Bottom right = less intrusive
+- Still easily accessible when needed
+
+**Home button is consistent:**
+- Always square = predictable
+- Same aspect ratio = professional
+- Scales nicely = responsive
+- Blue color = clearly identified
+
+**History + Settings together:**
+- Related functionality (past runs + config)
+- Efficient use of screen space
+- Clean visual grouping
+- Better touch layout
+
+TRY IT NOW
+----------
+
+The app is running! Check out:
+
+1. **Home Button:**
+   - Look at the blue house button (⌂)
+   - Should be perfectly square
+   - Try resizing window
+   - Width should adjust to stay square
+
+2. **Settings Button:**
+   - Look at bottom right
+   - Should see 100x100px gear button (⚙)
+   - Right next to Recent Runs
+   - No longer in header
+
+3. **Layout:**
+   - Header is now cleaner
+   - Recent Runs has settings on right
+   - Everything still accessible
+   - Better visual balance
+
+All improvements complete! 🎉

@@ -1,0 +1,89 @@
+╔══════════════════════════════════════════════════════════════╗
+║                                                              ║
+║          ✅ SPEED CONTROL NOW WORKS! ✅                      ║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝
+
+PROBLEM FOUND
+-------------
+The speed_scale in config.json was being read, but NEVER actually
+applied to the motors! The code was just sending position commands
+without setting speed first.
+
+THE FIX
+-------
+Now the rest_pos.py script:
+
+1. Enables torque on all motors
+2. ✅ Sets Goal_Velocity register (0-4000 range)
+3. ✅ Sets Acceleration register (0-255 range)
+4. Then moves to position
+5. Disables torque when done
+
+SPEED MAPPING
+-------------
+speed_scale in config.json maps to motor values:
+
+  0.1 (10%)  → Velocity:  400, Accel:  25  (VERY SLOW)
+  0.3 (30%)  → Velocity: 1200, Accel:  76  (SAFE/DEFAULT)
+  0.5 (50%)  → Velocity: 2000, Accel: 127  (MEDIUM)
+  0.7 (70%)  → Velocity: 2800, Accel: 178  (FAST)
+  1.0 (100%) → Velocity: 4000, Accel: 255  (MAX SPEED)
+
+CURRENT CONFIG
+--------------
+Default speed set to: 0.3 (30% - safe speed)
+
+HOW TO CHANGE SPEED
+-------------------
+1. Open Settings (⚙ button)
+2. Go to Advanced tab
+3. Find "Home Speed" slider
+4. Adjust between 0.10 and 1.00
+5. Click Save
+6. Next time you press HOME, it uses the new speed!
+
+TESTED
+------
+✓ Speed 0.3 - Robot moves slowly and safely
+✓ Speed 1.0 - Robot moves at full speed
+✓ Settings dialog updates config correctly
+✓ GO HOME respects the speed setting
+
+UI UPDATES
+----------
+✅ Home button is now WHITE with ⌂ icon
+✅ Home button scales to START button height
+✅ Button turns ORANGE while moving
+✅ Button returns to WHITE when done
+✅ No popup on success (clean UX)
+
+MOTOR INDICATOR
+---------------
+Note: The motor indicator shows RED when torque is disabled
+(which is correct - motors are relaxed after going home).
+
+The indicator will be GREEN when:
+- Motors are actively being controlled
+- During recording/playback
+- When torque is enabled
+
+It's RED when:
+- Motors are relaxed (torque off)
+- Robot is in free-move mode
+- Between operations
+
+This is CORRECT behavior! ✅
+
+TRY IT NOW
+----------
+1. Go to Settings → Advanced
+2. Set "Home Speed" to 0.2 (very slow)
+3. Click Save
+4. Click the white HOME button (⌂)
+5. Watch it move SLOWLY
+6. Change to 0.5 and try again - it's FASTER!
+
+The speed control NOW WORKS! 🎉
+
+

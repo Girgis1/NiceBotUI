@@ -1,0 +1,19 @@
+# udev rules for SO-100/101 robot serial access
+# Place in /etc/udev/rules.d/ and reload with: sudo udevadm control --reload-rules && sudo udevadm trigger
+
+# CH340 USB-Serial adapter (common on many controllers)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", GROUP="dialout", MODE="0660", SYMLINK+="so100"
+
+# CP210x USB-Serial adapter
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", GROUP="dialout", MODE="0660", SYMLINK+="so100_cp210x"
+
+# FTDI USB-Serial adapter
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", GROUP="dialout", MODE="0660", SYMLINK+="so100_ftdi"
+
+# Generic ACM devices (Arduino-like boards)
+KERNEL=="ttyACM*", GROUP="dialout", MODE="0660"
+
+# Generic USB serial devices
+KERNEL=="ttyUSB*", GROUP="dialout", MODE="0660"
+
+
