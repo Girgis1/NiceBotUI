@@ -45,6 +45,10 @@ class RecordTab(QWidget):
         self.live_record_rate = 10  # Hz - configurable recording rate
         self.last_recorded_position = None
         self.live_position_threshold = 5  # Minimum change to record new position (units)
+        self.live_recorded_positions = []  # Store all positions during live recording
+        
+        # Playback speed control
+        self.playback_speed_scale = 100  # Default 100% speed
         
         self.init_ui()
         self.refresh_action_list()
@@ -175,34 +179,6 @@ class RecordTab(QWidget):
         self.set_btn.clicked.connect(self.record_position)
         control_bar.addWidget(self.set_btn)
         
-        # Live recording button
-        self.live_record_btn = QPushButton("🔴 LIVE")
-        self.live_record_btn.setMinimumHeight(50)
-        self.live_record_btn.setMinimumWidth(120)
-        self.live_record_btn.setCheckable(True)
-        self.live_record_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f44336;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                font-size: 16px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #e57373;
-            }
-            QPushButton:checked {
-                background-color: #4CAF50;
-                border: 2px solid #81C784;
-            }
-            QPushButton:checked:hover {
-                background-color: #66BB6A;
-            }
-        """)
-        self.live_record_btn.clicked.connect(self.toggle_live_recording)
-        control_bar.addWidget(self.live_record_btn)
-        
         self.play_btn = QPushButton("▶ PLAY")
         self.play_btn.setMinimumHeight(50)
         self.play_btn.setMinimumWidth(150)
@@ -273,13 +249,42 @@ class RecordTab(QWidget):
         
         control_bar.addStretch()
         
+        # Live recording button - far right
+        self.live_record_btn = QPushButton("🔴 LIVE RECORD")
+        self.live_record_btn.setMinimumHeight(50)
+        self.live_record_btn.setMinimumWidth(140)
+        self.live_record_btn.setCheckable(True)
+        self.live_record_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f44336;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                font-size: 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #e57373;
+            }
+            QPushButton:checked {
+                background-color: #4CAF50;
+                border: 2px solid #81C784;
+            }
+            QPushButton:checked:hover {
+                background-color: #66BB6A;
+            }
+        """)
+        self.live_record_btn.clicked.connect(self.toggle_live_recording)
+        control_bar.addWidget(self.live_record_btn)
+        
         layout.addLayout(control_bar)
         
-        # Velocity slider control
+        # Speed controls - Velocity and Playback Speed Scale
         velocity_frame = QHBoxLayout()
-        velocity_frame.setSpacing(10)
+        velocity_frame.setSpacing(15)
         
-        velocity_label = QLabel("Speed:")
+        # Recording velocity
+        velocity_label = QLabel("Record Speed:")
         velocity_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
         velocity_frame.addWidget(velocity_label)
         
@@ -330,6 +335,60 @@ class RecordTab(QWidget):
         """)
         self.velocity_display.setAlignment(Qt.AlignCenter)
         velocity_frame.addWidget(self.velocity_display)
+        
+        # Playback speed scale
+        velocity_frame.addSpacing(30)
+        speed_scale_label = QLabel("Playback Speed:")
+        speed_scale_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
+        velocity_frame.addWidget(speed_scale_label)
+        
+        self.speed_scale_slider = QSlider(Qt.Horizontal)
+        self.speed_scale_slider.setMinimum(25)
+        self.speed_scale_slider.setMaximum(200)
+        self.speed_scale_slider.setValue(100)
+        self.speed_scale_slider.setSingleStep(25)
+        self.speed_scale_slider.setPageStep(25)
+        self.speed_scale_slider.setTickPosition(QSlider.TicksBelow)
+        self.speed_scale_slider.setTickInterval(25)
+        self.speed_scale_slider.setMinimumWidth(300)
+        self.speed_scale_slider.setStyleSheet("""
+            QSlider::groove:horizontal {
+                border: 1px solid #404040;
+                height: 8px;
+                background: #2d2d2d;
+                border-radius: 4px;
+            }
+            QSlider::handle:horizontal {
+                background: #FF9800;
+                border: 2px solid #F57C00;
+                width: 20px;
+                margin: -6px 0;
+                border-radius: 10px;
+            }
+            QSlider::handle:horizontal:hover {
+                background: #FFB74D;
+            }
+            QSlider::sub-page:horizontal {
+                background: #FF9800;
+                border-radius: 4px;
+            }
+        """)
+        self.speed_scale_slider.valueChanged.connect(self.on_speed_scale_changed)
+        velocity_frame.addWidget(self.speed_scale_slider)
+        
+        self.speed_scale_display = QLabel("100%")
+        self.speed_scale_display.setStyleSheet("""
+            color: #ffffff;
+            background-color: #404040;
+            border: 2px solid #505050;
+            border-radius: 4px;
+            font-size: 16px;
+            font-weight: bold;
+            padding: 5px 10px;
+            min-width: 50px;
+        """)
+        self.speed_scale_display.setAlignment(Qt.AlignCenter)
+        velocity_frame.addWidget(self.speed_scale_display)
         
         velocity_frame.addStretch()
         
@@ -461,11 +520,16 @@ class RecordTab(QWidget):
             self.status_label.setText(f"✓ Added {delay:.1f}s delay")
     
     def toggle_live_recording(self):
-        """Toggle live position recording for smooth, repeatable captures"""
+        """Toggle live position recording - creates ONE continuous action"""
         if not self.is_live_recording:
             # Start live recording
             self.is_live_recording = True
             self.last_recorded_position = None
+            self.live_recorded_positions = []  # Reset positions list
+            
+            # Clear table for live recording
+            self.table.setRowCount(0)
+            self.position_counter = 1
             
             # Disable other controls
             self.set_btn.setEnabled(False)
@@ -486,7 +550,7 @@ class RecordTab(QWidget):
             self.stop_live_recording()
     
     def stop_live_recording(self):
-        """Stop live recording"""
+        """Stop live recording and create ONE continuous action"""
         self.is_live_recording = False
         self.live_record_timer.stop()
         
@@ -497,11 +561,28 @@ class RecordTab(QWidget):
         self.save_btn.setEnabled(True)
         
         self.live_record_btn.setChecked(False)
-        self.live_record_btn.setText("🔴 LIVE")
+        self.live_record_btn.setText("🔴 LIVE RECORD")
         
-        positions_count = self.table.rowCount()
-        self.status_label.setText(f"✓ Live recording stopped - captured {positions_count} positions")
-        print(f"[LIVE RECORD] Stopped - total positions: {positions_count}")
+        # Add all captured positions to the table as ONE continuous action
+        positions_count = len(self.live_recorded_positions)
+        if positions_count > 0:
+            print(f"[LIVE RECORD] Adding {positions_count} positions to table...")
+            for i, pos_data in enumerate(self.live_recorded_positions, 1):
+                self.table.add_position_row(
+                    f"Pos {i}",
+                    pos_data['positions'],
+                    pos_data['velocity']
+                )
+            
+            self.position_counter = positions_count + 1
+            self.status_label.setText(f"✓ Live recording complete - {positions_count} positions captured")
+            print(f"[LIVE RECORD] ✓ Complete - {positions_count} positions added as continuous action")
+        else:
+            self.status_label.setText("⚠️ No positions captured")
+            print(f"[LIVE RECORD] No positions captured")
+        
+        # Clear the live recording buffer
+        self.live_recorded_positions = []
     
     def capture_live_position(self):
         """Capture one position during live recording (called by timer at 10Hz)
@@ -532,18 +613,16 @@ class RecordTab(QWidget):
                     # Position hasn't changed enough, skip this sample (reduces redundancy)
                     return
             
-            # Record this position
+            # Store this position in the live recording buffer
             current_velocity = self.velocity_slider.value()
-            self.table.add_position_row(
-                f"Pos {self.position_counter}",
-                positions,
-                current_velocity
-            )
+            self.live_recorded_positions.append({
+                'positions': positions,
+                'velocity': current_velocity
+            })
             
             self.last_recorded_position = positions
-            self.position_counter += 1
             
-            positions_count = self.table.rowCount()
+            positions_count = len(self.live_recorded_positions)
             self.status_label.setText(f"🔴 Recording... ({positions_count} positions)")
             print(f"[LIVE RECORD] ✓ Captured position {positions_count}: max_change={max_change}")
             
@@ -587,6 +666,15 @@ class RecordTab(QWidget):
         else:
             self.default_velocity = snapped_value
             self.velocity_display.setText(str(snapped_value))
+    
+    def on_speed_scale_changed(self, value: int):
+        """Handle speed scale slider change - snap to multiples of 25"""
+        snapped_value = round(value / 25) * 25
+        if snapped_value != value:
+            self.speed_scale_slider.setValue(snapped_value)
+        else:
+            self.playback_speed_scale = snapped_value
+            self.speed_scale_display.setText(f"{snapped_value}%")
     
     def delete_position(self, row: int):
         """Delete a position"""
@@ -721,32 +809,38 @@ class RecordTab(QWidget):
         
         print(f"[PLAYBACK] Step {self.playback_index + 1}/{len(self.playback_positions)}: {pos_data['name']}")
         print(f"[PLAYBACK]   Positions: {pos_data['motor_positions']}")
-        print(f"[PLAYBACK]   Velocity: {pos_data.get('velocity', 600)}")
+        base_velocity = pos_data.get('velocity', 600)
+        
+        # Apply speed scale percentage (25%-200%)
+        scaled_velocity = int(base_velocity * (self.playback_speed_scale / 100.0))
+        print(f"[PLAYBACK]   Velocity: {base_velocity} → {scaled_velocity} ({self.playback_speed_scale}% speed)")
         
         try:
-            # Move to position - keep connection open for smooth transitions
-            # In loop mode, always keep connection (even on last position)
+            # Move to position - CONTINUOUS MOTION (no waiting between positions)
+            # Keep connection alive for smooth professional playback
             keep_alive = (not is_last_position) or self.play_loop
             
-            self.status_label.setText(f"▶ Moving to {pos_data['name']}...")
+            self.status_label.setText(f"▶ Playing... ({self.playback_index + 1}/{len(self.playback_positions)}) @ {self.playback_speed_scale}%")
             self.motor_controller.set_positions(
                 pos_data["motor_positions"],
-                pos_data.get("velocity", 600),
-                wait=True,
+                scaled_velocity,
+                wait=False,  # DON'T WAIT - smooth continuous motion!
                 keep_connection=keep_alive
             )
             
-            print(f"[PLAYBACK]   ✓ Move complete (kept connection: {keep_alive})")
+            print(f"[PLAYBACK]   ✓ Position sent (continuous mode, kept connection: {keep_alive})")
             
-            # Check for delay after this position
+            # Check for EXPLICIT delay after this position
             if str(self.playback_index) in self.playback_delays:
                 delay = self.playback_delays[str(self.playback_index)]
-                print(f"[PLAYBACK]   ⏱️ Delay: {delay:.1f}s")
-                self.status_label.setText(f"⏱️ Waiting {delay:.1f}s...")
-                QTimer.singleShot(int(delay * 1000), self.continue_playback)
+                # Scale delay by speed percentage
+                scaled_delay = delay * (100.0 / self.playback_speed_scale)
+                print(f"[PLAYBACK]   ⏱️ Delay: {delay:.1f}s → {scaled_delay:.1f}s @ {self.playback_speed_scale}%")
+                self.status_label.setText(f"⏱️ Waiting {scaled_delay:.1f}s...")
+                QTimer.singleShot(int(scaled_delay * 1000), self.continue_playback)
             else:
-                # No delay, continue immediately for smooth flow
-                self.continue_playback()
+                # No explicit delay - continue IMMEDIATELY for smooth continuous motion
+                QTimer.singleShot(50, self.continue_playback)  # Minimal delay for motor command processing
                 
         except Exception as e:
             print(f"[PLAYBACK] ❌ Error: {e}")
