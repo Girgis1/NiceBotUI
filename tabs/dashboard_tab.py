@@ -12,7 +12,7 @@ import pytz
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QListWidget, QFrame, QTextEdit, QComboBox
+    QListWidget, QFrame, QTextEdit, QComboBox, QSizePolicy, QSpinBox
 )
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QColor, QPainter, QPen
@@ -80,31 +80,55 @@ class StatusIndicator(QLabel):
         self.warning = True
         self.update_style()
     
+    def set_null(self):
+        """Set as null/empty indicator"""
+        self.connected = False
+        self.warning = False
+        self.null = True
+        self.update_style()
+    
     def update_style(self):
-        if self.warning:
+        if hasattr(self, 'null') and self.null:
+            # Null indicator - unfilled black circle
+            self.setFixedSize(20, 20)
+            self.setStyleSheet("""
+                QLabel {
+                    background-color: transparent;
+                    border: 2px solid #606060;
+                    border-radius: 10px;
+                }
+            """)
+        elif self.warning:
             color = "#FF9800"
+            self.setFixedSize(20, 20)
+            self.setStyleSheet(f"""
+                QLabel {{
+                    background-color: {color};
+                    border-radius: 10px;
+                }}
+            """)
         elif self.connected:
-            color = "#4caf50"
+            color = "#2e7d32"
+            self.setFixedSize(20, 20)
+            self.setStyleSheet(f"""
+                QLabel {{
+                    background-color: {color};
+                    border-radius: 10px;
+                }}
+            """)
         else:
             color = "#f44336"
-        
-        self.setStyleSheet(f"""
-            QLabel {{
-                background-color: {color};
-                border-radius: 8px;
-                min-width: 16px;
-                max-width: 16px;
-                min-height: 16px;
-                max-height: 16px;
-            }}
-        """)
+            self.setFixedSize(20, 20)
+            self.setStyleSheet(f"""
+                QLabel {{
+                    background-color: {color};
+                    border-radius: 10px;
+                }}
+            """)
 
 
 class DashboardTab(QWidget):
     """Main dashboard for robot control (existing UI)"""
-    
-    # Signals for parent window
-    settings_requested = Signal()
     
     def __init__(self, config: dict, parent=None):
         super().__init__(parent)
@@ -135,128 +159,130 @@ class DashboardTab(QWidget):
         layout.setSpacing(10)
         layout.setContentsMargins(15, 15, 15, 15)
         
-        # Status panel
-        status_frame = QFrame()
-        status_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
-        status_frame.setStyleSheet("""
-            QFrame { 
-                background-color: #2d2d2d; 
-                border: 1px solid #404040;
-                border-radius: 8px; 
-                padding: 10px; 
-            }
-        """)
-        status_layout = QVBoxLayout(status_frame)
+        # Compact single-line status bar
+        status_bar = QHBoxLayout()
+        status_bar.setSpacing(20)
         
-        all_status_layout = QHBoxLayout()
-        
-        # Robot indicators
-        arm_label = QLabel("Robot:")
-        arm_label.setStyleSheet("color: #ffffff; font-size: 12px;")
-        all_status_layout.addWidget(arm_label)
-        
-        self.robot_indicator1 = StatusIndicator()
-        all_status_layout.addWidget(self.robot_indicator1)
-        
-        all_status_layout.addSpacing(15)
-        
-        # Camera indicators
-        cam_label = QLabel("Cameras:")
-        cam_label.setStyleSheet("color: #ffffff; font-size: 12px;")
-        all_status_layout.addWidget(cam_label)
-        
-        self.camera_indicator1 = StatusIndicator()
-        all_status_layout.addWidget(self.camera_indicator1)
-        
-        self.camera_indicator2 = StatusIndicator()
-        all_status_layout.addWidget(self.camera_indicator2)
-        
-        self.camera_indicator3 = StatusIndicator()
-        all_status_layout.addWidget(self.camera_indicator3)
-        
-        all_status_layout.addSpacing(15)
-        
-        # Time display
-        self.time_label = QLabel("Time: 00:00")
-        self.time_label.setStyleSheet("color: #aaaaaa; font-size: 12px;")
-        all_status_layout.addWidget(self.time_label)
-        
-        all_status_layout.addSpacing(15)
-        
-        # Action status
-        self.action_label = QLabel("At home position")
-        self.action_label.setStyleSheet("color: #ffffff; font-size: 12px;")
-        all_status_layout.addWidget(self.action_label)
-        
-        all_status_layout.addSpacing(10)
+        # Left section: Status indicators
+        status_left = QHBoxLayout()
+        status_left.setSpacing(15)
         
         # Throbber
         self.throbber = CircularProgress()
-        all_status_layout.addWidget(self.throbber)
+        status_left.addWidget(self.throbber)
         
-        all_status_layout.addSpacing(15)
+        # Robot
+        robot_group = QHBoxLayout()
+        robot_group.setSpacing(6)
+        robot_lbl = QLabel("Robot")
+        robot_lbl.setStyleSheet("color: #a0a0a0; font-size: 11px;")
+        robot_group.addWidget(robot_lbl)
+        self.robot_indicator1 = StatusIndicator()
+        robot_group.addWidget(self.robot_indicator1)
+        self.robot_indicator2 = StatusIndicator()
+        self.robot_indicator2.set_null()
+        robot_group.addWidget(self.robot_indicator2)
+        status_left.addLayout(robot_group)
         
-        # Branding
-        branding_label = QLabel("NICE LABS Robotics")
-        branding_label.setStyleSheet("color: #888888; font-size: 12px; font-weight: bold;")
-        all_status_layout.addWidget(branding_label)
+        # Cameras
+        camera_group = QHBoxLayout()
+        camera_group.setSpacing(6)
+        camera_lbl = QLabel("Cameras")
+        camera_lbl.setStyleSheet("color: #a0a0a0; font-size: 11px;")
+        camera_group.addWidget(camera_lbl)
+        self.camera_indicator1 = StatusIndicator()
+        camera_group.addWidget(self.camera_indicator1)
+        self.camera_indicator2 = StatusIndicator()
+        camera_group.addWidget(self.camera_indicator2)
+        self.camera_indicator3 = StatusIndicator()
+        camera_group.addWidget(self.camera_indicator3)
+        status_left.addLayout(camera_group)
         
-        all_status_layout.addStretch()
-        status_layout.addLayout(all_status_layout)
+        # Time
+        time_group = QHBoxLayout()
+        time_group.setSpacing(6)
+        self.time_label = QLabel("00:00")
+        self.time_label.setStyleSheet("color: #4CAF50; font-size: 12px; font-weight: bold; font-family: monospace;")
+        time_group.addWidget(self.time_label)
+        status_left.addLayout(time_group)
         
-        layout.addWidget(status_frame)
+        status_bar.addLayout(status_left)
+        
+        # Center: Action status with subtle background
+        self.action_label = QLabel("At home position")
+        self.action_label.setStyleSheet("""
+            color: #ffffff; 
+            font-size: 14px; 
+            font-weight: bold;
+            background-color: #383838;
+            border-radius: 4px;
+            padding: 8px 20px;
+        """)
+        self.action_label.setAlignment(Qt.AlignCenter)
+        status_bar.addWidget(self.action_label, stretch=1)
+        
+        # Right: Branding
+        branding = QLabel("NICE LABS Robotics")
+        branding.setStyleSheet("color: #707070; font-size: 11px; font-weight: bold;")
+        branding.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        status_bar.addWidget(branding)
+        
+        layout.addLayout(status_bar)
         
         # Unified RUN selector (Models, Sequences, Actions)
         run_frame = QFrame()
+        run_frame.setFixedHeight(95)
         run_frame.setStyleSheet("""
             QFrame {
                 background-color: #2d2d2d;
                 border: 1px solid #404040;
-                border-radius: 8px;
-                padding: 4px 8px;
+                border-radius: 6px;
             }
         """)
         run_layout = QHBoxLayout(run_frame)
-        run_layout.setSpacing(8)
+        run_layout.setSpacing(10)
+        run_layout.setContentsMargins(10, 6, 10, 6)
         
         run_label = QLabel("RUN:")
-        run_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
+        run_label.setStyleSheet("color: #ffffff; font-size: 19px; font-weight: bold;")
         run_layout.addWidget(run_label)
         
         # Main selector (Models, Sequences, Actions)
         self.run_combo = QComboBox()
-        self.run_combo.setMinimumHeight(60)
+        self.run_combo.setMinimumHeight(85)
+        self.run_combo.setMaximumHeight(85)
         self.run_combo.setStyleSheet("""
             QComboBox {
                 background-color: #404040;
                 color: #ffffff;
                 border: 2px solid #505050;
                 border-radius: 6px;
-                padding: 8px 12px;
-                font-size: 15px;
+                padding: 6px 40px 6px 12px;
+                font-size: 19px;
                 font-weight: bold;
             }
             QComboBox:hover {
-                border-color: #2196F3;
+                border-color: #4CAF50;
             }
             QComboBox::drop-down {
                 subcontrol-origin: padding;
                 subcontrol-position: center right;
                 width: 40px;
                 border: none;
+                padding-right: 6px;
             }
             QComboBox::down-arrow {
-                image: none;
-                border-left: 8px solid transparent;
-                border-right: 8px solid transparent;
-                border-top: 12px solid #ffffff;
-                margin-right: 8px;
+                width: 0;
+                height: 0;
+                border-style: solid;
+                border-width: 8px 6px 0 6px;
+                border-color: #ffffff transparent transparent transparent;
             }
             QComboBox QAbstractItemView {
                 background-color: #404040;
                 color: #ffffff;
-                selection-background-color: #2196F3;
-                font-size: 14px;
+                selection-background-color: #4CAF50;
+                font-size: 16px;
             }
         """)
         self.run_combo.currentTextChanged.connect(self.on_run_selection_changed)
@@ -264,37 +290,39 @@ class DashboardTab(QWidget):
         
         # Checkpoint selector (only visible for models)
         self.checkpoint_combo = QComboBox()
-        self.checkpoint_combo.setMinimumHeight(60)
+        self.checkpoint_combo.setMinimumHeight(85)
+        self.checkpoint_combo.setMaximumHeight(85)
         self.checkpoint_combo.setStyleSheet("""
             QComboBox {
                 background-color: #404040;
                 color: #ffffff;
                 border: 2px solid #505050;
                 border-radius: 6px;
-                padding: 8px 12px;
-                font-size: 13px;
+                padding: 6px 40px 6px 12px;
+                font-size: 17px;
             }
             QComboBox:hover {
-                border-color: #2196F3;
+                border-color: #4CAF50;
             }
             QComboBox::drop-down {
                 subcontrol-origin: padding;
                 subcontrol-position: center right;
                 width: 40px;
                 border: none;
+                padding-right: 6px;
             }
             QComboBox::down-arrow {
-                image: none;
-                border-left: 8px solid transparent;
-                border-right: 8px solid transparent;
-                border-top: 12px solid #ffffff;
-                margin-right: 8px;
+                width: 0;
+                height: 0;
+                border-style: solid;
+                border-width: 8px 6px 0 6px;
+                border-color: #ffffff transparent transparent transparent;
             }
             QComboBox QAbstractItemView {
                 background-color: #404040;
                 color: #ffffff;
-                selection-background-color: #2196F3;
-                font-size: 13px;
+                selection-background-color: #4CAF50;
+                font-size: 15px;
             }
         """)
         self.checkpoint_combo.currentTextChanged.connect(self.on_checkpoint_changed)
@@ -306,210 +334,109 @@ class DashboardTab(QWidget):
         # Populate run dropdown
         self.refresh_run_selector()
         
-        # Main controls - simplified for smaller screen
-        main_control_layout = QHBoxLayout()
-        main_control_layout.setSpacing(10)
+        # Main controls - Clean single row
+        controls_row = QHBoxLayout()
+        controls_row.setSpacing(15)
         
-        # Episodes control (compact)
-        episodes_container = QVBoxLayout()
-        episodes_container.setSpacing(3)
+        # Episodes - Simple labeled spinbox
+        episodes_frame = QFrame()
+        episodes_frame.setStyleSheet("""
+            QFrame {
+                background-color: #2d2d2d;
+                border: 1px solid #404040;
+                border-radius: 6px;
+                padding: 8px;
+            }
+        """)
+        episodes_layout = QVBoxLayout(episodes_frame)
+        episodes_layout.setSpacing(5)
+        episodes_layout.setContentsMargins(10, 10, 10, 10)
         
         episodes_label = QLabel("Episodes")
-        episodes_label.setStyleSheet("color: #ffffff; font-size: 12px; font-weight: bold;")
+        episodes_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
         episodes_label.setAlignment(Qt.AlignCenter)
-        episodes_container.addWidget(episodes_label)
+        episodes_layout.addWidget(episodes_label)
         
-        self.episodes_up_btn = QPushButton("▲")
-        self.episodes_up_btn.setMinimumSize(60, 50)
-        self.episodes_up_btn.setStyleSheet("""
-            QPushButton {
+        self.episodes_spin = QSpinBox()
+        self.episodes_spin.setRange(1, 999)
+        self.episodes_spin.setValue(self.config.get("num_episodes", 3))
+        self.episodes_spin.setMinimumHeight(80)
+        self.episodes_spin.setButtonSymbols(QSpinBox.NoButtons)
+        self.episodes_spin.setAlignment(Qt.AlignCenter)
+        self.episodes_spin.setStyleSheet("""
+            QSpinBox {
                 background-color: #404040;
                 color: #ffffff;
                 border: 2px solid #505050;
                 border-radius: 6px;
-                font-size: 24px;
+                padding: 8px;
+                font-size: 32px;
+                font-weight: bold;
             }
-            QPushButton:hover {
-                background-color: #505050;
+            QSpinBox:focus {
+                border-color: #4CAF50;
             }
         """)
-        self.episodes_up_btn.clicked.connect(lambda: self.change_episodes(1))
-        episodes_container.addWidget(self.episodes_up_btn)
+        episodes_layout.addWidget(self.episodes_spin)
+        controls_row.addWidget(episodes_frame)
         
-        self.episodes_display = QLabel("3")
-        self.episodes_display.setStyleSheet("""
-            color: #ffffff;
-            background-color: #2d2d2d;
-            border: 2px solid #404040;
-            border-radius: 6px;
-            font-size: 24px;
-            font-weight: bold;
-            padding: 5px;
-        """)
-        self.episodes_display.setAlignment(Qt.AlignCenter)
-        self.episodes_display.setMinimumSize(60, 40)
-        episodes_container.addWidget(self.episodes_display)
-        
-        self.episodes_down_btn = QPushButton("▼")
-        self.episodes_down_btn.setMinimumSize(60, 50)
-        self.episodes_down_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #404040;
-                color: #ffffff;
-                border: 2px solid #505050;
+        # Time - Simple labeled spinbox
+        time_frame = QFrame()
+        time_frame.setStyleSheet("""
+            QFrame {
+                background-color: #2d2d2d;
+                border: 1px solid #404040;
                 border-radius: 6px;
-                font-size: 24px;
-            }
-            QPushButton:hover {
-                background-color: #505050;
+                padding: 8px;
             }
         """)
-        self.episodes_down_btn.clicked.connect(lambda: self.change_episodes(-1))
-        episodes_container.addWidget(self.episodes_down_btn)
+        time_layout = QVBoxLayout(time_frame)
+        time_layout.setSpacing(5)
+        time_layout.setContentsMargins(10, 10, 10, 10)
         
-        main_control_layout.addLayout(episodes_container)
-        
-        # Time controls (compact)
-        time_container = QVBoxLayout()
-        time_container.setSpacing(3)
-        
-        time_label = QLabel("Time (m:s)")
-        time_label.setStyleSheet("color: #ffffff; font-size: 12px; font-weight: bold;")
+        time_label = QLabel("Time/Episode (s)")
+        time_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
         time_label.setAlignment(Qt.AlignCenter)
-        time_container.addWidget(time_label)
+        time_layout.addWidget(time_label)
         
-        time_displays = QHBoxLayout()
-        time_displays.setSpacing(5)
-        
-        # Minutes
-        min_layout = QVBoxLayout()
-        min_layout.setSpacing(3)
-        
-        min_up = QPushButton("▲")
-        min_up.setMinimumSize(50, 30)
-        min_up.setStyleSheet("""
-            QPushButton {
+        self.episode_time_spin = QSpinBox()
+        self.episode_time_spin.setRange(1, 3600)
+        self.episode_time_spin.setValue(self.config.get("episode_time_s", 30))
+        self.episode_time_spin.setMinimumHeight(80)
+        self.episode_time_spin.setButtonSymbols(QSpinBox.NoButtons)
+        self.episode_time_spin.setAlignment(Qt.AlignCenter)
+        self.episode_time_spin.setStyleSheet("""
+            QSpinBox {
                 background-color: #404040;
                 color: #ffffff;
                 border: 2px solid #505050;
-                border-radius: 4px;
-                font-size: 18px;
+                border-radius: 6px;
+                padding: 8px;
+                font-size: 32px;
+                font-weight: bold;
             }
-            QPushButton:hover {
-                background-color: #505050;
-            }
-        """)
-        min_up.clicked.connect(lambda: self.change_time('minutes', 1))
-        min_layout.addWidget(min_up)
-        
-        self.minutes_display = QLabel("0")
-        self.minutes_display.setStyleSheet("""
-            color: #ffffff;
-            background-color: #2d2d2d;
-            border: 2px solid #404040;
-            border-radius: 4px;
-            font-size: 20px;
-            font-weight: bold;
-            padding: 3px;
-        """)
-        self.minutes_display.setAlignment(Qt.AlignCenter)
-        self.minutes_display.setMinimumSize(50, 35)
-        min_layout.addWidget(self.minutes_display)
-        
-        min_down = QPushButton("▼")
-        min_down.setMinimumSize(50, 30)
-        min_down.setStyleSheet("""
-            QPushButton {
-                background-color: #404040;
-                color: #ffffff;
-                border: 2px solid #505050;
-                border-radius: 4px;
-                font-size: 18px;
-            }
-            QPushButton:hover {
-                background-color: #505050;
+            QSpinBox:focus {
+                border-color: #4CAF50;
             }
         """)
-        min_down.clicked.connect(lambda: self.change_time('minutes', -1))
-        min_layout.addWidget(min_down)
+        time_layout.addWidget(self.episode_time_spin)
+        controls_row.addWidget(time_frame)
         
-        time_displays.addLayout(min_layout)
-        
-        # Seconds
-        sec_layout = QVBoxLayout()
-        sec_layout.setSpacing(3)
-        
-        sec_up = QPushButton("▲")
-        sec_up.setMinimumSize(50, 30)
-        sec_up.setStyleSheet("""
-            QPushButton {
-                background-color: #404040;
-                color: #ffffff;
-                border: 2px solid #505050;
-                border-radius: 4px;
-                font-size: 18px;
-            }
-            QPushButton:hover {
-                background-color: #505050;
-            }
-        """)
-        sec_up.clicked.connect(lambda: self.change_time('seconds', 5))
-        sec_layout.addWidget(sec_up)
-        
-        self.seconds_display = QLabel("25")
-        self.seconds_display.setStyleSheet("""
-            color: #ffffff;
-            background-color: #2d2d2d;
-            border: 2px solid #404040;
-            border-radius: 4px;
-            font-size: 20px;
-            font-weight: bold;
-            padding: 3px;
-        """)
-        self.seconds_display.setAlignment(Qt.AlignCenter)
-        self.seconds_display.setMinimumSize(50, 35)
-        sec_layout.addWidget(self.seconds_display)
-        
-        sec_down = QPushButton("▼")
-        sec_down.setMinimumSize(50, 30)
-        sec_down.setStyleSheet("""
-            QPushButton {
-                background-color: #404040;
-                color: #ffffff;
-                border: 2px solid #505050;
-                border-radius: 4px;
-                font-size: 18px;
-            }
-            QPushButton:hover {
-                background-color: #505050;
-            }
-        """)
-        sec_down.clicked.connect(lambda: self.change_time('seconds', -5))
-        sec_layout.addWidget(sec_down)
-        
-        time_displays.addLayout(sec_layout)
-        time_container.addLayout(time_displays)
-        
-        main_control_layout.addLayout(time_container)
-        
-        # START/STOP and HOME buttons
-        buttons_layout = QVBoxLayout()
-        buttons_layout.setSpacing(10)
-        
+        # START/STOP button
         self.start_stop_btn = QPushButton("START")
-        self.start_stop_btn.setMinimumHeight(80)
+        self.start_stop_btn.setMinimumHeight(128)
         self.start_stop_btn.setCheckable(True)
         self.start_stop_btn.setStyleSheet("""
             QPushButton {
-                background-color: #2e7d32;
+                background-color: #4CAF50;
                 color: white;
                 border: none;
                 border-radius: 10px;
-                font-size: 28px;
+                font-size: 32px;
                 font-weight: bold;
             }
             QPushButton:hover {
-                background-color: #1b5e20;
+                background-color: #388E3C;
             }
             QPushButton:checked {
                 background-color: #c62828;
@@ -519,52 +446,27 @@ class DashboardTab(QWidget):
             }
         """)
         self.start_stop_btn.clicked.connect(self.toggle_start_stop)
-        buttons_layout.addWidget(self.start_stop_btn)
+        controls_row.addWidget(self.start_stop_btn, stretch=2)
         
-        bottom_row = QHBoxLayout()
-        bottom_row.setSpacing(10)
-        
+        # HOME button - always square (width = height)
         self.home_btn = QPushButton("⌂")
-        self.home_btn.setMinimumHeight(60)
-        self.home_btn.setMinimumWidth(80)
+        self.home_btn.setFixedSize(128, 128)
         self.home_btn.setStyleSheet("""
             QPushButton {
                 background-color: #2196F3;
                 color: white;
                 border: 2px solid #1976D2;
-                border-radius: 8px;
-                font-size: 36px;
+                border-radius: 10px;
+                font-size: 48px;
             }
             QPushButton:hover {
                 background-color: #1E88E5;
             }
         """)
         self.home_btn.clicked.connect(self.go_home)
-        bottom_row.addWidget(self.home_btn)
+        controls_row.addWidget(self.home_btn)
         
-        self.settings_btn = QPushButton("⚙")
-        self.settings_btn.setMinimumHeight(60)
-        self.settings_btn.setMinimumWidth(80)
-        self.settings_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #757575;
-                color: white;
-                border: 2px solid #616161;
-                border-radius: 8px;
-                font-size: 28px;
-            }
-            QPushButton:hover {
-                background-color: #616161;
-            }
-        """)
-        self.settings_btn.clicked.connect(self.open_settings)
-        bottom_row.addWidget(self.settings_btn)
-        
-        buttons_layout.addLayout(bottom_row)
-        
-        main_control_layout.addLayout(buttons_layout, stretch=1)
-        
-        layout.addLayout(main_control_layout)
+        layout.addLayout(controls_row)
         
         # Log text area (compact)
         self.log_text = QTextEdit()
@@ -586,14 +488,7 @@ class DashboardTab(QWidget):
         self.log_text.append("=== NICE LABS Robotics ===")
         self.log_text.append("Dashboard ready. Select Record or Sequence tabs to get started.")
         
-        # Load initial values from config
-        episode_time = self.config["control"].get("episode_time_s", 25.0)
-        minutes = int(episode_time // 60)
-        seconds = int(episode_time % 60)
-        self.minutes_display.setText(str(minutes))
-        self.seconds_display.setText(str(seconds))
-        
-        self.episodes_display.setText(str(self.config["control"].get("num_episodes", 3)))
+        # Config values already set in spinbox initialization above
         
         # Populate run selector
         self.refresh_run_selector()
@@ -762,28 +657,6 @@ class DashboardTab(QWidget):
             return
         self.validate_config()
     
-    def change_episodes(self, delta):
-        """Change episode count"""
-        current = int(self.episodes_display.text())
-        new_value = max(1, min(99, current + delta))
-        self.episodes_display.setText(str(new_value))
-        self.config["control"]["num_episodes"] = new_value
-    
-    def change_time(self, unit, delta):
-        """Change time"""
-        if unit == 'minutes':
-            current = int(self.minutes_display.text())
-            new_value = max(0, min(99, current + delta))
-            self.minutes_display.setText(str(new_value))
-        else:
-            current = int(self.seconds_display.text())
-            new_value = max(0, min(59, current + delta))
-            self.seconds_display.setText(str(new_value))
-        
-        minutes = int(self.minutes_display.text())
-        seconds = int(self.seconds_display.text())
-        total_seconds = minutes * 60 + seconds
-        self.config["control"]["episode_time_s"] = float(total_seconds)
     
     def toggle_start_stop(self):
         """Toggle start/stop"""
@@ -827,9 +700,18 @@ class DashboardTab(QWidget):
             self.action_label.setText("⚠️ Home error")
             self.log_text.append(f"[error] Home error: {e}")
     
-    def open_settings(self):
-        """Open settings"""
-        self.settings_requested.emit()
+    def run_from_dashboard(self):
+        """Execute the selected RUN item"""
+        selected = self.run_combo.currentText()
+        
+        if selected.startswith("--"):
+            self.log_text.append("[warning] No item selected")
+            return
+        
+        self.action_label.setText(f"Running: {selected}")
+        self.log_text.append(f"[info] Running: {selected}")
+        # TODO: Implement actual execution
+    
     
     def update_elapsed_time(self):
         """Update elapsed time"""

@@ -52,9 +52,10 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         
         # Dark mode styling
+        # Improved contrast theme for cheap screens
         central.setStyleSheet("""
             QWidget {
-                background-color: #1e1e1e;
+                background-color: #2a2a2a;
                 color: #ffffff;
             }
         """)
@@ -64,17 +65,18 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(0)
         main_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Left sidebar with tab buttons (70px wide)
+        # Left sidebar with tab buttons (140px wide) - improved contrast
         sidebar = QWidget()
-        sidebar.setFixedWidth(70)
+        sidebar.setFixedWidth(140)
         sidebar.setStyleSheet("""
             QWidget {
-                background-color: #2d2d2d;
+                background-color: #3a3a3a;
+                border-right: 2px solid #555555;
             }
         """)
         sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setSpacing(0)
-        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_layout.setSpacing(8)
+        sidebar_layout.setContentsMargins(6, 12, 6, 12)
         
         # Tab buttons
         self.tab_buttons = QButtonGroup(self)
@@ -82,27 +84,32 @@ class MainWindow(QMainWindow):
         
         button_style = """
             QPushButton {
-                background-color: #2d2d2d;
-                color: #ffffff;
-                border: none;
-                border-right: 3px solid transparent;
-                padding: 20px 5px;
-                min-height: 100px;
-                font-size: 11px;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                           stop:0 #505050, stop:1 #454545);
+                color: #e0e0e0;
+                border: 2px solid #606060;
+                border-radius: 10px;
+                padding: 20px 8px;
+                min-height: 85px;
+                font-size: 18px;
                 font-weight: bold;
                 text-align: center;
             }
             QPushButton:hover {
-                background-color: #404040;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                           stop:0 #606060, stop:1 #555555);
+                border-color: #4CAF50;
+                color: #ffffff;
             }
             QPushButton:checked {
-                background-color: #1e1e1e;
-                border-right: 3px solid #2196F3;
-                color: #2196F3;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                           stop:0 #4CAF50, stop:1 #388E3C);
+                border: 3px solid #66BB6A;
+                color: #ffffff;
             }
         """
         
-        self.dashboard_btn = QPushButton("Dashboard")
+        self.dashboard_btn = QPushButton("📊\nDashboard")
         self.dashboard_btn.setCheckable(True)
         self.dashboard_btn.setChecked(True)
         self.dashboard_btn.setStyleSheet(button_style)
@@ -110,14 +117,14 @@ class MainWindow(QMainWindow):
         self.tab_buttons.addButton(self.dashboard_btn, 0)
         sidebar_layout.addWidget(self.dashboard_btn)
         
-        self.sequence_btn = QPushButton("Sequence")
+        self.sequence_btn = QPushButton("🔗\nSequence")
         self.sequence_btn.setCheckable(True)
         self.sequence_btn.setStyleSheet(button_style)
         self.sequence_btn.clicked.connect(lambda: self.switch_tab(1))
         self.tab_buttons.addButton(self.sequence_btn, 1)
         sidebar_layout.addWidget(self.sequence_btn)
         
-        self.record_btn = QPushButton("Record")
+        self.record_btn = QPushButton("⏺\nRecord")
         self.record_btn.setCheckable(True)
         self.record_btn.setStyleSheet(button_style)
         self.record_btn.clicked.connect(lambda: self.switch_tab(2))
@@ -126,21 +133,29 @@ class MainWindow(QMainWindow):
         
         sidebar_layout.addStretch()
         
+        self.settings_btn = QPushButton("⚙️\nSettings")
+        self.settings_btn.setCheckable(True)
+        self.settings_btn.setStyleSheet(button_style)
+        self.settings_btn.clicked.connect(lambda: self.switch_tab(3))
+        self.tab_buttons.addButton(self.settings_btn, 3)
+        sidebar_layout.addWidget(self.settings_btn)
+        
         # Content area with stacked widget (takes remaining width)
         self.content_stack = QStackedWidget()
         
         # Create tabs
+        from tabs.settings_tab import SettingsTab
+        
         self.dashboard_tab = DashboardTab(self.config, self)
         self.sequence_tab = SequenceTab(self.config, self)
         self.record_tab = RecordTab(self.config, self)
-        
-        # Connect signals
-        self.dashboard_tab.settings_requested.connect(self.open_settings)
+        self.settings_tab = SettingsTab(self.config, self)
         
         # Add tabs to stacked widget
         self.content_stack.addWidget(self.dashboard_tab)
         self.content_stack.addWidget(self.sequence_tab)
         self.content_stack.addWidget(self.record_tab)
+        self.content_stack.addWidget(self.settings_tab)
         
         # Set default tab
         self.content_stack.setCurrentIndex(0)
@@ -166,6 +181,9 @@ class MainWindow(QMainWindow):
         
         self.tab3_shortcut = QShortcut(QKeySequence("Ctrl+3"), self)
         self.tab3_shortcut.activated.connect(lambda: self.switch_tab(2))
+        
+        self.tab4_shortcut = QShortcut(QKeySequence("Ctrl+4"), self)
+        self.tab4_shortcut.activated.connect(lambda: self.switch_tab(3))
     
     def switch_tab(self, index: int):
         """Switch to a different tab"""
@@ -299,6 +317,8 @@ def main():
                        help='Start in windowed mode instead of fullscreen')
     parser.add_argument('--no-fullscreen', action='store_true',
                        help='Disable fullscreen mode (same as --windowed)')
+    parser.add_argument('--screen', type=int, default=0,
+                       help='Screen number to display on (0=primary, 1=secondary, etc.)')
     args = parser.parse_args()
     
     # Determine fullscreen mode
@@ -309,26 +329,44 @@ def main():
     # Set application style
     app.setStyle("Fusion")
     
-    # Set dark mode palette
+    # Set improved contrast palette for cheap screens
     palette = QPalette()
-    palette.setColor(QPalette.Window, QColor(30, 30, 30))
+    palette.setColor(QPalette.Window, QColor(42, 42, 42))          # Lighter background
     palette.setColor(QPalette.WindowText, QColor(255, 255, 255))
-    palette.setColor(QPalette.Base, QColor(45, 45, 45))
-    palette.setColor(QPalette.AlternateBase, QColor(53, 53, 53))
+    palette.setColor(QPalette.Base, QColor(64, 64, 64))            # Lighter input bg
+    palette.setColor(QPalette.AlternateBase, QColor(72, 72, 72))
     palette.setColor(QPalette.ToolTipBase, QColor(255, 255, 255))
-    palette.setColor(QPalette.ToolTipText, QColor(255, 255, 255))
+    palette.setColor(QPalette.ToolTipText, QColor(0, 0, 0))
     palette.setColor(QPalette.Text, QColor(255, 255, 255))
-    palette.setColor(QPalette.Button, QColor(53, 53, 53))
+    palette.setColor(QPalette.Button, QColor(70, 70, 70))          # Lighter buttons
     palette.setColor(QPalette.ButtonText, QColor(255, 255, 255))
-    palette.setColor(QPalette.BrightText, QColor(255, 0, 0))
-    palette.setColor(QPalette.Link, QColor(42, 130, 218))
-    palette.setColor(QPalette.Highlight, QColor(42, 130, 218))
-    palette.setColor(QPalette.HighlightedText, QColor(0, 0, 0))
+    palette.setColor(QPalette.BrightText, QColor(255, 100, 100))
+    palette.setColor(QPalette.Link, QColor(76, 175, 80))           # Green links
+    palette.setColor(QPalette.Highlight, QColor(76, 175, 80))      # Green highlight
+    palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))
     app.setPalette(palette)
     
     # Create and show main window
     window = MainWindow(fullscreen=fullscreen)
-    window.show()
+    
+    # Move to specified screen
+    screens = app.screens()
+    if args.screen < len(screens):
+        target_screen = screens[args.screen]
+        window.setScreen(target_screen)
+        if fullscreen:
+            # Fullscreen on the target screen
+            window.windowHandle().setScreen(target_screen)
+            window.showFullScreen()
+        else:
+            # Center on target screen
+            screen_geometry = target_screen.geometry()
+            x = screen_geometry.x() + (screen_geometry.width() - 1024) // 2
+            y = screen_geometry.y() + (screen_geometry.height() - 600) // 2
+            window.move(x, y)
+            window.show()
+    else:
+        window.show()
     
     sys.exit(app.exec())
 

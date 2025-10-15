@@ -70,15 +70,15 @@ class SequenceTab(QWidget):
             QComboBox::drop-down {
                 subcontrol-origin: padding;
                 subcontrol-position: center right;
-                width: 40px;
+                width: 30px;
                 border: none;
             }
             QComboBox::down-arrow {
-                image: none;
-                border-left: 8px solid transparent;
-                border-right: 8px solid transparent;
-                border-top: 12px solid #ffffff;
-                margin-right: 8px;
+                width: 0;
+                height: 0;
+                border-style: solid;
+                border-width: 6px 4px 0 4px;
+                border-color: #ffffff transparent transparent transparent;
             }
             QComboBox QAbstractItemView {
                 background-color: #404040;
@@ -252,7 +252,7 @@ class SequenceTab(QWidget):
         self.loop_btn.setCheckable(True)
         self.loop_btn.setStyleSheet("""
             QPushButton {
-                background-color: #757575;
+                background-color: #909090;
                 color: white;
                 border: none;
                 border-radius: 8px;
@@ -366,7 +366,7 @@ class SequenceTab(QWidget):
             color = QColor("#FF9800")
         else:
             text = f"{number}. ❓ Unknown step"
-            color = QColor("#757575")
+            color = QColor("#909090")
         
         item = QListWidgetItem(text)
         item.setData(Qt.UserRole, step)  # Store step data

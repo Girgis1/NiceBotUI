@@ -38,6 +38,14 @@ class RecordTab(QWidget):
         self.position_counter = 1
         self.default_velocity = 600  # Default velocity
         
+        # Live recording state
+        self.is_live_recording = False
+        self.live_record_timer = QTimer()
+        self.live_record_timer.timeout.connect(self.capture_live_position)
+        self.live_record_rate = 10  # Hz - configurable recording rate
+        self.last_recorded_position = None
+        self.live_position_threshold = 5  # Minimum change to record new position (units)
+        
         self.init_ui()
         self.refresh_action_list()
     
@@ -73,15 +81,15 @@ class RecordTab(QWidget):
             QComboBox::drop-down {
                 subcontrol-origin: padding;
                 subcontrol-position: center right;
-                width: 40px;
+                width: 30px;
                 border: none;
             }
             QComboBox::down-arrow {
-                image: none;
-                border-left: 8px solid transparent;
-                border-right: 8px solid transparent;
-                border-top: 12px solid #ffffff;
-                margin-right: 8px;
+                width: 0;
+                height: 0;
+                border-style: solid;
+                border-width: 6px 4px 0 4px;
+                border-color: #ffffff transparent transparent transparent;
             }
             QComboBox QAbstractItemView {
                 background-color: #404040;
@@ -145,7 +153,7 @@ class RecordTab(QWidget):
         control_bar = QHBoxLayout()
         control_bar.setSpacing(10)
         
-        self.set_btn = QPushButton("SET")
+        self.set_btn = QPushButton("📍 SET")
         self.set_btn.setMinimumHeight(50)
         self.set_btn.setMinimumWidth(120)
         self.set_btn.setStyleSheet("""
@@ -166,6 +174,34 @@ class RecordTab(QWidget):
         """)
         self.set_btn.clicked.connect(self.record_position)
         control_bar.addWidget(self.set_btn)
+        
+        # Live recording button
+        self.live_record_btn = QPushButton("🔴 LIVE")
+        self.live_record_btn.setMinimumHeight(50)
+        self.live_record_btn.setMinimumWidth(120)
+        self.live_record_btn.setCheckable(True)
+        self.live_record_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f44336;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                font-size: 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #e57373;
+            }
+            QPushButton:checked {
+                background-color: #4CAF50;
+                border: 2px solid #81C784;
+            }
+            QPushButton:checked:hover {
+                background-color: #66BB6A;
+            }
+        """)
+        self.live_record_btn.clicked.connect(self.toggle_live_recording)
+        control_bar.addWidget(self.live_record_btn)
         
         self.play_btn = QPushButton("▶ PLAY")
         self.play_btn.setMinimumHeight(50)
@@ -198,7 +234,7 @@ class RecordTab(QWidget):
         self.loop_btn.setCheckable(True)
         self.loop_btn.setStyleSheet("""
             QPushButton {
-                background-color: #757575;
+                background-color: #909090;
                 color: white;
                 border: none;
                 border-radius: 6px;
@@ -423,6 +459,100 @@ class RecordTab(QWidget):
         if ok:
             self.table.add_delay_row(delay, current_row)
             self.status_label.setText(f"✓ Added {delay:.1f}s delay")
+    
+    def toggle_live_recording(self):
+        """Toggle live position recording for smooth, repeatable captures"""
+        if not self.is_live_recording:
+            # Start live recording
+            self.is_live_recording = True
+            self.last_recorded_position = None
+            
+            # Disable other controls
+            self.set_btn.setEnabled(False)
+            self.play_btn.setEnabled(False)
+            self.delay_btn.setEnabled(False)
+            self.save_btn.setEnabled(False)
+            
+            # Start timer at configured rate (10Hz = every 100ms)
+            interval_ms = int(1000 / self.live_record_rate)
+            self.live_record_timer.start(interval_ms)
+            
+            self.live_record_btn.setText("⏹ STOP")
+            self.status_label.setText(f"🔴 Live recording at {self.live_record_rate}Hz - move the arm...")
+            print(f"[LIVE RECORD] Started at {self.live_record_rate}Hz (threshold: {self.live_position_threshold} units)")
+            
+        else:
+            # Stop live recording
+            self.stop_live_recording()
+    
+    def stop_live_recording(self):
+        """Stop live recording"""
+        self.is_live_recording = False
+        self.live_record_timer.stop()
+        
+        # Re-enable controls
+        self.set_btn.setEnabled(True)
+        self.play_btn.setEnabled(True)
+        self.delay_btn.setEnabled(True)
+        self.save_btn.setEnabled(True)
+        
+        self.live_record_btn.setChecked(False)
+        self.live_record_btn.setText("🔴 LIVE")
+        
+        positions_count = self.table.rowCount()
+        self.status_label.setText(f"✓ Live recording stopped - captured {positions_count} positions")
+        print(f"[LIVE RECORD] Stopped - total positions: {positions_count}")
+    
+    def capture_live_position(self):
+        """Capture one position during live recording (called by timer at 10Hz)
+        
+        Uses intelligent position filtering to:
+        1. Only record when position changes significantly (reduces redundancy)
+        2. Capture smooth motion at optimal Jetson-friendly rate
+        3. Maintain high repeatability for playback
+        """
+        if not self.is_live_recording:
+            return
+        
+        try:
+            # Read current position
+            positions = self.motor_controller.read_positions()
+            
+            if not positions or len(positions) != 6:
+                print("[LIVE RECORD] ⚠️ Failed to read positions")
+                return
+            
+            # Check if position has changed significantly from last recorded
+            max_change = 0
+            if self.last_recorded_position is not None:
+                # Calculate max movement from last recorded position
+                max_change = max(abs(positions[i] - self.last_recorded_position[i]) for i in range(6))
+                
+                if max_change < self.live_position_threshold:
+                    # Position hasn't changed enough, skip this sample (reduces redundancy)
+                    return
+            
+            # Record this position
+            current_velocity = self.velocity_slider.value()
+            self.table.add_position_row(
+                f"Pos {self.position_counter}",
+                positions,
+                current_velocity
+            )
+            
+            self.last_recorded_position = positions
+            self.position_counter += 1
+            
+            positions_count = self.table.rowCount()
+            self.status_label.setText(f"🔴 Recording... ({positions_count} positions)")
+            print(f"[LIVE RECORD] ✓ Captured position {positions_count}: max_change={max_change}")
+            
+        except Exception as e:
+            print(f"[LIVE RECORD] ❌ Error: {e}")
+            import traceback
+            traceback.print_exc()
+            self.stop_live_recording()
+            self.status_label.setText(f"❌ Recording error: {str(e)}")
     
     def on_table_item_changed(self, item):
         """Handle table item changes - ensure delete buttons persist"""
