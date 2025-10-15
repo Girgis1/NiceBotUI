@@ -42,13 +42,11 @@ class RecordTab(QWidget):
         self.is_live_recording = False
         self.live_record_timer = QTimer()
         self.live_record_timer.timeout.connect(self.capture_live_position)
-        self.live_record_rate = 10  # Hz - configurable recording rate
+        self.live_record_rate = 20  # Hz - INDUSTRIAL: 20Hz for high precision
         self.last_recorded_position = None
-        self.live_position_threshold = 5  # Minimum change to record new position (units)
-        self.live_recorded_positions = []  # Store all positions during live recording
-        
-        # Playback speed control
-        self.playback_speed_scale = 100  # Default 100% speed
+        self.live_position_threshold = 3  # INDUSTRIAL: 3 units for tighter precision
+        self.live_recorded_data = []  # Store {positions, timestamp, velocity}
+        self.live_record_start_time = None
         
         self.init_ui()
         self.refresh_action_list()
@@ -336,60 +334,6 @@ class RecordTab(QWidget):
         self.velocity_display.setAlignment(Qt.AlignCenter)
         velocity_frame.addWidget(self.velocity_display)
         
-        # Playback speed scale
-        velocity_frame.addSpacing(30)
-        speed_scale_label = QLabel("Playback Speed:")
-        speed_scale_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
-        velocity_frame.addWidget(speed_scale_label)
-        
-        self.speed_scale_slider = QSlider(Qt.Horizontal)
-        self.speed_scale_slider.setMinimum(25)
-        self.speed_scale_slider.setMaximum(200)
-        self.speed_scale_slider.setValue(100)
-        self.speed_scale_slider.setSingleStep(25)
-        self.speed_scale_slider.setPageStep(25)
-        self.speed_scale_slider.setTickPosition(QSlider.TicksBelow)
-        self.speed_scale_slider.setTickInterval(25)
-        self.speed_scale_slider.setMinimumWidth(300)
-        self.speed_scale_slider.setStyleSheet("""
-            QSlider::groove:horizontal {
-                border: 1px solid #404040;
-                height: 8px;
-                background: #2d2d2d;
-                border-radius: 4px;
-            }
-            QSlider::handle:horizontal {
-                background: #FF9800;
-                border: 2px solid #F57C00;
-                width: 20px;
-                margin: -6px 0;
-                border-radius: 10px;
-            }
-            QSlider::handle:horizontal:hover {
-                background: #FFB74D;
-            }
-            QSlider::sub-page:horizontal {
-                background: #FF9800;
-                border-radius: 4px;
-            }
-        """)
-        self.speed_scale_slider.valueChanged.connect(self.on_speed_scale_changed)
-        velocity_frame.addWidget(self.speed_scale_slider)
-        
-        self.speed_scale_display = QLabel("100%")
-        self.speed_scale_display.setStyleSheet("""
-            color: #ffffff;
-            background-color: #404040;
-            border: 2px solid #505050;
-            border-radius: 4px;
-            font-size: 16px;
-            font-weight: bold;
-            padding: 5px 10px;
-            min-width: 50px;
-        """)
-        self.speed_scale_display.setAlignment(Qt.AlignCenter)
-        velocity_frame.addWidget(self.speed_scale_display)
-        
         velocity_frame.addStretch()
         
         layout.addLayout(velocity_frame)
@@ -471,7 +415,7 @@ class RecordTab(QWidget):
         self.position_counter = len(positions) + 1
     
     def record_position(self):
-        """Record current motor position"""
+        """Record ONE single position action"""
         try:
             # Read current positions
             print("[RECORD] Reading motor positions...")
@@ -485,14 +429,15 @@ class RecordTab(QWidget):
             
             print(f"[RECORD] ✓ Read positions: {positions}")
             
-            # Add to table with current velocity from slider
-            name = f"Pos {self.position_counter}"
-            velocity = self.default_velocity
+            # Add ONE single position action with 100% speed
+            name = f"Position {self.position_counter}"
+            speed = 100  # Default 100% speed
             
-            self.table.add_position_row(name, positions, velocity)
+            self.table.add_single_position(name, positions, speed)
             self.position_counter += 1
             
-            self.status_label.setText(f"✓ Recorded {name}: {positions}")
+            self.status_label.setText(f"✓ Recorded {name}")
+            print(f"[RECORD] Added single position action: {name}")
             
         except Exception as e:
             self.status_label.setText(f"❌ Error: {str(e)}")
@@ -520,37 +465,35 @@ class RecordTab(QWidget):
             self.status_label.setText(f"✓ Added {delay:.1f}s delay")
     
     def toggle_live_recording(self):
-        """Toggle live position recording - creates ONE continuous action"""
+        """Toggle INDUSTRIAL precision live recording - creates ONE complete action"""
         if not self.is_live_recording:
             # Start live recording
             self.is_live_recording = True
             self.last_recorded_position = None
-            self.live_recorded_positions = []  # Reset positions list
+            self.live_recorded_data = []  # Reset recording data
+            self.live_record_start_time = None  # Will be set on first capture
             
-            # Clear table for live recording
-            self.table.setRowCount(0)
-            self.position_counter = 1
-            
-            # Disable other controls
+            # Disable other controls during recording
             self.set_btn.setEnabled(False)
             self.play_btn.setEnabled(False)
             self.delay_btn.setEnabled(False)
             self.save_btn.setEnabled(False)
+            self.action_combo.setEnabled(False)
             
-            # Start timer at configured rate (10Hz = every 100ms)
+            # Start timer at INDUSTRIAL rate (20Hz = 50ms)
             interval_ms = int(1000 / self.live_record_rate)
             self.live_record_timer.start(interval_ms)
             
             self.live_record_btn.setText("⏹ STOP")
-            self.status_label.setText(f"🔴 Live recording at {self.live_record_rate}Hz - move the arm...")
-            print(f"[LIVE RECORD] Started at {self.live_record_rate}Hz (threshold: {self.live_position_threshold} units)")
+            self.status_label.setText(f"🔴 LIVE RECORDING @ {self.live_record_rate}Hz - Move the arm...")
+            print(f"[LIVE RECORD] 🎬 STARTED: {self.live_record_rate}Hz, threshold={self.live_position_threshold} units")
             
         else:
             # Stop live recording
             self.stop_live_recording()
     
     def stop_live_recording(self):
-        """Stop live recording and create ONE continuous action"""
+        """Stop live recording and create ONE COMPLETE ACTION with all data"""
         self.is_live_recording = False
         self.live_record_timer.stop()
         
@@ -559,75 +502,86 @@ class RecordTab(QWidget):
         self.play_btn.setEnabled(True)
         self.delay_btn.setEnabled(True)
         self.save_btn.setEnabled(True)
+        self.action_combo.setEnabled(True)
         
         self.live_record_btn.setChecked(False)
         self.live_record_btn.setText("🔴 LIVE RECORD")
         
-        # Add all captured positions to the table as ONE continuous action
-        positions_count = len(self.live_recorded_positions)
-        if positions_count > 0:
-            print(f"[LIVE RECORD] Adding {positions_count} positions to table...")
-            for i, pos_data in enumerate(self.live_recorded_positions, 1):
-                self.table.add_position_row(
-                    f"Pos {i}",
-                    pos_data['positions'],
-                    pos_data['velocity']
-                )
+        # Create ONE complete live recording action
+        point_count = len(self.live_recorded_data)
+        if point_count > 0:
+            name = f"Recording {self.position_counter}"
+            speed = 100  # Default 100% speed
             
-            self.position_counter = positions_count + 1
-            self.status_label.setText(f"✓ Live recording complete - {positions_count} positions captured")
-            print(f"[LIVE RECORD] ✓ Complete - {positions_count} positions added as continuous action")
+            # Add ONE row containing the entire recording
+            self.table.add_live_recording(name, self.live_recorded_data, speed)
+            self.position_counter += 1
+            
+            duration = self.live_recorded_data[-1]['timestamp'] if self.live_recorded_data else 0
+            self.status_label.setText(f"✓ Recording saved: {point_count} points, {duration:.1f}s")
+            print(f"[LIVE RECORD] ✅ COMPLETE: {name} - {point_count} points, {duration:.1f}s duration")
         else:
             self.status_label.setText("⚠️ No positions captured")
-            print(f"[LIVE RECORD] No positions captured")
+            print(f"[LIVE RECORD] ⚠️ No positions captured")
         
-        # Clear the live recording buffer
-        self.live_recorded_positions = []
+        # Clear buffer
+        self.live_recorded_data = []
+        self.live_record_start_time = None
     
     def capture_live_position(self):
-        """Capture one position during live recording (called by timer at 10Hz)
+        """INDUSTRIAL precision position capture at 20Hz with timestamps
         
-        Uses intelligent position filtering to:
-        1. Only record when position changes significantly (reduces redundancy)
-        2. Capture smooth motion at optimal Jetson-friendly rate
-        3. Maintain high repeatability for playback
+        Captures:
+        - Motor positions (6-axis)
+        - Precise timestamp (for interpolation)
+        - Velocity setting
+        - Only records significant changes (threshold: 3 units)
         """
         if not self.is_live_recording:
             return
         
         try:
-            # Read current position
+            import time
+            
+            # Initialize start time on first capture
+            if self.live_record_start_time is None:
+                self.live_record_start_time = time.time()
+            
+            # Read current position with high precision
             positions = self.motor_controller.read_positions()
             
             if not positions or len(positions) != 6:
                 print("[LIVE RECORD] ⚠️ Failed to read positions")
                 return
             
-            # Check if position has changed significantly from last recorded
+            # Calculate timestamp relative to recording start
+            timestamp = time.time() - self.live_record_start_time
+            
+            # Check if position has changed significantly (INDUSTRIAL threshold: 3 units)
             max_change = 0
             if self.last_recorded_position is not None:
-                # Calculate max movement from last recorded position
                 max_change = max(abs(positions[i] - self.last_recorded_position[i]) for i in range(6))
                 
                 if max_change < self.live_position_threshold:
-                    # Position hasn't changed enough, skip this sample (reduces redundancy)
+                    # Position hasn't changed enough - skip for efficiency
                     return
             
-            # Store this position in the live recording buffer
+            # Store COMPLETE data point with timestamp for precision playback
             current_velocity = self.velocity_slider.value()
-            self.live_recorded_positions.append({
+            self.live_recorded_data.append({
                 'positions': positions,
+                'timestamp': timestamp,
                 'velocity': current_velocity
             })
             
             self.last_recorded_position = positions
             
-            positions_count = len(self.live_recorded_positions)
-            self.status_label.setText(f"🔴 Recording... ({positions_count} positions)")
-            print(f"[LIVE RECORD] ✓ Captured position {positions_count}: max_change={max_change}")
+            point_count = len(self.live_recorded_data)
+            self.status_label.setText(f"🔴 REC: {point_count} pts, {timestamp:.1f}s")
+            print(f"[LIVE RECORD] Point {point_count}: t={timestamp:.3f}s, Δ={max_change} units")
             
         except Exception as e:
-            print(f"[LIVE RECORD] ❌ Error: {e}")
+            print(f"[LIVE RECORD] ❌ ERROR: {e}")
             import traceback
             traceback.print_exc()
             self.stop_live_recording()
@@ -666,15 +620,6 @@ class RecordTab(QWidget):
         else:
             self.default_velocity = snapped_value
             self.velocity_display.setText(str(snapped_value))
-    
-    def on_speed_scale_changed(self, value: int):
-        """Handle speed scale slider change - snap to multiples of 25"""
-        snapped_value = round(value / 25) * 25
-        if snapped_value != value:
-            self.speed_scale_slider.setValue(snapped_value)
-        else:
-            self.playback_speed_scale = snapped_value
-            self.speed_scale_display.setText(f"{snapped_value}%")
     
     def delete_position(self, row: int):
         """Delete a position"""
@@ -744,15 +689,15 @@ class RecordTab(QWidget):
             self.status_label.setText("Loop disabled")
     
     def start_playback(self):
-        """Start playing the recorded sequence"""
-        print("[PLAYBACK] Starting playback...")
-        positions, delays = self.table.get_all_data()
+        """INDUSTRIAL precision playback of all actions"""
+        print("[PLAYBACK] 🎬 STARTING PLAYBACK...")
+        actions = self.table.get_all_actions()
         
-        print(f"[PLAYBACK] Found {len(positions)} positions, {len(delays)} delays")
+        print(f"[PLAYBACK] Found {len(actions)} actions to execute")
         
-        if not positions:
-            print("[PLAYBACK] ❌ No positions to play")
-            self.status_label.setText("❌ No positions to play")
+        if not actions:
+            print("[PLAYBACK] ❌ No actions to play")
+            self.status_label.setText("❌ No actions to play")
             self.play_btn.setChecked(False)
             return
         
@@ -761,38 +706,36 @@ class RecordTab(QWidget):
         self.set_btn.setEnabled(False)
         self.delay_btn.setEnabled(False)
         self.save_btn.setEnabled(False)
+        self.live_record_btn.setEnabled(False)
         
-        # Start playback in background
-        self.playback_positions = positions
-        self.playback_delays = delays
+        # Start playback sequence
+        self.playback_actions = actions
         self.playback_index = 0
         
-        self.status_label.setText("▶ Playing sequence...")
+        self.status_label.setText("▶ Playing actions...")
         self.playback_status.emit("playing")
         
-        # Start first move
-        print("[PLAYBACK] Starting first move...")
+        # Start first action
+        print("[PLAYBACK] Executing first action...")
         QTimer.singleShot(100, self.playback_step)
     
     def playback_step(self):
-        """Execute one step of playback with smooth transitions"""
+        """INDUSTRIAL precision playback - handles single positions AND live recordings"""
         if not self.is_playing:
-            print("[PLAYBACK] Stopped (not playing)")
+            print("[PLAYBACK] Stopped")
             return
         
-        if self.playback_index >= len(self.playback_positions):
-            print(f"[PLAYBACK] Sequence complete (index {self.playback_index})")
+        if self.playback_index >= len(self.playback_actions):
+            print(f"[PLAYBACK] ✅ COMPLETE")
             
-            # In loop mode, NEVER disconnect - keep torque on
+            # In loop mode, restart
             if self.play_loop:
-                print("[PLAYBACK] 🔁 Looping - keeping torque ON")
-                # Restart from beginning - keep connection alive
+                print("[PLAYBACK] 🔁 LOOPING - keeping torque ON")
                 self.playback_index = 0
-                self.status_label.setText("🔁 Looping sequence...")
+                self.status_label.setText("🔁 Looping...")
                 QTimer.singleShot(500, self.playback_step)
             else:
-                # Not looping - disconnect and clean up
-                print("[PLAYBACK] Not looping - disconnecting")
+                print("[PLAYBACK] Disconnecting...")
                 try:
                     self.motor_controller.disconnect()
                 except:
@@ -800,50 +743,25 @@ class RecordTab(QWidget):
                 self.stop_playback()
             return
         
-        # Get current position
-        pos_data = self.playback_positions[self.playback_index]
-        is_last_position = (self.playback_index == len(self.playback_positions) - 1)
+        # Get current action
+        action = self.playback_actions[self.playback_index]
+        is_last = (self.playback_index == len(self.playback_actions) - 1)
         
         # Highlight current row
         self.table.selectRow(self.playback_index)
         
-        print(f"[PLAYBACK] Step {self.playback_index + 1}/{len(self.playback_positions)}: {pos_data['name']}")
-        print(f"[PLAYBACK]   Positions: {pos_data['motor_positions']}")
-        base_velocity = pos_data.get('velocity', 600)
-        
-        # Apply speed scale percentage (25%-200%)
-        scaled_velocity = int(base_velocity * (self.playback_speed_scale / 100.0))
-        print(f"[PLAYBACK]   Velocity: {base_velocity} → {scaled_velocity} ({self.playback_speed_scale}% speed)")
+        print(f"[PLAYBACK] Action {self.playback_index + 1}/{len(self.playback_actions)}: {action['name']} ({action['type']})")
         
         try:
-            # Move to position - CONTINUOUS MOTION (no waiting between positions)
-            # Keep connection alive for smooth professional playback
-            keep_alive = (not is_last_position) or self.play_loop
-            
-            self.status_label.setText(f"▶ Playing... ({self.playback_index + 1}/{len(self.playback_positions)}) @ {self.playback_speed_scale}%")
-            self.motor_controller.set_positions(
-                pos_data["motor_positions"],
-                scaled_velocity,
-                wait=False,  # DON'T WAIT - smooth continuous motion!
-                keep_connection=keep_alive
-            )
-            
-            print(f"[PLAYBACK]   ✓ Position sent (continuous mode, kept connection: {keep_alive})")
-            
-            # Check for EXPLICIT delay after this position
-            if str(self.playback_index) in self.playback_delays:
-                delay = self.playback_delays[str(self.playback_index)]
-                # Scale delay by speed percentage
-                scaled_delay = delay * (100.0 / self.playback_speed_scale)
-                print(f"[PLAYBACK]   ⏱️ Delay: {delay:.1f}s → {scaled_delay:.1f}s @ {self.playback_speed_scale}%")
-                self.status_label.setText(f"⏱️ Waiting {scaled_delay:.1f}s...")
-                QTimer.singleShot(int(scaled_delay * 1000), self.continue_playback)
-            else:
-                # No explicit delay - continue IMMEDIATELY for smooth continuous motion
-                QTimer.singleShot(50, self.continue_playback)  # Minimal delay for motor command processing
+            if action['type'] == 'position':
+                # SINGLE POSITION - move directly
+                self._execute_single_position(action, is_last)
+            elif action['type'] == 'live_recording':
+                # LIVE RECORDING - time-based interpolation
+                self._execute_live_recording(action, is_last)
                 
         except Exception as e:
-            print(f"[PLAYBACK] ❌ Error: {e}")
+            print(f"[PLAYBACK] ❌ ERROR: {e}")
             import traceback
             traceback.print_exc()
             self.status_label.setText(f"❌ Playback error: {str(e)}")
@@ -852,6 +770,92 @@ class RecordTab(QWidget):
             except:
                 pass
             self.stop_playback()
+    
+    def _execute_single_position(self, action: dict, is_last: bool):
+        """Execute a single position action with precision"""
+        positions = action['positions']
+        speed = action['speed']
+        
+        # Convert speed % to velocity (600 base * speed/100)
+        velocity = int(600 * (speed / 100.0))
+        
+        print(f"[PLAYBACK]   Single position, speed={speed}%, velocity={velocity}")
+        
+        keep_alive = (not is_last) or self.play_loop
+        
+        self.status_label.setText(f"▶ {action['name']} @ {speed}%")
+        self.motor_controller.set_positions(
+            positions,
+            velocity,
+            wait=True,  # Wait for single positions
+            keep_connection=keep_alive
+        )
+        
+        print(f"[PLAYBACK]   ✓ Position reached")
+        
+        # Continue to next action
+        QTimer.singleShot(100, self.continue_playback)
+    
+    def _execute_live_recording(self, action: dict, is_last: bool):
+        """Execute live recording with TIME-BASED interpolation for precision"""
+        recorded_data = action['recorded_data']
+        speed = action['speed']
+        point_count = action['point_count']
+        
+        print(f"[PLAYBACK]   Live recording: {point_count} points, speed={speed}%")
+        
+        # Connect and keep alive
+        keep_alive = (not is_last) or self.play_loop
+        if not self.motor_controller.bus:
+            self.motor_controller.connect()
+        
+        # Enable torque
+        for name in self.motor_controller.motor_names:
+            self.motor_controller.bus.write("Torque_Enable", name, 1, normalize=False)
+        
+        # Time-based playback with speed scaling
+        import time
+        start_time = time.time()
+        last_point_index = 0
+        
+        for i, point in enumerate(recorded_data):
+            if not self.is_playing:
+                return
+            
+            target_time = point['timestamp'] * (100.0 / speed)  # Scale by speed %
+            
+            # Wait until the correct time
+            while (time.time() - start_time) < target_time:
+                if not self.is_playing:
+                    return
+                time.sleep(0.001)  # 1ms precision
+            
+            # Send position command
+            velocity = int(point['velocity'] * (speed / 100.0))
+            
+            for idx, name in enumerate(self.motor_controller.motor_names):
+                self.motor_controller.bus.write("Goal_Velocity", name, velocity, normalize=False)
+                self.motor_controller.bus.write("Goal_Position", name, point['positions'][idx], normalize=False)
+            
+            last_point_index = i
+            
+            # Update status periodically
+            if i % 10 == 0:
+                progress = int((i / point_count) * 100)
+                self.status_label.setText(f"▶ {action['name']} {progress}% @ {speed}%")
+        
+        # Final position - wait for arrival if last action
+        if is_last and not self.play_loop:
+            time.sleep(0.5)  # Let final position settle
+        
+        print(f"[PLAYBACK]   ✓ Recording playback complete")
+        
+        # Disconnect if last and not looping
+        if not keep_alive:
+            self.motor_controller.disconnect()
+        
+        # Continue to next action
+        QTimer.singleShot(100, self.continue_playback)
     
     def continue_playback(self):
         """Continue to next position"""

@@ -1,132 +1,119 @@
 """
-Action Table Widget - Specialized table for action recording
+Action Table Widget - Industrial precision action management
+Each row is ONE complete action (single position OR live recording)
 """
 
-from PySide6.QtWidgets import QPushButton, QLineEdit, QWidget, QHBoxLayout
+from PySide6.QtWidgets import QPushButton, QTableWidgetItem
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from .draggable_table import DraggableTableWidget
 
 
 class ActionTableWidget(DraggableTableWidget):
-    """Specialized table for recording and displaying motor positions"""
+    """Industrial-grade action table - each row is ONE contained action"""
     
     # Signals
     delete_clicked = Signal(int)  # row index
-    delay_marker_clicked = Signal(int)  # row index (row after which delay is shown)
     
     def __init__(self, parent=None):
         super().__init__(parent)
         
-        # Set up columns: Name | Motor Positions | Velocity | Delete
+        # Set up columns: Action Name | Type | Speed % | Delete
         self.setColumnCount(4)
-        self.setHorizontalHeaderLabels(["Name", "Motor Positions", "Velocity", "Delete"])
+        self.setHorizontalHeaderLabels(["Action Name", "Type", "Speed %", ""])
         
-        # Set column widths (for 954px content area width)
+        # Set column widths
         header = self.horizontalHeader()
         header.setStretchLastSection(False)
-        header.setSectionResizeMode(0, header.ResizeMode.Interactive)  # Name - 150px
-        header.setSectionResizeMode(1, header.ResizeMode.Stretch)      # Positions - stretch
-        header.setSectionResizeMode(2, header.ResizeMode.Fixed)        # Velocity - 100px
-        header.setSectionResizeMode(3, header.ResizeMode.Fixed)        # Delete - 80px
+        header.setSectionResizeMode(0, header.ResizeMode.Stretch)  # Name stretches
+        header.setSectionResizeMode(1, header.ResizeMode.ResizeToContents)  # Type
+        header.setSectionResizeMode(2, header.ResizeMode.Fixed)  # Speed
+        header.setSectionResizeMode(3, header.ResizeMode.Fixed)  # Delete
         
-        header.resizeSection(0, 150)
-        header.resizeSection(2, 100)
-        header.resizeSection(3, 80)
+        header.resizeSection(2, 100)  # Speed column
+        header.resizeSection(3, 80)   # Delete button
     
-    def add_position_row(self, name: str, positions: list[int], velocity: int, row: int = -1):
-        """Add a position row to the table
+    def add_single_position(self, name: str, positions: list[int], speed: int = 100):
+        """Add ONE single position action
         
         Args:
-            name: Position name (e.g., "Pos 1")
-            positions: List of 6 motor positions
-            velocity: Movement velocity
-            row: Row index to insert at (-1 = append)
+            name: Action name
+            positions: List of 6 motor positions [shoulder_pan, ...]
+            speed: Playback speed percentage (25-200%)
         """
-        if row == -1:
-            row = self.rowCount()
-        
+        row = self.rowCount()
         self.insertRow(row)
         
-        # Name column
-        from PySide6.QtWidgets import QTableWidgetItem
+        # Column 0: Name (editable)
         name_item = QTableWidgetItem(name)
-        name_item.setData(Qt.UserRole, "position")  # Mark as position row
-        name_item.setFlags(name_item.flags() | Qt.ItemIsEditable)  # Make editable
+        name_item.setFlags(name_item.flags() | Qt.ItemIsEditable)
+        
+        # Store action data
+        name_item.setData(Qt.UserRole + 1, {
+            'type': 'position',
+            'positions': positions,
+            'speed': speed
+        })
         self.setItem(row, 0, name_item)
         
-        # Motor positions (full display)
-        positions_str = str(positions)
-        positions_item = QTableWidgetItem(positions_str)
-        positions_item.setData(Qt.UserRole + 1, positions)  # Store full positions
-        positions_item.setFlags(positions_item.flags() & ~Qt.ItemIsEditable)  # Not editable
-        self.setItem(row, 1, positions_item)
+        # Column 1: Type indicator
+        type_item = QTableWidgetItem("📍 Position")
+        type_item.setFlags(type_item.flags() & ~Qt.ItemIsEditable)
+        type_item.setForeground(QColor("#2196F3"))
+        self.setItem(row, 1, type_item)
         
-        # Velocity
-        velocity_item = QTableWidgetItem(str(velocity))
-        velocity_item.setFlags(velocity_item.flags() | Qt.ItemIsEditable)  # Make editable
-        self.setItem(row, 2, velocity_item)
+        # Column 2: Speed % (editable)
+        speed_item = QTableWidgetItem(f"{speed}%")
+        speed_item.setData(Qt.UserRole, speed)
+        speed_item.setFlags(speed_item.flags() | Qt.ItemIsEditable)
+        speed_item.setTextAlignment(Qt.AlignCenter)
+        self.setItem(row, 2, speed_item)
         
-        # Delete button (now in column 3)
-        delete_btn = QPushButton("🗑️")
-        delete_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f44336;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                font-size: 20px;
-                padding: 8px;
-                min-width: 60px;
-            }
-            QPushButton:hover {
-                background-color: #c62828;
-            }
-        """)
-        delete_btn.clicked.connect(lambda checked, r=row: self._on_delete_clicked(r))
-        self.setCellWidget(row, 3, delete_btn)
+        # Column 3: Delete button
+        self._add_delete_button(row)
     
-    def add_delay_row(self, delay_seconds: float, row: int = -1):
-        """Add a delay indicator row
+    def add_live_recording(self, name: str, recorded_data: list[dict], speed: int = 100):
+        """Add ONE complete live recording action
         
         Args:
-            delay_seconds: Delay duration in seconds
-            row: Row index to insert at (-1 = append)
+            name: Action name
+            recorded_data: List of {positions: [6 ints], timestamp: float, velocity: int}
+            speed: Playback speed percentage (25-200%)
         """
-        if row == -1:
-            row = self.rowCount()
-        
+        row = self.rowCount()
         self.insertRow(row)
         
-        # First column: "Delay" label (not editable)
-        from PySide6.QtWidgets import QTableWidgetItem
-        delay_label = QTableWidgetItem("⏱️ Delay")
-        delay_label.setData(Qt.UserRole, "delay")  # Mark as delay row
-        delay_label.setTextAlignment(Qt.AlignCenter)
-        delay_label.setBackground(QColor("#FF9800"))  # Orange background
-        delay_label.setForeground(QColor("#ffffff"))
-        delay_label.setFlags(delay_label.flags() & ~Qt.ItemIsEditable)  # Not editable
-        self.setItem(row, 0, delay_label)
+        # Column 0: Name (editable)
+        name_item = QTableWidgetItem(name)
+        name_item.setFlags(name_item.flags() | Qt.ItemIsEditable)
         
-        # Second column: Editable time value
-        delay_value = QTableWidgetItem(f"{delay_seconds:.1f}")
-        delay_value.setData(Qt.UserRole, "delay_time")  # Mark as delay time
-        delay_value.setData(Qt.UserRole + 1, delay_seconds)  # Store delay value
-        delay_value.setTextAlignment(Qt.AlignCenter)
-        delay_value.setBackground(QColor("#FF9800"))
-        delay_value.setForeground(QColor("#ffffff"))
-        delay_value.setFlags(delay_value.flags() | Qt.ItemIsEditable)  # Editable!
-        self.setItem(row, 1, delay_value)
+        # Store complete recording data
+        name_item.setData(Qt.UserRole + 1, {
+            'type': 'live_recording',
+            'recorded_data': recorded_data,
+            'speed': speed,
+            'point_count': len(recorded_data)
+        })
+        self.setItem(row, 0, name_item)
         
-        # Third column: "seconds" label (merged with velocity column)
-        seconds_label = QTableWidgetItem("seconds")
-        seconds_label.setTextAlignment(Qt.AlignCenter)
-        seconds_label.setBackground(QColor("#FF9800"))
-        seconds_label.setForeground(QColor("#ffffff"))
-        seconds_label.setFlags(seconds_label.flags() & ~Qt.ItemIsEditable)
-        self.setItem(row, 2, seconds_label)
+        # Column 1: Type indicator with point count
+        type_item = QTableWidgetItem(f"🔴 Recording ({len(recorded_data)} pts)")
+        type_item.setFlags(type_item.flags() & ~Qt.ItemIsEditable)
+        type_item.setForeground(QColor("#f44336"))
+        self.setItem(row, 1, type_item)
         
-        # Delete button for delay
+        # Column 2: Speed % (editable)
+        speed_item = QTableWidgetItem(f"{speed}%")
+        speed_item.setData(Qt.UserRole, speed)
+        speed_item.setFlags(speed_item.flags() | Qt.ItemIsEditable)
+        speed_item.setTextAlignment(Qt.AlignCenter)
+        self.setItem(row, 2, speed_item)
+        
+        # Column 3: Delete button
+        self._add_delete_button(row)
+    
+    def _add_delete_button(self, row: int):
+        """Add delete button to row"""
         delete_btn = QPushButton("🗑️")
         delete_btn.setStyleSheet("""
             QPushButton {
@@ -146,93 +133,82 @@ class ActionTableWidget(DraggableTableWidget):
         self.setCellWidget(row, 3, delete_btn)
     
     def _on_delete_clicked(self, row: int):
-        """Handle delete button click"""
-        # Emit signal for the button's row
-        self.delete_clicked.emit(row)
+        """Handle delete button click - emit with CURRENT row index"""
+        # Find actual current row of the button
+        for current_row in range(self.rowCount()):
+            if self.cellWidget(current_row, 3) == self.sender():
+                self.delete_clicked.emit(current_row)
+                return
     
     def ensure_delete_buttons(self):
-        """Ensure all rows have delete buttons (called after edits or drag-drop)"""
+        """Ensure all rows have delete buttons after editing"""
         for row in range(self.rowCount()):
             if not self.cellWidget(row, 3):
-                # Re-add delete button if missing
-                delete_btn = QPushButton("🗑️")
-                delete_btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: #f44336;
-                        color: white;
-                        border: none;
-                        border-radius: 4px;
-                        font-size: 20px;
-                        padding: 8px;
-                        min-width: 60px;
-                    }
-                    QPushButton:hover {
-                        background-color: #c62828;
-                    }
-                """)
-                delete_btn.clicked.connect(lambda checked, r=row: self._on_delete_clicked(r))
-                self.setCellWidget(row, 3, delete_btn)
+                self._add_delete_button(row)
     
-    def get_position_data(self, row: int) -> dict:
-        """Get position data from a row
+    def get_all_actions(self) -> list[dict]:
+        """Get all actions from table for playback/saving
         
         Returns:
-            {"name": str, "motor_positions": list, "velocity": int}
+            List of action dicts:
+            {
+                'name': str,
+                'type': 'position' | 'live_recording',
+                'speed': int (percentage),
+                'positions': [6 ints] (if type='position'),
+                'recorded_data': list[dict] (if type='live_recording')
+            }
         """
-        name_item = self.item(row, 0)
-        if not name_item or name_item.data(Qt.UserRole) != "position":
-            return None
+        actions = []
         
-        positions_item = self.item(row, 1)
-        velocity_item = self.item(row, 2)
-        
-        return {
-            "name": name_item.text(),
-            "motor_positions": positions_item.data(Qt.UserRole + 1),
-            "velocity": int(velocity_item.text()) if velocity_item else 600
-        }
-    
-    def is_delay_row(self, row: int) -> bool:
-        """Check if a row is a delay row"""
-        item = self.item(row, 0)
-        return item and item.data(Qt.UserRole) == "delay"
-    
-    def get_delay_value(self, row: int) -> float:
-        """Get delay value from a delay row"""
-        # Check if this is a delay row
-        if not self.is_delay_row(row):
-            return 0.0
-        
-        # Get value from second column (editable time field)
-        time_item = self.item(row, 1)
-        if time_item:
+        for row in range(self.rowCount()):
+            name_item = self.item(row, 0)
+            speed_item = self.item(row, 2)
+            
+            if not name_item:
+                continue
+            
+            # Get stored action data
+            action_data = name_item.data(Qt.UserRole + 1)
+            if not action_data:
+                continue
+            
+            # Get current speed (may have been edited)
+            speed_text = speed_item.text().rstrip('%')
             try:
-                return float(time_item.text())
-            except ValueError:
-                return 0.0
-        return 0.0
-    
-    def get_all_data(self) -> tuple[list, dict]:
-        """Get all positions and delays
+                speed = int(speed_text)
+            except:
+                speed = action_data.get('speed', 100)
+            
+            # Build action dict
+            action = {
+                'name': name_item.text(),
+                'type': action_data['type'],
+                'speed': speed
+            }
+            
+            if action_data['type'] == 'position':
+                action['positions'] = action_data['positions']
+            elif action_data['type'] == 'live_recording':
+                action['recorded_data'] = action_data['recorded_data']
+                action['point_count'] = action_data['point_count']
+            
+            actions.append(action)
         
-        Returns:
-            (positions_list, delays_dict)
-            positions_list: List of position dicts
-            delays_dict: Dict mapping position index to delay seconds
-        """
+        return actions
+    
+    def get_all_data(self):
+        """Compatibility method for old code - returns actions in old format"""
+        actions = self.get_all_actions()
         positions = []
         delays = {}
         
-        for row in range(self.rowCount()):
-            if self.is_delay_row(row):
-                # This is a delay - associate with previous position
-                if positions:
-                    delays[len(positions) - 1] = self.get_delay_value(row)
-            else:
-                # This is a position
-                pos_data = self.get_position_data(row)
-                if pos_data:
-                    positions.append(pos_data)
+        for action in actions:
+            if action['type'] == 'position':
+                positions.append({
+                    'name': action['name'],
+                    'motor_positions': action['positions'],
+                    'velocity': 600  # Default velocity
+                })
         
         return positions, delays
-
