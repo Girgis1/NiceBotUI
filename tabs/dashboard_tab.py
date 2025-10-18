@@ -12,7 +12,7 @@ import pytz
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QListWidget, QFrame, QTextEdit, QComboBox, QSizePolicy, QSpinBox
+    QListWidget, QFrame, QTextEdit, QComboBox, QSizePolicy, QSpinBox, QCheckBox
 )
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QColor, QPainter, QPen
