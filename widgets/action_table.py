@@ -18,9 +18,9 @@ class ActionTableWidget(DraggableTableWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         
-        # Set up columns: Action Name | Type | Speed % | Delete
+        # Set up columns: Action Name | Type | Speed | Delete
         self.setColumnCount(4)
-        self.setHorizontalHeaderLabels(["Action Name", "Type", "Speed %", ""])
+        self.setHorizontalHeaderLabels(["Action Name", "Type", "Speed", ""])
         
         # Set column widths
         header = self.horizontalHeader()
@@ -62,8 +62,8 @@ class ActionTableWidget(DraggableTableWidget):
         type_item.setForeground(QColor("#2196F3"))
         self.setItem(row, 1, type_item)
         
-        # Column 2: Speed % (editable)
-        speed_item = QTableWidgetItem(f"{speed}%")
+        # Column 2: Speed (editable, no % symbol)
+        speed_item = QTableWidgetItem(str(speed))
         speed_item.setData(Qt.UserRole, speed)
         speed_item.setFlags(speed_item.flags() | Qt.ItemIsEditable)
         speed_item.setTextAlignment(Qt.AlignCenter)
@@ -102,8 +102,8 @@ class ActionTableWidget(DraggableTableWidget):
         type_item.setForeground(QColor("#f44336"))
         self.setItem(row, 1, type_item)
         
-        # Column 2: Speed % (editable)
-        speed_item = QTableWidgetItem(f"{speed}%")
+        # Column 2: Speed (editable, no % symbol)
+        speed_item = QTableWidgetItem(str(speed))
         speed_item.setData(Qt.UserRole, speed)
         speed_item.setFlags(speed_item.flags() | Qt.ItemIsEditable)
         speed_item.setTextAlignment(Qt.AlignCenter)
@@ -174,7 +174,7 @@ class ActionTableWidget(DraggableTableWidget):
                 continue
             
             # Get current speed (may have been edited)
-            speed_text = speed_item.text().rstrip('%')
+            speed_text = speed_item.text().strip().rstrip('%')  # Remove % if user added it
             try:
                 speed = int(speed_text)
             except:

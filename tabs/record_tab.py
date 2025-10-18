@@ -226,24 +226,8 @@ class RecordTab(QWidget):
         self.loop_btn.clicked.connect(self.toggle_loop)
         control_bar.addWidget(self.loop_btn)
         
-        self.delay_btn = QPushButton("+ Delay")
-        self.delay_btn.setMinimumHeight(50)
-        self.delay_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #FF9800;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                font-size: 14px;
-                font-weight: bold;
-                padding: 5px 10px;
-            }
-            QPushButton:hover {
-                background-color: #F57C00;
-            }
-        """)
-        self.delay_btn.clicked.connect(self.add_delay)
-        control_bar.addWidget(self.delay_btn)
+        # Delay button removed - delays now handled per-step in composite manifest
+        # Users can edit delays in the future step editor UI
         
         control_bar.addStretch()
         
@@ -499,26 +483,8 @@ class RecordTab(QWidget):
             self.status_label.setText(f"❌ Error: {str(e)}")
             print(f"Error recording position: {e}")
     
-    def add_delay(self):
-        """Add a delay after selected position"""
-        current_row = self.table.currentRow()
-        
-        if current_row < 0:
-            # No selection, add at end
-            current_row = self.table.rowCount()
-        else:
-            # Add after selected row
-            current_row += 1
-        
-        # Ask for delay duration
-        delay, ok = QInputDialog.getDouble(
-            self, "Add Delay", "Delay duration (seconds):",
-            1.0, 0.1, 60.0, 1
-        )
-        
-        if ok:
-            self.table.add_delay_row(delay, current_row)
-            self.status_label.setText(f"✓ Added {delay:.1f}s delay")
+    # add_delay removed - delays now part of composite manifest per-step
+    # Will be added to future step editor UI
     
     def toggle_live_recording(self):
         """Toggle INDUSTRIAL precision live recording - creates ONE complete action"""
