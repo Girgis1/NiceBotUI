@@ -769,10 +769,12 @@ class ExecutionWorker(QThread):
             
             # Build camera config string
             robot_config = self.config.get("robot", {})
-            cameras = robot_config.get("cameras", {})
+            cameras = self.config.get("cameras", {})  # Cameras are at TOP LEVEL in config!
             camera_str = "{ "
             for cam_name, cam_config in cameras.items():
-                camera_str += f"{cam_name}: {{type: opencv, index_or_path: {cam_config['path']}, width: {cam_config['width']}, height: {cam_config['height']}, fps: {cam_config['fps']}}}, "
+                # Use 'index_or_path' from config (not 'path')
+                cam_path = cam_config.get('index_or_path', cam_config.get('path', '/dev/video0'))
+                camera_str += f"{cam_name}: {{type: opencv, index_or_path: {cam_path}, width: {cam_config['width']}, height: {cam_config['height']}, fps: {cam_config['fps']}}}, "
             camera_str = camera_str.rstrip(", ") + " }"
             
             # Get lerobot working directory
@@ -1058,10 +1060,12 @@ class ExecutionWorker(QThread):
         robot_config = self.config.get("robot", {})
         
         # Build camera config string
-        cameras = robot_config.get("cameras", {})
+        cameras = self.config.get("cameras", {})  # Cameras are at TOP LEVEL in config!
         camera_str = "{"
         for cam_name, cam_config in cameras.items():
-            camera_str += f"{cam_name}: {{type: opencv, index_or_path: '{cam_config['path']}', width: {cam_config['width']}, height: {cam_config['height']}, fps: {cam_config['fps']}}}, "
+            # Use 'index_or_path' from config (not 'path')
+            cam_path = cam_config.get('index_or_path', cam_config.get('path', '/dev/video0'))
+            camera_str += f"{cam_name}: {{type: opencv, index_or_path: '{cam_path}', width: {cam_config['width']}, height: {cam_config['height']}, fps: {cam_config['fps']}}}, "
         camera_str = camera_str.rstrip(", ") + "}"
         
         return [
