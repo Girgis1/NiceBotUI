@@ -1,0 +1,11 @@
+{
+  "step_type": "action",
+  "name": "ActionTest01",
+  "enabled": true,
+  "delay_after": 0.0,
+  "metadata": {
+    "created_at": "2025-10-18T20:34:39.541003+11:00",
+    "modified_at": "2025-10-18T20:34:39.541015+11:00"
+  },
+  "action_name": "ActionTest01"
+}

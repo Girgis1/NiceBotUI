@@ -779,8 +779,8 @@ class DashboardTab(QWidget):
         
         # Update UI state
         self.is_running = True
-        self.run_btn.setChecked(True)
-        self.run_btn.setText("⏹ STOP")
+        self.start_stop_btn.setChecked(True)
+        self.start_stop_btn.setText("⏹ STOP")
         self.action_label.setText(f"Sequence: {sequence_name}")
         
         # Start execution worker
