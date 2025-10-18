@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.05] - 2025-10-18
+## [0.21] - 2025-10-18
 
 ### 🎨 UI/UX Improvements + Critical Bug Fix
 
@@ -52,6 +52,169 @@ All notable changes to this project will be documented in this file.
 - ✅ No need to re-enter run counts
 - ✅ No more dataset collision errors
 - ✅ Industrial/commercial ready
+
+---
+
+## [0.20] - 2025-10-18
+
+### 🎉 WORKING MODELS! - Full Model Execution System
+
+#### 🚀 Major Achievement
+**Models now work in both local mode and server mode!**
+- Dashboard model execution fully functional ✅
+- Sequence model steps fully functional ✅
+- Real-time subprocess output streaming ✅
+- Automatic eval folder cleanup ✅
+
+#### Critical Fixes
+
+**1. ✅ Camera Configuration Bug**
+- **Problem**: Cameras were empty `{ }` - policy couldn't load
+- **Root Cause**: Looking for `config["robot"]["cameras"]` but cameras are at top level `config["cameras"]`
+- **Fixed**: Corrected config path in both local and server mode
+- **Also Fixed**: Key name from `'path'` → `'index_or_path'`
+- **Impact**: Models now receive camera inputs and load successfully
+
+**2. ✅ Live Recording Broken**
+- **Problem**: AttributeError - `delay_btn` removed but code still referenced it
+- **Fixed**: Removed all 4 references to deleted delay button
+- **Impact**: Live recording works again
+
+**3. ✅ Eval Folder Cleanup Path**
+- **Problem**: FileExistsError - folders not being cleaned up
+- **Root Cause**: Wrong path - looking for `lerobot/local_eval_*` instead of `lerobot/local/eval_*`
+- **Fixed**: Corrected cleanup path to include `local/` subdirectory
+- **Impact**: No more dataset conflicts, clean environment
+
+**4. ✅ Startup Interference**
+- **Problem**: Cleaning folders at START interfered with lerobot-record initialization
+- **Fixed**: Only cleanup at END (in finally block)
+- **Impact**: lerobot-record has full control, no interference
+
+**5. ✅ Subprocess Output Lost**
+- **Problem**: No visibility into what lerobot-record was doing
+- **Fixed**: Background thread streams output line-by-line
+- **Impact**: Real-time feedback, see camera connections, episodes, errors
+
+**6. ✅ Missing options Attribute**
+- **Problem**: ExecutionWorker trying to access `self.options` which didn't exist
+- **Fixed**: Added `self.options = execution_data` alias in __init__
+- **Impact**: Dashboard can pass num_episodes and duration to worker
+
+#### New Features
+
+**Local Mode (Default)**
+- Uses `lerobot-record` directly with `--policy.path`
+- No server overhead
+- Automatic eval folder cleanup (start disabled, end enabled)
+- Runs from `~/lerobot` directory
+- Dashboard: Uses UI settings (episodes, time)
+- Sequences: Uses 1 episode per model step
+
+**Server Mode**
+- Uses async inference (policy server + robot client)
+- Optimized for sequences with multiple model steps
+- Server starts once at beginning, reused for all steps
+- More efficient for complex sequences
+
+**Settings Toggle**
+- "Use Local Mode (lerobot-record)" checkbox
+- Default: ON (local mode)
+- Switch to server mode for advanced use cases
+
+**Debug Output**
+- Full command logging for troubleshooting
+- Real-time lerobot output streaming
+- Exit code checking and reporting
+- Permission warnings for `/dev/ttyACM0`
+
+#### Technical Implementation
+
+**Files Modified (3 files)**
+- `utils/execution_manager.py` - Complete model execution rewrite
+  - Added `_execute_model_local()` for local mode
+  - Added `_execute_model()` for dashboard runs
+  - Fixed `_cleanup_eval_folders()` path
+  - Added real-time output streaming
+  - Proper timeout calculation
+  - Exit code checking
+  
+- `tabs/dashboard_tab.py` - Model execution routing
+  - Check `local_mode` config setting
+  - Route to ExecutionWorker for local mode
+  - Route to RobotWorker for server mode
+  - Pass num_episodes and duration from UI
+  
+- `tabs/settings_tab.py` - Local mode toggle
+  - Added "Use Local Mode" checkbox
+  - Saves to `config["policy"]["local_mode"]`
+  - Helpful explanations for both modes
+
+- `tabs/record_tab.py` - Delay button cleanup
+  - Removed 4 references to deleted `delay_btn`
+
+#### Command Example
+
+**Before (Broken):**
+```bash
+lerobot-record --robot.cameras={ }  # Empty cameras!
+```
+
+**After (Working):**
+```bash
+lerobot-record \
+  --robot.type=so100_follower \
+  --robot.port=/dev/ttyACM0 \
+  --robot.cameras={ front: {type: opencv, index_or_path: /dev/video0, width: 640, height: 480, fps: 30}, wrist: {type: opencv, index_or_path: /dev/video2, width: 640, height: 480, fps: 30} } \
+  --robot.id=follower_arm \
+  --display_data=false \
+  --dataset.repo_id=local/eval_GrabBlock1_ckpt \
+  --dataset.single_task=Eval GrabBlock1 \
+  --dataset.num_episodes=3 \
+  --dataset.episode_time_s=20 \
+  --dataset.push_to_hub=false \
+  --resume=false \
+  --policy.path=/home/daniel/lerobot/outputs/train/GrabBlock1/checkpoints/last/pretrained_model
+```
+
+#### User Experience
+
+**Dashboard:**
+```
+[info] Starting model: GrabBlock1
+[info] Using local mode (lerobot-record)
+[info] Loading model: GrabBlock1
+[info] Working directory: /home/daniel/lerobot
+[info] ✓ Process started, running...
+[info] [lerobot] OpenCVCamera(/dev/video0) connected.
+[info] [lerobot] OpenCVCamera(/dev/video2) connected.
+[info] [lerobot] follower_arm SO100Follower connected.
+[info] [lerobot] Recording episode 0
+[info] [lerobot] Recording episode 1
+[info] [lerobot] Recording episode 2
+[info] ✓ lerobot-record completed successfully
+[info] ✓ Cleaned up 1 eval folder(s)
+```
+
+#### Benefits
+✅ **Models work!** - Dashboard and sequences
+✅ **Real-time feedback** - See what's happening
+✅ **Clean environment** - Auto cleanup
+✅ **Flexible modes** - Local or server
+✅ **Production ready** - Industrial stability
+✅ **Debug friendly** - Full command logging
+
+#### Setup Notes
+```bash
+# Give GUI permission to access robot
+sudo chmod 666 /dev/ttyACM0
+
+# Run the GUI
+python app.py
+
+# Go to Dashboard → Select model → Run
+# Should see real-time output and model execution!
+```
 
 ---
 
