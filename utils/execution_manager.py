@@ -684,14 +684,136 @@ class ExecutionWorker(QThread):
             import traceback
             traceback.print_exc()
     
+    def _cleanup_eval_folders(self):
+        """Clean up all eval folders to prevent naming conflicts"""
+        import shutil
+        from pathlib import Path
+        
+        try:
+            # Look for eval folders in lerobot data directory
+            lerobot_data = Path.home() / ".cache" / "huggingface" / "lerobot"
+            
+            if not lerobot_data.exists():
+                return
+            
+            # Find and delete all folders starting with "local/eval_"
+            deleted_count = 0
+            for item in lerobot_data.iterdir():
+                if item.is_dir() and item.name.startswith("local_eval_"):
+                    self.log_message.emit('info', f"Cleaning up: {item.name}")
+                    shutil.rmtree(item)
+                    deleted_count += 1
+            
+            if deleted_count > 0:
+                self.log_message.emit('info', f"✓ Cleaned up {deleted_count} eval folder(s)")
+        
+        except Exception as e:
+            self.log_message.emit('warning', f"Failed to cleanup eval folders: {e}")
+    
+    def _execute_model_local(self, task: str, checkpoint: str, duration: float):
+        """Execute model using local mode (lerobot-record with policy)
+        
+        Args:
+            task: Model task name
+            checkpoint: Checkpoint name
+            duration: How long to run (seconds)
+        """
+        import subprocess
+        import time
+        from pathlib import Path
+        
+        try:
+            # Clean up old eval folders
+            self._cleanup_eval_folders()
+            
+            # Get checkpoint path
+            train_dir = Path(self.config["policy"].get("base_path", ""))
+            checkpoint_path = train_dir / task / "checkpoints" / checkpoint / "pretrained_model"
+            
+            if not checkpoint_path.exists():
+                self.log_message.emit('error', f"Model not found: {checkpoint_path}")
+                return
+            
+            # Get lerobot binary
+            lerobot_config = self.config.get("lerobot", {})
+            lerobot_bin = lerobot_config.get("python_path", "python")
+            
+            # Build camera config string
+            robot_config = self.config.get("robot", {})
+            cameras = robot_config.get("cameras", {})
+            camera_str = "{ "
+            for cam_name, cam_config in cameras.items():
+                camera_str += f"{cam_name}: {{type: opencv, index_or_path: {cam_config['path']}, width: {cam_config['width']}, height: {cam_config['height']}, fps: {cam_config['fps']}}}, "
+            camera_str = camera_str.rstrip(", ") + " }"
+            
+            # Build command
+            cmd = [
+                lerobot_bin, "-m", "lerobot.scripts.control_robot",
+                f"--robot.type={robot_config.get('type', 'so100_follower')}",
+                f"--robot.port={robot_config.get('port', '/dev/ttyACM0')}",
+                f"--robot.cameras={camera_str}",
+                f"--robot.id={robot_config.get('id', 'follower_arm')}",
+                "--display_data=false",
+                f"--dataset.repo_id=local/eval_{task}_ckpt",
+                f'--dataset.single_task=Eval {task}',
+                "--dataset.num_episodes=1",
+                f"--dataset.episode_time_s={duration}",
+                "--dataset.push_to_hub=false",
+                "--resume=false",
+                f"--policy.path={checkpoint_path}"
+            ]
+            
+            self.log_message.emit('info', f"Starting local mode: {task} for {duration}s")
+            
+            # Start process
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+            
+            # Wait for duration or stop request
+            start_time = time.time()
+            while time.time() - start_time < duration + 5:  # Add 5s buffer for startup/shutdown
+                if self._stop_requested or process.poll() is not None:
+                    break
+                time.sleep(0.5)
+            
+            # Stop process
+            if process.poll() is None:
+                process.terminate()
+                process.wait(5)
+                if process.poll() is None:
+                    process.kill()
+            
+            self.log_message.emit('info', "✓ Local model execution completed")
+            
+        except Exception as e:
+            self.log_message.emit('error', f"Local model execution failed: {e}")
+            import traceback
+            traceback.print_exc()
+    
     def _execute_model_inline(self, task: str, checkpoint: str, duration: float):
         """Execute a trained policy model for specified duration
+        
+        Checks config to determine if local or server mode should be used.
         
         Args:
             task: Model task name (folder in training output)
             checkpoint: Checkpoint name (e.g., "last", "best")
             duration: How long to run the model (seconds)
         """
+        # Check if local mode is enabled
+        local_mode = self.config.get("policy", {}).get("local_mode", True)
+        
+        if local_mode:
+            self.log_message.emit('info', "Using local mode (lerobot-record)")
+            self._execute_model_local(task, checkpoint, duration)
+            return
+        
+        # Otherwise use server mode
         import subprocess
         import time
         from pathlib import Path

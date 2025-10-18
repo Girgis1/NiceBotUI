@@ -231,8 +231,33 @@ class SettingsTab(QWidget):
         self.policy_base_edit = self.add_setting_row(layout, "Base Path:", "/home/daniel/lerobot/outputs/train")
         self.policy_device_edit = self.add_setting_row(layout, "Device:", "cuda")
         
-        # Async inference settings
-        section = QLabel("Async Inference:")
+        # Execution mode toggle
+        mode_section = QLabel("Execution Mode:")
+        mode_section.setStyleSheet("QLabel { color: #e0e0e0; font-size: 16px; font-weight: bold; padding: 10px 0 5px 0; }")
+        layout.addWidget(mode_section)
+        
+        self.policy_local_check = QCheckBox("Use Local Mode (lerobot-record)")
+        self.policy_local_check.setChecked(True)  # Default to local mode
+        self.policy_local_check.setStyleSheet("""
+            QCheckBox {
+                color: #e0e0e0;
+                font-size: 15px;
+                padding: 8px;
+            }
+            QCheckBox::indicator {
+                width: 24px;
+                height: 24px;
+            }
+        """)
+        layout.addWidget(self.policy_local_check)
+        
+        mode_help = QLabel("Local: Uses lerobot-record with policy (auto-cleans eval folders)\nServer: Uses async inference (policy server + robot client)")
+        mode_help.setStyleSheet("QLabel { color: #909090; font-size: 13px; padding: 5px 25px; }")
+        mode_help.setWordWrap(True)
+        layout.addWidget(mode_help)
+        
+        # Async inference settings (only for server mode)
+        section = QLabel("Async Inference (Server Mode):")
         section.setStyleSheet("QLabel { color: #e0e0e0; font-size: 16px; font-weight: bold; padding: 10px 0 5px 0; }")
         layout.addWidget(section)
         
@@ -403,6 +428,7 @@ class SettingsTab(QWidget):
         # Policy settings
         self.policy_base_edit.setText(self.config.get("policy", {}).get("base_path", "outputs/train"))
         self.policy_device_edit.setText(self.config.get("policy", {}).get("device", "cuda"))
+        self.policy_local_check.setChecked(self.config.get("policy", {}).get("local_mode", True))  # Default to local mode
         
         # Async inference
         async_cfg = self.config.get("async_inference", {})
@@ -452,6 +478,7 @@ class SettingsTab(QWidget):
             self.config["policy"] = {}
         self.config["policy"]["base_path"] = self.policy_base_edit.text()
         self.config["policy"]["device"] = self.policy_device_edit.text()
+        self.config["policy"]["local_mode"] = self.policy_local_check.isChecked()
         
         # Async inference
         if "async_inference" not in self.config:
