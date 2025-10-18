@@ -384,10 +384,10 @@ class ExecutionWorker(QThread):
                     self._execute_recording_inline(action_name)
                     
                 elif step_type == "delay":
-                    # Wait
+                    # Wait while holding current position
                     duration = step.get("duration", 1.0)
-                    self.log_message.emit('info', f"→ Delay: {duration}s")
-                    time.sleep(duration)
+                    self.log_message.emit('info', f"→ Delay: {duration}s (holding position)")
+                    self._delay_with_hold(duration)
                 
                 elif step_type == "home":
                     # Return to home position
@@ -441,6 +441,68 @@ class ExecutionWorker(QThread):
             self._playback_live_recording(recording)
         else:
             self._playback_position_recording(recording)
+    
+    def _delay_with_hold(self, duration: float):
+        """Delay while holding current motor position with torque enabled
+        
+        Args:
+            duration: How long to delay (seconds)
+        """
+        # Connect if not already connected
+        if not self.motor_controller.bus:
+            if not self.motor_controller.connect():
+                self.log_message.emit('error', "Failed to connect to motors - cannot hold position during delay")
+                # Fall back to regular sleep
+                time.sleep(duration)
+                return
+        
+        try:
+            # Read current positions
+            current_positions = self.motor_controller.read_positions_from_bus()
+            
+            if not current_positions:
+                self.log_message.emit('warning', "Could not read positions - delay without holding")
+                time.sleep(duration)
+                return
+            
+            self.log_message.emit('info', f"Holding position: {current_positions}")
+            
+            # Hold position by periodically re-sending position commands
+            # This keeps torque enabled and arm locked in place
+            start_time = time.time()
+            hold_interval = 0.1  # Re-send position every 100ms
+            
+            while (time.time() - start_time) < duration:
+                if self._stop_requested:
+                    break
+                
+                # Re-send position command to maintain hold
+                try:
+                    for idx, motor_name in enumerate(self.motor_controller.motor_names):
+                        self.motor_controller.bus.write(
+                            "Goal_Position",
+                            current_positions[idx],
+                            motor_name,
+                            normalize=False
+                        )
+                except Exception as e:
+                    self.log_message.emit('warning', f"Hold position error: {e}")
+                
+                # Sleep for hold interval (or remaining time if less)
+                remaining = duration - (time.time() - start_time)
+                sleep_time = min(hold_interval, remaining)
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+            
+            self.log_message.emit('info', "✓ Delay complete (position held)")
+            
+        except Exception as e:
+            self.log_message.emit('error', f"Error during delay hold: {e}")
+            # Fall back to regular sleep for any remaining time
+            elapsed = time.time() - start_time if 'start_time' in locals() else 0
+            remaining = duration - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
     
     def _execute_home_inline(self):
         """Return arm to home/rest position"""
