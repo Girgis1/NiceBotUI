@@ -583,8 +583,10 @@ class ExecutionWorker(QThread):
                 self.log_message.emit('error', "Failed to connect to motors")
                 return
         
-        # Get home position from config (or use safe defaults)
-        home_positions = self.config.get("robot", {}).get("home_position", [2048, 2048, 2048, 2048, 2048, 2048])
+        # Get home position from config (rest_position, not home_position!)
+        rest_config = self.config.get("rest_position", {})
+        home_positions = rest_config.get("positions", [2048, 2048, 2048, 2048, 2048, 2048])
+        home_velocity = rest_config.get("velocity", 600)
         
         self.log_message.emit('info', f"Moving to home position: {home_positions}")
         
@@ -592,7 +594,7 @@ class ExecutionWorker(QThread):
             # Move to home position
             self.motor_controller.set_positions(
                 home_positions,
-                velocity=600,
+                velocity=home_velocity,
                 wait=True,
                 keep_connection=True
             )
@@ -752,11 +754,61 @@ class ExecutionWorker(QThread):
     def _execute_model_local(self, task: str, checkpoint: str, duration: float, num_episodes: int):
         """Execute model using local mode (lerobot-record with policy)
         
+        Runs 1 episode at a time, with home return and cleanup between each iteration.
+        
         Args:
             task: Model task name
             checkpoint: Checkpoint name
             duration: How long to run (seconds)
-            num_episodes: Number of episodes to run
+            num_episodes: Number of episodes to run (or -1 for infinite loop)
+        """
+        # Run num_episodes times, homing and cleaning between each
+        episode_count = 0
+        
+        while True:
+            # Check if we should stop
+            if self._stop_requested:
+                self.log_message.emit('warning', "Stopped by user")
+                break
+            
+            # Check if we've completed all episodes (if not infinite loop)
+            if num_episodes > 0 and episode_count >= num_episodes:
+                break
+            
+            episode_count += 1
+            
+            # Log which iteration we're on
+            if num_episodes > 0:
+                self.log_message.emit('info', f"=== Episode {episode_count}/{num_episodes} ===")
+            else:
+                self.log_message.emit('info', f"=== Episode {episode_count} (loop mode) ===")
+            
+            # Run ONE episode
+            success = self._run_single_episode(task, checkpoint, duration)
+            
+            if not success and not self._stop_requested:
+                self.log_message.emit('error', f"Episode {episode_count} failed, stopping")
+                break
+            
+            # After episode: Home and cleanup
+            if not self._stop_requested:
+                self.log_message.emit('info', "Returning to home position...")
+                self._execute_home_inline()
+                
+                self.log_message.emit('info', "Cleaning up eval folders...")
+                self._cleanup_eval_folders(verbose=False)
+        
+        # Final summary
+        if num_episodes > 0:
+            self.log_message.emit('info', f"✓ Completed {episode_count}/{num_episodes} episodes")
+        else:
+            self.log_message.emit('info', f"✓ Completed {episode_count} episodes (loop mode)")
+    
+    def _run_single_episode(self, task: str, checkpoint: str, duration: float) -> bool:
+        """Run a single episode of model execution
+        
+        Returns:
+            bool: True if successful, False if failed
         """
         try:
             # Get checkpoint path
@@ -765,7 +817,7 @@ class ExecutionWorker(QThread):
             
             if not checkpoint_path.exists():
                 self.log_message.emit('error', f"Model not found: {checkpoint_path}")
-                return
+                return False
             
             # Build camera config string
             robot_config = self.config.get("robot", {})
@@ -783,7 +835,7 @@ class ExecutionWorker(QThread):
                 lerobot_dir = Path("/home/daniel/lerobot")  # Fallback
             
             # Build command using lerobot-record CLI
-            # This directly loads and runs the policy without needing a server
+            # ALWAYS run 1 episode at a time (looping is handled by _execute_model_local)
             cmd = [
                 "lerobot-record",
                 f"--robot.type={robot_config.get('type', 'so100_follower')}",
@@ -793,7 +845,7 @@ class ExecutionWorker(QThread):
                 "--display_data=false",
                 f"--dataset.repo_id=local/eval_{task}_ckpt",
                 f"--dataset.single_task=Eval {task}",
-                f"--dataset.num_episodes={num_episodes}",
+                "--dataset.num_episodes=1",  # Always 1 episode per run
                 f"--dataset.episode_time_s={duration}",
                 "--dataset.push_to_hub=false",
                 "--resume=false",
@@ -805,7 +857,7 @@ class ExecutionWorker(QThread):
             if not Path(robot_port).exists():
                 self.log_message.emit('error', f"Robot port not found: {robot_port}")
                 self.log_message.emit('error', "Make sure the robot is connected")
-                return
+                return False
             
             try:
                 # Test if we can access the port
@@ -818,12 +870,9 @@ class ExecutionWorker(QThread):
             except:
                 pass  # If test fails, continue anyway
             
-            self.log_message.emit('info', f"Starting local mode: {task} for {duration}s ({num_episodes} episode(s))")
-            
-            # Log the actual command for debugging
-            cmd_str = " ".join(cmd)
-            print(f"[EXEC] Full command:\n{cmd_str}")
-            self.log_message.emit('info', f"Working directory: {lerobot_dir}")
+            # Log the actual command for debugging (only first time)
+            # cmd_str = " ".join(cmd)
+            # print(f"[EXEC] Full command:\n{cmd_str}")
             
             # Start process with correct working directory
             process = subprocess.Popen(
@@ -876,12 +925,10 @@ class ExecutionWorker(QThread):
                 # Print last few lines of output
                 for line in output_lines[-10:]:
                     print(f"[lerobot] {line}")
-                return
+                return False
             
-            self.log_message.emit('info', "✓ Process started, running...")
-            
-            # Calculate total runtime (num_episodes * episode_time + buffer)
-            total_time = (num_episodes * duration) + 10  # 10s buffer for startup/shutdown
+            # Calculate total runtime (1 episode * episode_time + buffer)
+            total_time = duration + 10  # 10s buffer for startup/shutdown
             
             # Wait for process to complete or timeout
             start_time = time.time()
@@ -894,12 +941,15 @@ class ExecutionWorker(QThread):
                 if process.poll() is not None:
                     exit_code = process.returncode
                     if exit_code == 0:
-                        self.log_message.emit('info', "✓ lerobot-record completed successfully")
+                        self.log_message.emit('info', "✓ Episode completed successfully")
                     else:
                         self.log_message.emit('error', f"lerobot-record failed with exit code {exit_code}")
                         # Print last few lines of output
                         for line in output_lines[-10:]:
                             print(f"[lerobot] {line}")
+                        # Wait for output thread
+                        output_thread.join(timeout=2)
+                        return False
                     break
                 
                 time.sleep(0.5)
@@ -918,20 +968,13 @@ class ExecutionWorker(QThread):
             # Wait for output thread to finish
             output_thread.join(timeout=2)
             
-            self.log_message.emit('info', "✓ Local model execution completed")
-            
-            # Return to home position after model completes
-            self.log_message.emit('info', "Returning to home position...")
-            self._execute_home_inline()
+            return True  # Success
             
         except Exception as e:
-            self.log_message.emit('error', f"Local model execution failed: {e}")
+            self.log_message.emit('error', f"Episode failed: {e}")
             import traceback
             traceback.print_exc()
-        
-        finally:
-            # Always cleanup eval folders at the end to keep things tidy
-            self._cleanup_eval_folders(verbose=False)  # Less verbose at end
+            return False
     
     def _execute_model_inline(self, task: str, checkpoint: str, duration: float, num_episodes: int = None):
         """Execute a trained policy model for specified duration

@@ -354,10 +354,33 @@ class DashboardTab(QWidget):
         episodes_layout.setSpacing(5)
         episodes_layout.setContentsMargins(10, 10, 10, 10)
         
+        # Episodes label with loop checkbox
+        episodes_header = QHBoxLayout()
+        episodes_header.setSpacing(5)
+        
+        self.loop_checkbox = QCheckBox("🔁 Loop")
+        self.loop_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #ffffff;
+                font-size: 13px;
+                font-weight: bold;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+            }
+        """)
+        self.loop_checkbox.stateChanged.connect(self.on_loop_toggled)
+        episodes_header.addWidget(self.loop_checkbox)
+        
+        episodes_header.addStretch()
+        
         episodes_label = QLabel("Episodes")
         episodes_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
-        episodes_label.setAlignment(Qt.AlignCenter)
-        episodes_layout.addWidget(episodes_label)
+        episodes_label.setAlignment(Qt.AlignRight)
+        episodes_header.addWidget(episodes_label)
+        
+        episodes_layout.addLayout(episodes_header)
         
         self.episodes_spin = QSpinBox()
         self.episodes_spin.setRange(1, 999)
@@ -619,6 +642,19 @@ class DashboardTab(QWidget):
         """Legacy method - now uses refresh_run_selector"""
         self.refresh_run_selector()
     
+    def on_loop_toggled(self, state):
+        """Handle loop checkbox toggle"""
+        if state == Qt.Checked:
+            # Loop mode ON
+            self.episodes_spin.setEnabled(False)
+            self.episodes_spin.setSpecialValueText("∞")
+            self.episodes_spin.setValue(self.episodes_spin.minimum())  # Set to min to show special text
+        else:
+            # Loop mode OFF
+            self.episodes_spin.setEnabled(True)
+            self.episodes_spin.setSpecialValueText("")
+            self.episodes_spin.setValue(1)  # Reset to 1
+    
     def validate_config(self):
         """Validate configuration"""
         # Check robot port
@@ -707,7 +743,14 @@ class DashboardTab(QWidget):
                 self.log_text.append("[info] Using local mode (lerobot-record)")
                 # Get checkpoint and episode settings from UI
                 checkpoint_name = self.checkpoint_combo.currentData() if self.checkpoint_combo.isVisible() else "last"
-                num_episodes = self.episodes_spin.value()
+                
+                # Check if loop mode is enabled
+                if self.loop_checkbox.isChecked():
+                    num_episodes = -1  # Infinite loop
+                    self.log_text.append("[info] Loop mode enabled (∞ episodes)")
+                else:
+                    num_episodes = self.episodes_spin.value()
+                
                 episode_time = self.episode_time_spin.value()
                 
                 self._start_execution_worker(execution_type, execution_name, {
