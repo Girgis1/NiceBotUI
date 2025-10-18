@@ -470,15 +470,15 @@ class RecordTab(QWidget):
             
             print(f"[RECORD] ✓ Read positions: {positions}")
             
-            # Add ONE single position action with 100% speed
+            # Add ONE single position action with velocity from slider
             name = f"Position {self.position_counter}"
-            speed = 100  # Default 100% speed
+            velocity = self.default_velocity  # Use velocity from slider
             
-            self.table.add_single_position(name, positions, speed)
+            self.table.add_single_position(name, positions, velocity)
             self.position_counter += 1
             
-            self.status_label.setText(f"✓ Recorded {name}")
-            print(f"[RECORD] Added single position action: {name}")
+            self.status_label.setText(f"✓ Recorded {name} @ vel {velocity}")
+            print(f"[RECORD] Added single position action: {name} with velocity {velocity}")
             
         except Exception as e:
             self.status_label.setText(f"❌ Error: {str(e)}")
