@@ -80,9 +80,10 @@ class ExecutionWorker(QThread):
         # Get options
         checkpoint = self.options.get("checkpoint", "last")
         duration = self.options.get("duration", 25.0)
+        num_episodes = self.options.get("num_episodes", 3)  # Dashboard default
         
         # Execute model
-        self._execute_model_inline(self.execution_name, checkpoint, duration)
+        self._execute_model_inline(self.execution_name, checkpoint, duration, num_episodes)
         
         # Completion
         if not self._stop_requested:
@@ -740,13 +741,14 @@ class ExecutionWorker(QThread):
         except Exception as e:
             self.log_message.emit('warning', f"Failed to cleanup eval folders: {e}")
     
-    def _execute_model_local(self, task: str, checkpoint: str, duration: float):
+    def _execute_model_local(self, task: str, checkpoint: str, duration: float, num_episodes: int):
         """Execute model using local mode (lerobot-record with policy)
         
         Args:
             task: Model task name
             checkpoint: Checkpoint name
             duration: How long to run (seconds)
+            num_episodes: Number of episodes to run
         """
         import subprocess
         import time
@@ -772,6 +774,11 @@ class ExecutionWorker(QThread):
                 camera_str += f"{cam_name}: {{type: opencv, index_or_path: {cam_config['path']}, width: {cam_config['width']}, height: {cam_config['height']}, fps: {cam_config['fps']}}}, "
             camera_str = camera_str.rstrip(", ") + " }"
             
+            # Get lerobot working directory
+            lerobot_dir = Path.home() / "lerobot"
+            if not lerobot_dir.exists():
+                lerobot_dir = Path("/home/daniel/lerobot")  # Fallback
+            
             # Build command using lerobot-record CLI
             # This directly loads and runs the policy without needing a server
             cmd = [
@@ -783,22 +790,23 @@ class ExecutionWorker(QThread):
                 "--display_data=false",
                 f"--dataset.repo_id=local/eval_{task}_ckpt",
                 f"--dataset.single_task=Eval {task}",
-                "--dataset.num_episodes=1",
+                f"--dataset.num_episodes={num_episodes}",
                 f"--dataset.episode_time_s={duration}",
                 "--dataset.push_to_hub=false",
                 "--resume=false",
                 f"--policy.path={checkpoint_path}"
             ]
             
-            self.log_message.emit('info', f"Starting local mode: {task} for {duration}s")
+            self.log_message.emit('info', f"Starting local mode: {task} for {duration}s ({num_episodes} episode(s))")
             
-            # Start process
+            # Start process with correct working directory
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                bufsize=1
+                bufsize=1,
+                cwd=str(lerobot_dir)  # Run from lerobot directory
             )
             
             # Wait for duration or stop request
@@ -822,7 +830,7 @@ class ExecutionWorker(QThread):
             import traceback
             traceback.print_exc()
     
-    def _execute_model_inline(self, task: str, checkpoint: str, duration: float):
+    def _execute_model_inline(self, task: str, checkpoint: str, duration: float, num_episodes: int = None):
         """Execute a trained policy model for specified duration
         
         Checks config to determine if local or server mode should be used.
@@ -831,13 +839,17 @@ class ExecutionWorker(QThread):
             task: Model task name (folder in training output)
             checkpoint: Checkpoint name (e.g., "last", "best")
             duration: How long to run the model (seconds)
+            num_episodes: Number of episodes (default: 1 for sequences, or from options for dashboard)
         """
         # Check if local mode is enabled
         local_mode = self.config.get("policy", {}).get("local_mode", True)
         
         if local_mode:
             self.log_message.emit('info', "Using local mode (lerobot-record)")
-            self._execute_model_local(task, checkpoint, duration)
+            # Default to 1 episode for sequences, or use provided value
+            if num_episodes is None:
+                num_episodes = 1
+            self._execute_model_local(task, checkpoint, duration, num_episodes)
             return
         
         # Otherwise use server mode

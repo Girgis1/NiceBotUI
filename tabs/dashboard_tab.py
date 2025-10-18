@@ -705,11 +705,15 @@ class DashboardTab(QWidget):
             if local_mode:
                 # Local mode: Use ExecutionWorker (which uses lerobot-record)
                 self.log_text.append("[info] Using local mode (lerobot-record)")
-                # Get checkpoint for options
+                # Get checkpoint and episode settings from UI
                 checkpoint_name = self.checkpoint_combo.currentData() if self.checkpoint_combo.isVisible() else "last"
+                num_episodes = self.episodes_spin.value()
+                episode_time = self.episode_time_spin.value()
+                
                 self._start_execution_worker(execution_type, execution_name, {
                     "checkpoint": checkpoint_name,
-                    "duration": 25.0  # Default duration for dashboard runs
+                    "duration": episode_time,
+                    "num_episodes": num_episodes
                 })
             else:
                 # Server mode: Use RobotWorker (async inference)
