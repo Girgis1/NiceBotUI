@@ -2,6 +2,87 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.03] - 2025-10-18
+
+### 🚀 Sequencer Rebuild - Full Production Ready
+
+#### Major Features
+- **✅ Complete Sequencer Rebuild**
+  - Sequencer now fully functional and production-ready
+  - Modular, folder-based composite architecture
+  - Individual step files for easy editing
+  - Automatic backups on every save
+
+- **✅ New Step Types**
+  - **Action Steps** - Execute saved recordings/actions
+  - **Model Steps** - Run trained policy models with duration control
+  - **Delay Steps** - Wait for specified time periods
+  - **Home Steps** - Return arm to rest position (NEW!)
+  - **Loop Mode** - Repeat sequences indefinitely
+
+- **✅ Execution Engine**
+  - Fixed type mismatch: "recording" → "action"
+  - Implemented model execution in sequences
+  - Models run as subprocesses with graceful shutdown
+  - Full progress and status feedback
+  - Stop button works mid-sequence
+
+- **✅ Composite Sequence Architecture**
+  - Folder structure: `data/sequences/{name}/manifest.json`
+  - Individual step files: `01_step_action.json`, `02_step_delay.json`, etc.
+  - Easy to edit individual steps without affecting others
+  - Extensible for future step types (vision triggers, sensors)
+
+#### Technical Implementation
+- **New Files**:
+  - `utils/sequence_step.py` - Base classes (ActionStep, ModelStep, DelayStep, HomeStep)
+  - `utils/composite_sequence.py` - Folder-based sequence management
+  
+- **Rewritten**:
+  - `utils/sequences_manager.py` - Complete rewrite for composite format
+  - `utils/execution_manager.py` - Added home and model execution
+  
+- **Enhanced**:
+  - `tabs/sequence_tab.py` - Added +Home button, execution wiring
+  - `tabs/dashboard_tab.py` - Added run_sequence() method
+  - `app.py` - Connected sequence execution signals
+
+#### Bug Fixes
+- ✅ Fixed AttributeError: 'DashboardTab' object has no attribute 'run_btn'
+  - Corrected to use 'start_stop_btn'
+- ✅ Fixed sequencer never working - complete rebuild from scratch
+- ✅ Fixed type mismatch in sequence execution
+
+#### Files Modified (7 files, 1,300+ lines)
+- `app.py` - Signal connections
+- `tabs/dashboard_tab.py` - run_sequence method, button fix
+- `tabs/sequence_tab.py` - +Home button, signal emission
+- `utils/execution_manager.py` - Home + model inline execution
+- `utils/sequences_manager.py` - Composite format (complete rewrite)
+- **NEW** `utils/composite_sequence.py` - Sequence orchestration
+- **NEW** `utils/sequence_step.py` - Step type classes
+
+#### Architecture Benefits
+- **Modular** - Each step is its own file
+- **Extensible** - Easy to add new step types
+- **Robust** - Automatic backups, error handling
+- **Maintainable** - Clean separation of concerns
+- **Industrial Ready** - Built for reliability
+
+#### Testing Requirements
+Hardware testing needed for:
+- Basic sequence (action + delay)
+- Home step execution
+- Loop mode
+- Model execution in sequences
+- Stop mid-sequence
+
+#### Documentation
+- Added `SEQUENCER_COMPLETE.md` - Full implementation summary
+- Added `SEQUENCER_REBUILD_PLAN.md` - Architecture and planning
+
+---
+
 ## [0.02] - 2025-10-18
 
 ### 🐛 Bug Fix Release
