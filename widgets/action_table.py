@@ -18,9 +18,10 @@ class ActionTableWidget(DraggableTableWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         
-        # Set up columns: Action Name | Type | Speed | Delete
+        # Set up columns: Action Name | Type | Vel/Speed | Delete
+        # (Velocity for positions, Speed % for live recordings)
         self.setColumnCount(4)
-        self.setHorizontalHeaderLabels(["Action Name", "Type", "Speed", ""])
+        self.setHorizontalHeaderLabels(["Action Name", "Type", "Vel/Speed", ""])
         
         # Set column widths
         header = self.horizontalHeader()
@@ -33,13 +34,13 @@ class ActionTableWidget(DraggableTableWidget):
         header.resizeSection(2, 100)  # Speed column
         header.resizeSection(3, 80)   # Delete button
     
-    def add_single_position(self, name: str, positions: list[int], speed: int = 100):
+    def add_single_position(self, name: str, positions: list[int], velocity: int = 600):
         """Add ONE single position action
         
         Args:
             name: Action name
             positions: List of 6 motor positions [shoulder_pan, ...]
-            speed: Playback speed percentage (25-200%)
+            velocity: Motor velocity (50-1000)
         """
         row = self.rowCount()
         self.insertRow(row)
@@ -52,7 +53,7 @@ class ActionTableWidget(DraggableTableWidget):
         name_item.setData(Qt.UserRole + 1, {
             'type': 'position',
             'positions': positions,
-            'speed': speed
+            'velocity': velocity  # Store as velocity for positions
         })
         self.setItem(row, 0, name_item)
         
@@ -62,12 +63,12 @@ class ActionTableWidget(DraggableTableWidget):
         type_item.setForeground(QColor("#2196F3"))
         self.setItem(row, 1, type_item)
         
-        # Column 2: Speed (editable, no % symbol)
-        speed_item = QTableWidgetItem(str(speed))
-        speed_item.setData(Qt.UserRole, speed)
-        speed_item.setFlags(speed_item.flags() | Qt.ItemIsEditable)
-        speed_item.setTextAlignment(Qt.AlignCenter)
-        self.setItem(row, 2, speed_item)
+        # Column 2: Velocity (editable, for positions)
+        vel_item = QTableWidgetItem(str(velocity))
+        vel_item.setData(Qt.UserRole, velocity)
+        vel_item.setFlags(vel_item.flags() | Qt.ItemIsEditable)
+        vel_item.setTextAlignment(Qt.AlignCenter)
+        self.setItem(row, 2, vel_item)
         
         # Column 3: Delete button
         self._add_delete_button(row)
@@ -102,7 +103,7 @@ class ActionTableWidget(DraggableTableWidget):
         type_item.setForeground(QColor("#f44336"))
         self.setItem(row, 1, type_item)
         
-        # Column 2: Speed (editable, no % symbol)
+        # Column 2: Speed % (editable, for live recordings)
         speed_item = QTableWidgetItem(str(speed))
         speed_item.setData(Qt.UserRole, speed)
         speed_item.setFlags(speed_item.flags() | Qt.ItemIsEditable)
@@ -134,11 +135,18 @@ class ActionTableWidget(DraggableTableWidget):
     
     def _on_delete_clicked(self, row: int):
         """Handle delete button click - emit with CURRENT row index"""
+        print(f"[TABLE] Delete clicked, initial row: {row}")
         # Find actual current row of the button
+        sender_btn = self.sender()
+        print(f"[TABLE] Sender button: {sender_btn}")
+        
         for current_row in range(self.rowCount()):
-            if self.cellWidget(current_row, 3) == self.sender():
+            if self.cellWidget(current_row, 3) == sender_btn:
+                print(f"[TABLE] Found button at row {current_row}, emitting delete_clicked signal")
                 self.delete_clicked.emit(current_row)
                 return
+        
+        print(f"[TABLE] WARNING: Could not find sender button in table!")
     
     def ensure_delete_buttons(self):
         """Ensure all rows have delete buttons after editing"""
@@ -173,25 +181,30 @@ class ActionTableWidget(DraggableTableWidget):
             if not action_data:
                 continue
             
-            # Get current speed (may have been edited)
-            speed_text = speed_item.text().strip().rstrip('%')  # Remove % if user added it
+            # Get current velocity/speed (may have been edited)
+            value_text = speed_item.text().strip().rstrip('%')  # Remove % if user added it
             try:
-                speed = int(speed_text)
+                value = int(value_text)
             except:
-                speed = action_data.get('speed', 100)
+                # Default based on type
+                if action_data['type'] == 'position':
+                    value = action_data.get('velocity', 600)
+                else:
+                    value = action_data.get('speed', 100)
             
             # Build action dict
             action = {
                 'name': name_item.text(),
-                'type': action_data['type'],
-                'speed': speed
+                'type': action_data['type']
             }
             
             if action_data['type'] == 'position':
                 action['positions'] = action_data['positions']
+                action['velocity'] = value  # Use as velocity for positions
             elif action_data['type'] == 'live_recording':
                 action['recorded_data'] = action_data['recorded_data']
                 action['point_count'] = action_data['point_count']
+                action['speed'] = value  # Use as speed % for live recordings
             
             actions.append(action)
         

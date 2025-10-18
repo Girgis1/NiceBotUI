@@ -425,7 +425,8 @@ class RecordTab(QWidget):
                     for pos_data in positions:
                         pos_name = pos_data.get("name", step_name)
                         motor_positions = pos_data.get("motor_positions", [])
-                        self.table.add_single_position(pos_name, motor_positions, step_speed)
+                        velocity = pos_data.get("velocity", 600)  # Get velocity from saved data
+                        self.table.add_single_position(pos_name, motor_positions, velocity)
                         self.position_counter += 1
                     print(f"[LOAD] ✓ Added position set: {step_name} ({len(positions)} positions)")
         
@@ -443,13 +444,13 @@ class RecordTab(QWidget):
         else:
             # Legacy or simple position recording
             positions = action_data.get("positions", [])
-            speed = action_data.get("speed", 100)
             print(f"[LOAD] Position recording has {len(positions)} positions")
             for pos_data in positions:
                 if isinstance(pos_data, dict):
                     name = pos_data.get("name", f"Position {self.position_counter}")
                     motor_positions = pos_data.get("motor_positions", pos_data.get("positions", []))
-                    self.table.add_single_position(name, motor_positions, speed)
+                    velocity = pos_data.get("velocity", 600)  # Get velocity from saved data
+                    self.table.add_single_position(name, motor_positions, velocity)
                     self.position_counter += 1
         
         print(f"[LOAD] ✓ Loaded recording with {self.position_counter - 1} item(s) in table")
@@ -648,12 +649,16 @@ class RecordTab(QWidget):
     
     def delete_position(self, row: int):
         """Delete a position"""
+        print(f"[RECORD] delete_position called with row: {row}")
+        
         # Allow deletion even if it's the only row
         reply = QMessageBox.question(
             self, "Delete Position",
             "Are you sure you want to delete this position?",
             QMessageBox.Yes | QMessageBox.No
         )
+        
+        print(f"[RECORD] User replied: {reply == QMessageBox.Yes}")
         
         if reply == QMessageBox.Yes:
             self.table.removeRow(row)
@@ -663,6 +668,7 @@ class RecordTab(QWidget):
                 self.position_counter = 1
             
             self.status_label.setText("✓ Position deleted")
+            print(f"[RECORD] Row {row} deleted, remaining rows: {self.table.rowCount()}")
     
     def save_action(self):
         """Save current action to file"""
