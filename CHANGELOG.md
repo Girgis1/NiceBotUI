@@ -2,6 +2,51 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.02] - 2025-10-18
+
+### 🐛 Bug Fix Release
+
+#### Critical Fixes
+- **✅ Delete Button Fixed**
+  - Fixed Qt lambda issue causing delete button to not work
+  - Now passes button reference instead of using sender()
+  - Delete functionality fully operational with confirmation dialog
+
+- **✅ Velocity/Speed Separation**
+  - Positions now use motor velocity (50-1000) from slider
+  - Live recordings use speed percentage (25-200)
+  - Column renamed to "Vel/Speed" to reflect dual purpose
+  - Proper data structure for saving/loading with correct parameters
+
+- **✅ Removed Defunct Features**
+  - Removed "Add Delay" button (delays now part of composite manifest)
+  - Cleaned up AttributeError related to add_delay_row
+  - Delays will return in future step editor UI
+
+- **✅ Import Fixes**
+  - Removed obsolete settings_dialog imports
+  - Fixed ModuleNotFoundError on app startup
+  - Settings now handled by integrated SettingsTab
+
+#### Technical Improvements
+- Added extensive debug logging for troubleshooting
+- Improved action table data structure
+- Better separation of concerns between position and live recording types
+- Enhanced error messages with context
+
+#### Files Modified
+- `widgets/action_table.py` - Fixed delete button, velocity/speed handling
+- `tabs/record_tab.py` - Velocity from slider, debug logging
+- `app.py` - Removed obsolete imports
+- `tabs/dashboard_tab.py` - Removed obsolete imports
+
+#### Testing Notes
+- Delete button confirmed working with button reference approach
+- Velocity slider correctly applies to position recordings
+- Speed percentage correctly applies to live recordings
+
+---
+
 ## [0.01] - 2025-10-18
 
 ### 🎉 Initial Release - Modular Composite Recording System
