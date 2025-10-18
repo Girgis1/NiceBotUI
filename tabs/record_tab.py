@@ -408,29 +408,58 @@ class RecordTab(QWidget):
             self.status_label.setText(f"Loaded action: {name}")
     
     def load_action_to_table(self, action_data: dict):
-        """Load action data into table using new API"""
+        """Load action data into table - handles composite recordings"""
         self.table.setRowCount(0)
         self.position_counter = 1
         
         action_type = action_data.get("type", "position")
-        speed = action_data.get("speed", 100)
         
         print(f"[LOAD] Loading {action_type} from file")
         
-        if action_type == "live_recording":
-            # Load live recording
+        if action_type == "composite_recording":
+            # Load composite recording - each step becomes a table row
+            steps = action_data.get("steps", [])
+            print(f"[LOAD] Composite recording has {len(steps)} steps")
+            
+            for step in steps:
+                step_type = step.get("type")
+                step_name = step.get("name", f"Step {self.position_counter}")
+                step_speed = step.get("speed", 100)
+                component_data = step.get("component_data", {})
+                
+                if step_type == "live_recording":
+                    # Load live recording step
+                    recorded_data = component_data.get("recorded_data", [])
+                    if recorded_data:
+                        self.table.add_live_recording(step_name, recorded_data, step_speed)
+                        print(f"[LOAD] ✓ Added live recording: {step_name} ({len(recorded_data)} points)")
+                        self.position_counter += 1
+                
+                elif step_type == "position_set":
+                    # Load position set step
+                    positions = component_data.get("positions", [])
+                    for pos_data in positions:
+                        pos_name = pos_data.get("name", step_name)
+                        motor_positions = pos_data.get("motor_positions", [])
+                        self.table.add_single_position(pos_name, motor_positions, step_speed)
+                        self.position_counter += 1
+                    print(f"[LOAD] ✓ Added position set: {step_name} ({len(positions)} positions)")
+        
+        elif action_type == "live_recording":
+            # Legacy or simple live recording
             recorded_data = action_data.get("recorded_data", [])
+            speed = action_data.get("speed", 100)
             print(f"[LOAD] Live recording has {len(recorded_data)} points in file")
             if recorded_data:
                 name = action_data.get("name", f"Recording {self.position_counter}")
                 self.table.add_live_recording(name, recorded_data, speed)
                 print(f"[LOAD] ✓ Added live recording to table: {name}")
                 self.position_counter += 1
-            else:
-                print(f"[LOAD] ⚠️ Warning: recorded_data is empty!")
+        
         else:
-            # Load positions
+            # Legacy or simple position recording
             positions = action_data.get("positions", [])
+            speed = action_data.get("speed", 100)
             print(f"[LOAD] Position recording has {len(positions)} positions")
             for pos_data in positions:
                 if isinstance(pos_data, dict):
@@ -439,7 +468,7 @@ class RecordTab(QWidget):
                     self.table.add_single_position(name, motor_positions, speed)
                     self.position_counter += 1
         
-        print(f"[LOAD] ✓ Loaded {action_type} with {self.position_counter - 1} item(s) in table")
+        print(f"[LOAD] ✓ Loaded recording with {self.position_counter - 1} item(s) in table")
     
     def record_position(self):
         """Record ONE single position action"""
@@ -695,47 +724,79 @@ class RecordTab(QWidget):
                 point_count = len(action.get('recorded_data', []))
                 print(f"      recorded_data has {point_count} points")
         
-        # Build recording data for new ActionsManager
-        # Determine type: if we have live recordings, use that; otherwise simple position
-        has_live_recording = any(action['type'] == 'live_recording' for action in actions)
+        # Build recording data for new composite system
+        # Each action in table becomes a step in the composite recording
         
-        if has_live_recording and len(actions) == 1:
-            # Single live recording - save as live_recording
-            recorded_data = actions[0].get("recorded_data", [])
-            action_data = {
-                "type": "live_recording",
-                "speed": actions[0].get("speed", 100),
-                "recorded_data": recorded_data,
-                "delays": {}
-            }
-            print(f"[SAVE] Saving as live_recording with {len(recorded_data)} points")
-        else:
-            # Multiple positions or mixed
-            positions_list = []
-            for action in actions:
-                if action['type'] == 'position':
-                    positions_list.append({
+        if len(actions) == 1:
+            # Single action - save as simple recording (ActionsManager will convert to composite)
+            action = actions[0]
+            
+            if action['type'] == 'live_recording':
+                recorded_data = action.get("recorded_data", [])
+                action_data = {
+                    "type": "live_recording",
+                    "speed": action.get("speed", 100),
+                    "recorded_data": recorded_data,
+                }
+                print(f"[SAVE] Saving single live_recording with {len(recorded_data)} points")
+            
+            elif action['type'] == 'position':
+                action_data = {
+                    "type": "position",
+                    "speed": action.get("speed", 100),
+                    "positions": [{
                         "name": action['name'],
                         "motor_positions": action['positions'],
-                        "velocity": 600
-                    })
-                elif action['type'] == 'live_recording':
-                    # For live recordings in a mixed sequence, use first position
-                    recorded_data = action.get('recorded_data', [])
-                    if recorded_data and len(recorded_data) > 0:
-                        first_pos = recorded_data[0]['positions']
-                        positions_list.append({
-                            "name": action['name'],
-                            "motor_positions": first_pos,
-                            "velocity": 600
-                        })
+                        "velocity": 600,
+                        "wait_for_completion": True
+                    }],
+                }
+                print(f"[SAVE] Saving single position")
+        
+        else:
+            # Multiple actions - save as proper composite with multiple steps
+            steps = []
+            for action in actions:
+                if action['type'] == 'live_recording':
+                    # Live recording step
+                    step = {
+                        "type": "live_recording",
+                        "name": action['name'],
+                        "speed": action.get("speed", 100),
+                        "enabled": True,
+                        "delay_after": 0.0,
+                        "component_data": {
+                            "recorded_data": action.get("recorded_data", [])
+                        }
+                    }
+                    steps.append(step)
+                    print(f"[SAVE] Adding live recording step: {action['name']}")
+                
+                elif action['type'] == 'position':
+                    # Position step
+                    step = {
+                        "type": "position_set",
+                        "name": action['name'],
+                        "speed": action.get("speed", 100),
+                        "enabled": True,
+                        "delay_after": 0.0,
+                        "component_data": {
+                            "positions": [{
+                                "name": action['name'],
+                                "motor_positions": action['positions'],
+                                "velocity": 600,
+                                "wait_for_completion": True
+                            }]
+                        }
+                    }
+                    steps.append(step)
+                    print(f"[SAVE] Adding position step: {action['name']}")
             
             action_data = {
-                "type": "position",
-                "speed": 100,
-                "positions": positions_list,
-                "delays": {}
+                "type": "composite_recording",
+                "steps": steps
             }
+            print(f"[SAVE] Saving composite recording with {len(steps)} steps")
         
         # Save to file using new API
         try:
@@ -751,11 +812,12 @@ class RecordTab(QWidget):
                 
                 # Verify what was saved
                 verify_data = self.actions_manager.load_action(name)
-                if verify_data and verify_data['type'] == 'live_recording':
-                    saved_points = len(verify_data.get('recorded_data', []))
-                    print(f"[SAVE] ✓ Saved recording: {name} - VERIFIED {saved_points} points in file")
-                else:
-                    print(f"[SAVE] ✓ Saved recording: {name}")
+                if verify_data:
+                    if verify_data['type'] == 'composite_recording':
+                        step_count = len(verify_data.get('steps', []))
+                        print(f"[SAVE] ✓ Saved composite recording: {name} - {step_count} steps")
+                    else:
+                        print(f"[SAVE] ✓ Saved recording: {name}")
                 
                 # Refresh dropdown AND signal parent to refresh dashboard
                 self.refresh_action_list()

@@ -1,0 +1,25 @@
+{
+  "format_version": "2.0",
+  "name": "Test Positions",
+  "type": "composite_recording",
+  "description": "",
+  "steps": [
+    {
+      "step_id": "step_001",
+      "step_number": 1,
+      "type": "position_set",
+      "name": "Test Positions",
+      "file": "01_test_positions_positions.json",
+      "speed": 100,
+      "enabled": true,
+      "delay_before": 0.0,
+      "delay_after": 0.0,
+      "notes": ""
+    }
+  ],
+  "metadata": {
+    "created": "2025-10-18T18:46:29.222929+11:00",
+    "modified": "2025-10-18T18:46:29.223051+11:00",
+    "total_steps": 1
+  }
+}
