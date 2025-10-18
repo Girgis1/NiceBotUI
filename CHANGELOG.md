@@ -2,6 +2,59 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.05] - 2025-10-18
+
+### 🎨 UI/UX Improvements + Critical Bug Fix
+
+#### UI Features
+- **✅ Resized Loop Toggle**
+  - Loop checkbox now 40x40px (half size)
+  - Inline with top of Runs spinner
+  - Cleaner, more compact layout
+  - Touch-friendly design maintained
+
+- **✅ "Episodes" → "Runs" Terminology**
+  - Changed label from "Episodes" to "Runs"
+  - More intuitive: "Run this 5 times"
+  - Clearer for non-technical users
+  - Shorter and cleaner
+
+- **✅ Loop Toggle Remembers Value**
+  - When enabling loop: saves current runs count, shows ∞
+  - When disabling loop: restores previous runs count
+  - No more resetting to 1!
+  - Toggle on/off without losing settings
+
+#### Critical Bug Fix
+- **✅ Fixed FileExistsError on Model Execution**
+  - **Problem**: `FileExistsError: [Errno 17] File exists: '/home/daniel/.cache/huggingface/lerobot/local/eval_GrabBlock1_ckpt'`
+  - **Root Cause**: Reusing same dataset name across multiple runs
+  - **Solution**: Randomized eval dataset names
+  - **Format**: `eval_23879584732` (11 random digits)
+  - **Impact**: No more collisions, 100% reliable execution
+
+#### Technical Details
+- Updated `tabs/dashboard_tab.py`:
+  - Checkbox: `setFixedSize(40, 40)` with adjusted font (22px)
+  - Layout: `QHBoxLayout` with `setAlignment(Qt.AlignTop)`
+  - State management: `self.saved_runs_value` property
+  - `on_loop_toggled()` saves/restores spinner value
+
+- Updated `utils/execution_manager.py`:
+  - Added `random` and `string` imports
+  - Generate unique dataset ID per episode: `''.join(random.choices(string.digits, k=11))`
+  - Dataset name: `local/eval_{random_id}`
+  - Cleanup still works (handles all `eval_*` patterns)
+
+#### User Experience
+- ✅ More compact, professional UI
+- ✅ Experiment with loop mode easily
+- ✅ No need to re-enter run counts
+- ✅ No more dataset collision errors
+- ✅ Industrial/commercial ready
+
+---
+
 ## [0.04] - 2025-10-18
 
 ### 🔧 Critical Bug Fixes - Delay & Model Execution

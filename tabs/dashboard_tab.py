@@ -374,18 +374,18 @@ class DashboardTab(QWidget):
         # Loop checkbox and episodes spinner in same row
         episodes_controls = QHBoxLayout()
         episodes_controls.setSpacing(10)
+        episodes_controls.setAlignment(Qt.AlignTop)  # Align all controls to top
         
-        # Clean toggle checkbox - simple color fill when checked
+        # Small loop checkbox (40x40) aligned to top
         self.loop_checkbox = QCheckBox("✓")
-        self.loop_checkbox.setMinimumSize(80, 80)
-        self.loop_checkbox.setMaximumSize(80, 80)
+        self.loop_checkbox.setFixedSize(40, 40)
         self.loop_checkbox.setStyleSheet("""
             QCheckBox {
                 background-color: #404040;
                 border: 2px solid #505050;
-                border-radius: 6px;
+                border-radius: 4px;
                 color: transparent;
-                font-size: 42px;
+                font-size: 22px;
                 font-weight: bold;
                 text-align: center;
                 padding: 0px;

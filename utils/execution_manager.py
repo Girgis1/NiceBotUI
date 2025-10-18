@@ -12,6 +12,8 @@ import time
 import sys
 import threading
 import subprocess
+import random
+import string
 from pathlib import Path
 from typing import Optional, Dict, List
 from PySide6.QtCore import QThread, Signal
@@ -834,6 +836,13 @@ class ExecutionWorker(QThread):
             if not lerobot_dir.exists():
                 lerobot_dir = Path("/home/daniel/lerobot")  # Fallback
             
+            # Generate random dataset name to avoid FileExistsError
+            # Format: eval_23879584732 (11 random digits)
+            random_id = ''.join(random.choices(string.digits, k=11))
+            dataset_name = f"local/eval_{random_id}"
+            
+            self.log_message.emit('info', f"Starting episode (dataset: {dataset_name})")
+            
             # Build command using lerobot-record CLI
             # ALWAYS run 1 episode at a time (looping is handled by _execute_model_local)
             cmd = [
@@ -843,7 +852,7 @@ class ExecutionWorker(QThread):
                 f"--robot.cameras={camera_str}",
                 f"--robot.id={robot_config.get('id', 'follower_arm')}",
                 "--display_data=false",
-                f"--dataset.repo_id=local/eval_{task}_ckpt",
+                f"--dataset.repo_id={dataset_name}",
                 f"--dataset.single_task=Eval {task}",
                 "--dataset.num_episodes=1",  # Always 1 episode per run
                 f"--dataset.episode_time_s={duration}",
