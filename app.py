@@ -18,7 +18,6 @@ from PySide6.QtGui import QPalette, QColor, QShortcut, QKeySequence
 from tabs.dashboard_tab import DashboardTab
 from tabs.record_tab import RecordTab
 from tabs.sequence_tab import SequenceTab
-from settings_dialog import SettingsDialog
 
 
 # Paths
@@ -263,18 +262,10 @@ class MainWindow(QMainWindow):
         }
     
     def open_settings(self):
-        """Open settings dialog"""
-        dialog = SettingsDialog(self.config, self)
-        if dialog.exec():
-            self.config = dialog.config
-            self.save_config()
-            
-            # Update tabs with new config
-            self.dashboard_tab.config = self.config
-            self.record_tab.config = self.config
-            self.sequence_tab.config = self.config
-            
-            print("[info] Settings saved successfully")
+        """Open settings - now handled by SettingsTab"""
+        # Settings are now in the Settings tab (tab 3)
+        # This method is kept for compatibility but just switches to settings tab
+        self.switch_tab(3)
     
     def toggle_fullscreen(self):
         """Toggle fullscreen mode"""

@@ -21,7 +21,6 @@ from PySide6.QtGui import QFont, QColor, QPainter, QPen
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from robot_worker import RobotWorker
-from settings_dialog import SettingsDialog
 from utils.execution_manager import ExecutionWorker
 
 # Timezone
