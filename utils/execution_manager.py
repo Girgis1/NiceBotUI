@@ -481,8 +481,8 @@ class ExecutionWorker(QThread):
                     for idx, motor_name in enumerate(self.motor_controller.motor_names):
                         self.motor_controller.bus.write(
                             "Goal_Position",
-                            current_positions[idx],
                             motor_name,
+                            current_positions[idx],
                             normalize=False
                         )
                 except Exception as e:
@@ -631,7 +631,9 @@ class ExecutionWorker(QThread):
     
     def _build_policy_server_cmd(self, checkpoint_path: Path) -> list:
         """Build command for policy server"""
-        lerobot_bin = self.config["lerobot"].get("python_path", "python")
+        # Get python path from lerobot config, or fall back to system python
+        lerobot_config = self.config.get("lerobot", {})
+        lerobot_bin = lerobot_config.get("python_path", "python")
         
         return [
             lerobot_bin, "-m", "lerobot.async_inference.policy_server",
@@ -643,7 +645,9 @@ class ExecutionWorker(QThread):
     
     def _build_robot_client_cmd(self, checkpoint_path: Path) -> list:
         """Build command for robot client"""
-        lerobot_bin = self.config["lerobot"].get("python_path", "python")
+        # Get python path from lerobot config, or fall back to system python
+        lerobot_config = self.config.get("lerobot", {})
+        lerobot_bin = lerobot_config.get("python_path", "python")
         robot_config = self.config.get("robot", {})
         
         # Build camera config string
