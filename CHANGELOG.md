@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.04] - 2025-10-18
+
+### 🔧 Critical Bug Fixes - Delay & Model Execution
+
+#### Bug Fixes
+- **✅ Fixed Delay Position Hold**
+  - Delays now properly hold arm position with torque enabled
+  - Fixed `bus.write()` argument order issue
+  - Was causing "Hold position error: 2080" warnings
+  - Arm now stays perfectly still during delays
+  - Torque remains active throughout delay period
+
+- **✅ Fixed Model Execution in Sequences**
+  - Fixed KeyError when accessing config["lerobot"]
+  - Now uses safe .get() access with fallback
+  - Prevents crashes when lerobot config missing
+  - Models can now run successfully in sequences
+
+#### Technical Details
+- Corrected `bus.write()` signature: `(register, motor, value, normalize)`
+- Added safe config access pattern: `config.get("lerobot", {})`
+- Hold position updates every 100ms during delays
+- Graceful fallback to regular sleep if motors unavailable
+
+#### Impact
+- Sequences with delays now work correctly
+- Model steps in sequences no longer crash
+- Industrial stability improved
+
+---
+
 ## [0.03] - 2025-10-18
 
 ### 🚀 Sequencer Rebuild - Full Production Ready
