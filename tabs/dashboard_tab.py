@@ -354,33 +354,43 @@ class DashboardTab(QWidget):
         episodes_layout.setSpacing(5)
         episodes_layout.setContentsMargins(10, 10, 10, 10)
         
-        # Episodes label with loop checkbox
-        episodes_header = QHBoxLayout()
-        episodes_header.setSpacing(5)
+        # Episodes label
+        episodes_label = QLabel("Episodes")
+        episodes_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
+        episodes_label.setAlignment(Qt.AlignCenter)
+        episodes_layout.addWidget(episodes_label)
         
-        self.loop_checkbox = QCheckBox("🔁 Loop")
+        # Loop checkbox and episodes spinner in same row
+        episodes_controls = QHBoxLayout()
+        episodes_controls.setSpacing(10)
+        
+        # Large touch-friendly loop checkbox
+        self.loop_checkbox = QCheckBox("🔁")
+        self.loop_checkbox.setMinimumSize(80, 80)
+        self.loop_checkbox.setMaximumSize(80, 80)
         self.loop_checkbox.setStyleSheet("""
             QCheckBox {
+                background-color: #404040;
+                border: 2px solid #505050;
+                border-radius: 6px;
                 color: #ffffff;
-                font-size: 13px;
-                font-weight: bold;
+                font-size: 28px;
+                padding: 4px;
+            }
+            QCheckBox:hover {
+                border-color: #4CAF50;
+            }
+            QCheckBox:checked {
+                background-color: #4CAF50;
+                border-color: #4CAF50;
             }
             QCheckBox::indicator {
-                width: 16px;
-                height: 16px;
+                width: 0px;
+                height: 0px;
             }
         """)
         self.loop_checkbox.stateChanged.connect(self.on_loop_toggled)
-        episodes_header.addWidget(self.loop_checkbox)
-        
-        episodes_header.addStretch()
-        
-        episodes_label = QLabel("Episodes")
-        episodes_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
-        episodes_label.setAlignment(Qt.AlignRight)
-        episodes_header.addWidget(episodes_label)
-        
-        episodes_layout.addLayout(episodes_header)
+        episodes_controls.addWidget(self.loop_checkbox)
         
         self.episodes_spin = QSpinBox()
         self.episodes_spin.setRange(1, 999)
@@ -402,7 +412,9 @@ class DashboardTab(QWidget):
                 border-color: #4CAF50;
             }
         """)
-        episodes_layout.addWidget(self.episodes_spin)
+        episodes_controls.addWidget(self.episodes_spin, stretch=1)
+        
+        episodes_layout.addLayout(episodes_controls)
         controls_row.addWidget(episodes_frame)
         
         # Time - Simple labeled spinbox
