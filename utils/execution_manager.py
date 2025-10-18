@@ -759,9 +759,6 @@ class ExecutionWorker(QThread):
             num_episodes: Number of episodes to run
         """
         try:
-            # Clean up old eval folders
-            self._cleanup_eval_folders()
-            
             # Get checkpoint path
             train_dir = Path(self.config["policy"].get("base_path", ""))
             checkpoint_path = train_dir / task / "checkpoints" / checkpoint / "pretrained_model"
@@ -820,7 +817,11 @@ class ExecutionWorker(QThread):
                 pass  # If test fails, continue anyway
             
             self.log_message.emit('info', f"Starting local mode: {task} for {duration}s ({num_episodes} episode(s))")
-            self.log_message.emit('info', "Command: lerobot-record ...")
+            
+            # Log the actual command for debugging
+            cmd_str = " ".join(cmd)
+            print(f"[EXEC] Full command:\n{cmd_str}")
+            self.log_message.emit('info', f"Working directory: {lerobot_dir}")
             
             # Start process with correct working directory
             process = subprocess.Popen(
