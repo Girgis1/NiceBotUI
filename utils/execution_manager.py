@@ -920,6 +920,10 @@ class ExecutionWorker(QThread):
             
             self.log_message.emit('info', "✓ Local model execution completed")
             
+            # Return to home position after model completes
+            self.log_message.emit('info', "Returning to home position...")
+            self._execute_home_inline()
+            
         except Exception as e:
             self.log_message.emit('error', f"Local model execution failed: {e}")
             import traceback
@@ -1032,6 +1036,10 @@ class ExecutionWorker(QThread):
                 policy_process.kill()
             
             self.log_message.emit('info', "✓ Model execution completed")
+            
+            # Return to home position after model completes
+            self.log_message.emit('info', "Returning to home position...")
+            self._execute_home_inline()
             
         except Exception as e:
             self.log_message.emit('error', f"Model execution failed: {e}")

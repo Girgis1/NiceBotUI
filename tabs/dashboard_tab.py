@@ -361,7 +361,7 @@ class DashboardTab(QWidget):
         
         self.episodes_spin = QSpinBox()
         self.episodes_spin.setRange(1, 999)
-        self.episodes_spin.setValue(self.config.get("num_episodes", 3))
+        self.episodes_spin.setValue(self.config.get("num_episodes", 1))  # Default to 1 episode
         self.episodes_spin.setMinimumHeight(80)
         self.episodes_spin.setButtonSymbols(QSpinBox.NoButtons)
         self.episodes_spin.setAlignment(Qt.AlignCenter)
