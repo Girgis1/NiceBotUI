@@ -1,0 +1,25 @@
+{
+  "component_type": "position_set",
+  "name": "Position 2",
+  "description": "",
+  "metadata": {
+    "created_at": "2025-10-18T23:40:35.325936+11:00",
+    "modified_at": "2025-10-18T23:40:35.325946+11:00",
+    "position_count": 1
+  },
+  "positions": [
+    {
+      "name": "Position 2",
+      "motor_positions": [
+        2078,
+        2127,
+        1929,
+        2875,
+        1045,
+        2050
+      ],
+      "velocity": 600,
+      "wait_for_completion": true
+    }
+  ]
+}

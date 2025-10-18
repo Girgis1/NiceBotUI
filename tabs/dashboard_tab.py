@@ -138,6 +138,7 @@ class DashboardTab(QWidget):
         self.start_time = None
         self.elapsed_seconds = 0
         self.is_running = False
+        self.saved_runs_value = 1  # Remember runs value when toggling loop
         
         self.init_ui()
         self.validate_config()
@@ -363,10 +364,10 @@ class DashboardTab(QWidget):
         loop_label.setAlignment(Qt.AlignCenter)
         header_layout.addWidget(loop_label)
         
-        episodes_label = QLabel("Episodes")
-        episodes_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
-        episodes_label.setAlignment(Qt.AlignCenter)
-        header_layout.addWidget(episodes_label, stretch=1)
+        runs_label = QLabel("Runs")
+        runs_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
+        runs_label.setAlignment(Qt.AlignCenter)
+        header_layout.addWidget(runs_label, stretch=1)
         
         episodes_layout.addLayout(header_layout)
         
@@ -671,15 +672,16 @@ class DashboardTab(QWidget):
     def on_loop_toggled(self, state):
         """Handle loop checkbox toggle"""
         if state == Qt.Checked:
-            # Loop mode ON
+            # Loop mode ON - save current value and show infinity
+            self.saved_runs_value = self.episodes_spin.value()
             self.episodes_spin.setEnabled(False)
             self.episodes_spin.setSpecialValueText("∞")
             self.episodes_spin.setValue(self.episodes_spin.minimum())  # Set to min to show special text
         else:
-            # Loop mode OFF
+            # Loop mode OFF - restore previous value
             self.episodes_spin.setEnabled(True)
             self.episodes_spin.setSpecialValueText("")
-            self.episodes_spin.setValue(1)  # Reset to 1
+            self.episodes_spin.setValue(self.saved_runs_value)  # Restore saved value
     
     def validate_config(self):
         """Validate configuration"""
