@@ -1,0 +1,13 @@
+{
+  "step_type": "model",
+  "name": "Unnamed Step",
+  "enabled": true,
+  "delay_after": 0.0,
+  "metadata": {
+    "created_at": "2025-10-18T21:06:05.817840+11:00",
+    "modified_at": "2025-10-18T21:06:05.817848+11:00"
+  },
+  "task": "GrabBlock1",
+  "checkpoint": "last",
+  "duration": 25.0
+}

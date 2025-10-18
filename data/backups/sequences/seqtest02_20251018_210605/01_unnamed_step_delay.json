@@ -1,0 +1,11 @@
+{
+  "step_type": "delay",
+  "name": "Unnamed Step",
+  "enabled": true,
+  "delay_after": 0.0,
+  "metadata": {
+    "created_at": "2025-10-18T20:39:37.528318+11:00",
+    "modified_at": "2025-10-18T20:39:37.528330+11:00"
+  },
+  "duration": 5.0
+}

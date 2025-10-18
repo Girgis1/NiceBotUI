@@ -1,0 +1,10 @@
+{
+  "step_type": "home",
+  "name": "Unnamed Step",
+  "enabled": true,
+  "delay_after": 0.0,
+  "metadata": {
+    "created_at": "2025-10-18T21:06:05.817776+11:00",
+    "modified_at": "2025-10-18T21:06:05.817784+11:00"
+  }
+}

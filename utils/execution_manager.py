@@ -363,9 +363,15 @@ class ExecutionWorker(QThread):
         total_steps = len(steps)
         self.log_message.emit('info', f"Executing {total_steps} steps (loop={loop})")
         
+        # Debug: Log step types
+        step_types = [s.get("type", "unknown") for s in steps]
+        self.log_message.emit('info', f"Step types: {step_types}")
+        
         # Pre-scan for model steps and start policy server if needed
         model_steps = [s for s in steps if s.get("type") == "model"]
         policy_server_process = None
+        
+        self.log_message.emit('info', f"Found {len(model_steps)} model step(s)")
         
         if model_steps:
             # Get the first model step to determine which policy to load
