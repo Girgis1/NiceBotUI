@@ -54,8 +54,7 @@ class ExecutionWorker(QThread):
     def run(self):
         """Main execution thread
         
-        NOTE: Models are NOT executed here to avoid nested threads.
-        Models use RobotWorker directly from the Dashboard.
+        Handles: recordings, sequences, and models (in local mode)
         """
         self._stop_requested = False
         
@@ -64,12 +63,34 @@ class ExecutionWorker(QThread):
                 self._execute_recording()
             elif self.execution_type == "sequence":
                 self._execute_sequence()
+            elif self.execution_type == "model":
+                self._execute_model()
             else:
-                raise ValueError(f"Unsupported execution type: {self.execution_type}. Models should use RobotWorker directly.")
+                raise ValueError(f"Unsupported execution type: {self.execution_type}")
                 
         except Exception as e:
             self.log_message.emit('error', f"Execution error: {e}")
             self.execution_completed.emit(False, f"Failed: {e}")
+    
+    def _execute_model(self):
+        """Execute a model directly (for Dashboard model runs)"""
+        self.log_message.emit('info', f"Loading model: {self.execution_name}")
+        self.status_update.emit("Starting model...")
+        
+        # Get options
+        checkpoint = self.options.get("checkpoint", "last")
+        duration = self.options.get("duration", 25.0)
+        
+        # Execute model
+        self._execute_model_inline(self.execution_name, checkpoint, duration)
+        
+        # Completion
+        if not self._stop_requested:
+            self.log_message.emit('info', f"✓ Model execution completed")
+            self.execution_completed.emit(True, "Model completed")
+        else:
+            self.log_message.emit('warning', "Model execution stopped by user")
+            self.execution_completed.emit(False, "Stopped by user")
     
     def _execute_recording(self):
         """Execute a single recording"""

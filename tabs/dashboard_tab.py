@@ -698,9 +698,23 @@ class DashboardTab(QWidget):
         self.log_text.append(f"[info] Starting {execution_type}: {execution_name}")
         self.action_label.setText(f"Starting {execution_type}...")
         
-        # Handle models separately (use RobotWorker directly to avoid nested threads)
+        # Handle models based on execution mode
         if execution_type == "model":
-            self._start_model_execution(execution_name)
+            local_mode = self.config.get("policy", {}).get("local_mode", True)
+            
+            if local_mode:
+                # Local mode: Use ExecutionWorker (which uses lerobot-record)
+                self.log_text.append("[info] Using local mode (lerobot-record)")
+                # Get checkpoint for options
+                checkpoint_name = self.checkpoint_combo.currentData() if self.checkpoint_combo.isVisible() else "last"
+                self._start_execution_worker(execution_type, execution_name, {
+                    "checkpoint": checkpoint_name,
+                    "duration": 25.0  # Default duration for dashboard runs
+                })
+            else:
+                # Server mode: Use RobotWorker (async inference)
+                self.log_text.append("[info] Using server mode (async inference)")
+                self._start_model_execution(execution_name)
         else:
             # For recordings and sequences, use ExecutionWorker
             self._start_execution_worker(execution_type, execution_name)
