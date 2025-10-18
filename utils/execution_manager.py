@@ -367,14 +367,16 @@ class ExecutionWorker(QThread):
         step_types = [s.get("type", "unknown") for s in steps]
         self.log_message.emit('info', f"Step types: {step_types}")
         
-        # Pre-scan for model steps and start policy server if needed
+        # Pre-scan for model steps and start policy server if needed (SERVER MODE ONLY)
         model_steps = [s for s in steps if s.get("type") == "model"]
         policy_server_process = None
+        local_mode = self.config.get("policy", {}).get("local_mode", True)
         
         self.log_message.emit('info', f"Found {len(model_steps)} model step(s)")
         
-        if model_steps:
-            # Get the first model step to determine which policy to load
+        if model_steps and not local_mode:
+            # Only pre-start server in SERVER MODE
+            # In local mode, each model step runs independently with lerobot-record
             first_model = model_steps[0]
             task = first_model.get("task", "")
             checkpoint = first_model.get("checkpoint", "last")
@@ -384,6 +386,8 @@ class ExecutionWorker(QThread):
             
             if not policy_server_process:
                 self.log_message.emit('error', "Failed to start policy server - model steps will be skipped")
+        elif model_steps and local_mode:
+            self.log_message.emit('info', f"Using local mode - model steps will execute directly (no server)")
         
         # Execute steps
         iteration = 0
@@ -418,13 +422,18 @@ class ExecutionWorker(QThread):
                         self._execute_home_inline()
                         
                     elif step_type == "model":
-                        # Execute trained policy model (server already running)
+                        # Execute trained policy model
                         task = step.get("task", "")
                         checkpoint = step.get("checkpoint", "last")
                         duration = step.get("duration", 25.0)
                         
-                        if policy_server_process and policy_server_process.poll() is None:
-                            self.log_message.emit('info', f"→ Executing model: {task} for {duration}s")
+                        if local_mode:
+                            # Local mode: Direct execution with lerobot-record
+                            self.log_message.emit('info', f"→ Executing model: {task} for {duration}s (local mode)")
+                            self._execute_model_inline(task, checkpoint, duration)
+                        elif policy_server_process and policy_server_process.poll() is None:
+                            # Server mode: Use pre-started server
+                            self.log_message.emit('info', f"→ Executing model: {task} for {duration}s (server mode)")
                             self._execute_model_with_server(policy_server_process, task, checkpoint, duration)
                         else:
                             self.log_message.emit('warning', f"→ Skipping model {task} - policy server not running")
@@ -734,10 +743,6 @@ class ExecutionWorker(QThread):
                 self.log_message.emit('error', f"Model not found: {checkpoint_path}")
                 return
             
-            # Get lerobot binary
-            lerobot_config = self.config.get("lerobot", {})
-            lerobot_bin = lerobot_config.get("python_path", "python")
-            
             # Build camera config string
             robot_config = self.config.get("robot", {})
             cameras = robot_config.get("cameras", {})
@@ -746,16 +751,17 @@ class ExecutionWorker(QThread):
                 camera_str += f"{cam_name}: {{type: opencv, index_or_path: {cam_config['path']}, width: {cam_config['width']}, height: {cam_config['height']}, fps: {cam_config['fps']}}}, "
             camera_str = camera_str.rstrip(", ") + " }"
             
-            # Build command
+            # Build command using lerobot-record CLI
+            # This directly loads and runs the policy without needing a server
             cmd = [
-                lerobot_bin, "-m", "lerobot.scripts.control_robot",
+                "lerobot-record",
                 f"--robot.type={robot_config.get('type', 'so100_follower')}",
                 f"--robot.port={robot_config.get('port', '/dev/ttyACM0')}",
                 f"--robot.cameras={camera_str}",
                 f"--robot.id={robot_config.get('id', 'follower_arm')}",
                 "--display_data=false",
                 f"--dataset.repo_id=local/eval_{task}_ckpt",
-                f'--dataset.single_task=Eval {task}',
+                f"--dataset.single_task=Eval {task}",
                 "--dataset.num_episodes=1",
                 f"--dataset.episode_time_s={duration}",
                 "--dataset.push_to_hub=false",
