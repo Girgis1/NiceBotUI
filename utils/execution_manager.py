@@ -346,7 +346,7 @@ class ExecutionWorker(QThread):
             )
     
     def _execute_sequence(self):
-        """Execute a sequence of steps"""
+        """Execute a sequence of steps with optimized policy server management"""
         self.log_message.emit('info', f"Loading sequence: {self.execution_name}")
         self.status_update.emit("Loading sequence...")
         
@@ -363,52 +363,83 @@ class ExecutionWorker(QThread):
         total_steps = len(steps)
         self.log_message.emit('info', f"Executing {total_steps} steps (loop={loop})")
         
+        # Pre-scan for model steps and start policy server if needed
+        model_steps = [s for s in steps if s.get("type") == "model"]
+        policy_server_process = None
+        
+        if model_steps:
+            # Get the first model step to determine which policy to load
+            first_model = model_steps[0]
+            task = first_model.get("task", "")
+            checkpoint = first_model.get("checkpoint", "last")
+            
+            self.log_message.emit('info', f"🚀 Pre-starting policy server for {task} (used by {len(model_steps)} step(s))")
+            policy_server_process = self._start_policy_server(task, checkpoint)
+            
+            if not policy_server_process:
+                self.log_message.emit('error', "Failed to start policy server - model steps will be skipped")
+        
         # Execute steps
         iteration = 0
-        while True:
-            iteration += 1
-            
-            for idx, step in enumerate(steps):
-                if self._stop_requested:
+        try:
+            while True:
+                iteration += 1
+                
+                for idx, step in enumerate(steps):
+                    if self._stop_requested:
+                        break
+                    
+                    step_type = step.get("type")
+                    
+                    self.progress_update.emit(idx + 1, total_steps)
+                    self.status_update.emit(f"Step {idx+1}/{total_steps}: {step_type}")
+                    
+                    if step_type == "action":
+                        # Execute action/recording
+                        action_name = step.get("name")
+                        self.log_message.emit('info', f"→ Executing action: {action_name}")
+                        self._execute_recording_inline(action_name)
+                        
+                    elif step_type == "delay":
+                        # Wait while holding current position
+                        duration = step.get("duration", 1.0)
+                        self.log_message.emit('info', f"→ Delay: {duration}s (holding position)")
+                        self._delay_with_hold(duration)
+                    
+                    elif step_type == "home":
+                        # Return to home position
+                        self.log_message.emit('info', "→ Returning to home position")
+                        self._execute_home_inline()
+                        
+                    elif step_type == "model":
+                        # Execute trained policy model (server already running)
+                        task = step.get("task", "")
+                        checkpoint = step.get("checkpoint", "last")
+                        duration = step.get("duration", 25.0)
+                        
+                        if policy_server_process and policy_server_process.poll() is None:
+                            self.log_message.emit('info', f"→ Executing model: {task} for {duration}s")
+                            self._execute_model_with_server(policy_server_process, task, checkpoint, duration)
+                        else:
+                            self.log_message.emit('warning', f"→ Skipping model {task} - policy server not running")
+                    
+                    else:
+                        self.log_message.emit('warning', f"Unknown step type: {step_type}")
+                
+                if self._stop_requested or not loop:
                     break
                 
-                step_type = step.get("type")
-                
-                self.progress_update.emit(idx + 1, total_steps)
-                self.status_update.emit(f"Step {idx+1}/{total_steps}: {step_type}")
-                
-                if step_type == "action":
-                    # Execute action/recording
-                    action_name = step.get("name")
-                    self.log_message.emit('info', f"→ Executing action: {action_name}")
-                    self._execute_recording_inline(action_name)
-                    
-                elif step_type == "delay":
-                    # Wait while holding current position
-                    duration = step.get("duration", 1.0)
-                    self.log_message.emit('info', f"→ Delay: {duration}s (holding position)")
-                    self._delay_with_hold(duration)
-                
-                elif step_type == "home":
-                    # Return to home position
-                    self.log_message.emit('info', "→ Returning to home position")
-                    self._execute_home_inline()
-                    
-                elif step_type == "model":
-                    # Execute trained policy model
-                    task = step.get("task", "")
-                    checkpoint = step.get("checkpoint", "last")
-                    duration = step.get("duration", 25.0)
-                    self.log_message.emit('info', f"→ Executing model: {task} ({checkpoint}) for {duration}s")
-                    self._execute_model_inline(task, checkpoint, duration)
-                
-                else:
-                    self.log_message.emit('warning', f"Unknown step type: {step_type}")
-            
-            if self._stop_requested or not loop:
-                break
-            
-            self.log_message.emit('info', f"Loop iteration {iteration} completed, repeating...")
+                self.log_message.emit('info', f"Loop iteration {iteration} completed, repeating...")
+        
+        finally:
+            # Clean up policy server
+            if policy_server_process:
+                self.log_message.emit('info', "Shutting down policy server...")
+                policy_server_process.terminate()
+                policy_server_process.wait(5)
+                if policy_server_process.poll() is None:
+                    policy_server_process.kill()
+                self.log_message.emit('info', "✓ Policy server stopped")
         
         # Success
         if not self._stop_requested:
@@ -530,6 +561,122 @@ class ExecutionWorker(QThread):
             
         except Exception as e:
             self.log_message.emit('error', f"Failed to reach home: {e}")
+    
+    def _start_policy_server(self, task: str, checkpoint: str):
+        """Start policy server and return process (for use in sequences)
+        
+        Args:
+            task: Model task name
+            checkpoint: Checkpoint name (e.g., "last", "best")
+        
+        Returns:
+            subprocess.Popen object or None if failed
+        """
+        import subprocess
+        from pathlib import Path
+        
+        try:
+            # Get checkpoint path
+            train_dir = Path(self.config["policy"].get("base_path", ""))
+            checkpoint_path = train_dir / task / "checkpoints" / checkpoint / "pretrained_model"
+            
+            if not checkpoint_path.exists():
+                self.log_message.emit('error', f"Model not found: {checkpoint_path}")
+                return None
+            
+            # Build command
+            policy_cmd = self._build_policy_server_cmd(checkpoint_path)
+            
+            # Start policy server
+            policy_process = subprocess.Popen(
+                policy_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+            
+            # Wait for server to be ready
+            import time
+            time.sleep(2)
+            
+            # Check if server started successfully
+            if policy_process.poll() is not None:
+                self.log_message.emit('error', "Policy server failed to start")
+                return None
+            
+            self.log_message.emit('info', "✓ Policy server ready")
+            return policy_process
+            
+        except Exception as e:
+            self.log_message.emit('error', f"Failed to start policy server: {e}")
+            return None
+    
+    def _execute_model_with_server(self, policy_process, task: str, checkpoint: str, duration: float):
+        """Execute model using an already-running policy server
+        
+        Args:
+            policy_process: Running policy server subprocess
+            task: Model task name
+            checkpoint: Checkpoint name
+            duration: How long to run (seconds)
+        """
+        import subprocess
+        import time
+        from pathlib import Path
+        
+        try:
+            # Get checkpoint path
+            train_dir = Path(self.config["policy"].get("base_path", ""))
+            checkpoint_path = train_dir / task / "checkpoints" / checkpoint / "pretrained_model"
+            
+            # Build robot client command
+            robot_cmd = self._build_robot_client_cmd(checkpoint_path)
+            
+            self.log_message.emit('info', "Starting robot client...")
+            
+            # Start robot client
+            robot_process = subprocess.Popen(
+                robot_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+            
+            # Wait for client to connect
+            time.sleep(2)
+            
+            # Check if client started successfully
+            if robot_process.poll() is not None:
+                self.log_message.emit('error', "Robot client failed to start")
+                return
+            
+            self.log_message.emit('info', f"✓ Model running for {duration}s")
+            
+            # Run for specified duration (check for stop every second)
+            start_time = time.time()
+            while time.time() - start_time < duration:
+                if self._stop_requested:
+                    self.log_message.emit('info', "Model execution stopped by user")
+                    break
+                time.sleep(0.5)
+            
+            # Stop robot client (keep policy server running)
+            self.log_message.emit('info', "Stopping robot client...")
+            robot_process.terminate()
+            robot_process.wait(5)
+            
+            # Force kill if still running
+            if robot_process.poll() is None:
+                robot_process.kill()
+            
+            self.log_message.emit('info', "✓ Model execution completed")
+            
+        except Exception as e:
+            self.log_message.emit('error', f"Model execution failed: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _execute_model_inline(self, task: str, checkpoint: str, duration: float):
         """Execute a trained policy model for specified duration
