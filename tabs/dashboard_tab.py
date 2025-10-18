@@ -354,18 +354,28 @@ class DashboardTab(QWidget):
         episodes_layout.setSpacing(5)
         episodes_layout.setContentsMargins(10, 10, 10, 10)
         
-        # Episodes label
+        # Header with Loop and Episodes labels
+        header_layout = QHBoxLayout()
+        header_layout.setSpacing(10)
+        
+        loop_label = QLabel("Loop")
+        loop_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
+        loop_label.setAlignment(Qt.AlignCenter)
+        header_layout.addWidget(loop_label)
+        
         episodes_label = QLabel("Episodes")
         episodes_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
         episodes_label.setAlignment(Qt.AlignCenter)
-        episodes_layout.addWidget(episodes_label)
+        header_layout.addWidget(episodes_label, stretch=1)
+        
+        episodes_layout.addLayout(header_layout)
         
         # Loop checkbox and episodes spinner in same row
         episodes_controls = QHBoxLayout()
         episodes_controls.setSpacing(10)
         
-        # Large touch-friendly loop checkbox
-        self.loop_checkbox = QCheckBox("🔁")
+        # Clean toggle checkbox - simple color fill when checked
+        self.loop_checkbox = QCheckBox("✓")
         self.loop_checkbox.setMinimumSize(80, 80)
         self.loop_checkbox.setMaximumSize(80, 80)
         self.loop_checkbox.setStyleSheet("""
@@ -373,16 +383,20 @@ class DashboardTab(QWidget):
                 background-color: #404040;
                 border: 2px solid #505050;
                 border-radius: 6px;
-                color: #ffffff;
-                font-size: 28px;
-                padding: 4px;
+                color: transparent;
+                font-size: 42px;
+                font-weight: bold;
+                text-align: center;
+                padding: 0px;
             }
             QCheckBox:hover {
                 border-color: #4CAF50;
+                background-color: #4a4a4a;
             }
             QCheckBox:checked {
                 background-color: #4CAF50;
                 border-color: #4CAF50;
+                color: white;
             }
             QCheckBox::indicator {
                 width: 0px;
