@@ -44,6 +44,7 @@ class ExecutionWorker(QThread):
         self.execution_type = execution_type
         self.execution_name = execution_name
         self.execution_data = execution_data or {}
+        self.options = execution_data or {}  # Alias for compatibility
         self._stop_requested = False
         
         # Managers
