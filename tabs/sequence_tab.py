@@ -22,7 +22,10 @@ from utils.actions_manager import ActionsManager
 class SequenceTab(QWidget):
     """Sequence builder tab - combine actions, models, and delays"""
     
-    # Signal to request model execution from main app
+    # Signal to request sequence execution from Dashboard
+    execute_sequence_signal = Signal(str, bool)  # (sequence_name, loop)
+    
+    # Signal to request model execution from main app (legacy)
     execute_model = Signal(str, str, float)  # task, checkpoint, duration
     
     def __init__(self, config: dict, parent=None):
@@ -168,7 +171,7 @@ class SequenceTab(QWidget):
         self.add_model_btn.clicked.connect(self.add_model_step)
         add_bar.addWidget(self.add_model_btn)
         
-        self.add_delay_btn = QPushButton("+ Delay")
+        self.add_delay_btn = QPushButton("⏱ Delay")
         self.add_delay_btn.setMinimumHeight(45)
         self.add_delay_btn.setStyleSheet("""
             QPushButton {
@@ -185,6 +188,24 @@ class SequenceTab(QWidget):
         """)
         self.add_delay_btn.clicked.connect(self.add_delay_step)
         add_bar.addWidget(self.add_delay_btn)
+        
+        self.add_home_btn = QPushButton("🏠 Home")
+        self.add_home_btn.setMinimumHeight(45)
+        self.add_home_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #388E3C;
+            }
+        """)
+        self.add_home_btn.clicked.connect(self.add_home_step)
+        add_bar.addWidget(self.add_home_btn)
         
         add_bar.addStretch()
         
@@ -378,6 +399,9 @@ class SequenceTab(QWidget):
             duration = step.get("duration", 1.0)
             text = f"{number}. ⏱️ Delay: {duration:.1f}s"
             color = QColor("#FF9800")
+        elif step_type == "home":
+            text = f"{number}. 🏠 Home: Return to rest position"
+            color = QColor("#4CAF50")
         else:
             text = f"{number}. ❓ Unknown step"
             color = QColor("#909090")
@@ -459,6 +483,12 @@ class SequenceTab(QWidget):
             step = {"type": "delay", "duration": delay}
             self.add_step_to_list(step)
             self.status_label.setText(f"✓ Added {delay:.1f}s delay")
+    
+    def add_home_step(self):
+        """Add a home position step"""
+        step = {"type": "home"}
+        self.add_step_to_list(step)
+        self.status_label.setText("✓ Added home step")
     
     def delete_selected_step(self):
         """Delete selected step"""
@@ -545,13 +575,32 @@ class SequenceTab(QWidget):
             self.stop_sequence()
     
     def start_sequence(self):
-        """Start running the sequence"""
+        """Start running the sequence - delegates to Dashboard"""
         steps = self.get_all_steps()
         
         if not steps:
             self.status_label.setText("❌ No steps to run")
             self.run_btn.setChecked(False)
             return
+        
+        # Check if sequence is saved
+        if self.current_sequence_name == "NewSequence01":
+            self.status_label.setText("❌ Please save sequence before running")
+            self.run_btn.setChecked(False)
+            
+            # Offer to save
+            reply = QMessageBox.question(
+                self, "Save Sequence?",
+                "Sequence must be saved before running. Save now?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                self.save_sequence()
+                # Check if save was successful
+                if self.current_sequence_name == "NewSequence01":
+                    return  # User cancelled save
+            else:
+                return
         
         self.is_running = True
         self.run_btn.setText("⏹ STOP")
@@ -560,14 +609,15 @@ class SequenceTab(QWidget):
         self.add_action_btn.setEnabled(False)
         self.add_model_btn.setEnabled(False)
         self.add_delay_btn.setEnabled(False)
+        self.add_home_btn.setEnabled(False)
         self.save_btn.setEnabled(False)
         self.new_btn.setEnabled(False)
         
-        self.status_label.setText("▶ Running sequence...")
+        # Emit signal to Dashboard to execute
+        loop = self.loop_btn.isChecked()
+        self.execute_sequence_signal.emit(self.current_sequence_name, loop)
         
-        # TODO: Implement actual sequence execution
-        # This would need to coordinate with the main app to execute actions and models
-        QTimer.singleShot(2000, self.stop_sequence)  # Placeholder
+        self.status_label.setText(f"▶ Running: {self.current_sequence_name} (see Dashboard)")
     
     def stop_sequence(self):
         """Stop sequence execution"""
@@ -579,6 +629,7 @@ class SequenceTab(QWidget):
         self.add_action_btn.setEnabled(True)
         self.add_model_btn.setEnabled(True)
         self.add_delay_btn.setEnabled(True)
+        self.add_home_btn.setEnabled(True)
         self.save_btn.setEnabled(True)
         self.new_btn.setEnabled(True)
         

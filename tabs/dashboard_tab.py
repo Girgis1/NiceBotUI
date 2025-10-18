@@ -745,14 +745,14 @@ class DashboardTab(QWidget):
             self.log_text.append(f"[error] Traceback: {traceback.format_exc()}")
             self._reset_ui_after_run()
     
-    def _start_execution_worker(self, execution_type: str, execution_name: str):
+    def _start_execution_worker(self, execution_type: str, execution_name: str, options: dict = None):
         """Start ExecutionWorker for recordings and sequences"""
         # Create and start execution worker
         self.execution_worker = ExecutionWorker(
             self.config,
             execution_type,
             execution_name,
-            {}
+            options or {}
         )
         
         # Connect signals
@@ -763,6 +763,28 @@ class DashboardTab(QWidget):
         
         # Start execution
         self.execution_worker.start()
+    
+    def run_sequence(self, sequence_name: str, loop: bool = False):
+        """Run a sequence from the Sequence tab
+        
+        Args:
+            sequence_name: Name of the sequence to run
+            loop: Whether to loop the sequence
+        """
+        if self.is_running:
+            self.log_text.append("[warning] Already running, please stop first")
+            return
+        
+        self.log_text.append(f"[info] Starting sequence: {sequence_name} (loop={loop})")
+        
+        # Update UI state
+        self.is_running = True
+        self.run_btn.setChecked(True)
+        self.run_btn.setText("⏹ STOP")
+        self.action_label.setText(f"Sequence: {sequence_name}")
+        
+        # Start execution worker
+        self._start_execution_worker("sequence", sequence_name, {"loop": loop})
     
     def stop_run(self):
         """Stop robot run"""

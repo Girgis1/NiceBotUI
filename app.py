@@ -148,6 +148,9 @@ class MainWindow(QMainWindow):
         self.dashboard_tab = DashboardTab(self.config, self)
         self.sequence_tab = SequenceTab(self.config, self)
         self.record_tab = RecordTab(self.config, self)
+        
+        # Connect sequence execution signal
+        self.sequence_tab.execute_sequence_signal.connect(self.dashboard_tab.run_sequence)
         self.settings_tab = SettingsTab(self.config, self)
         
         # Add tabs to stacked widget

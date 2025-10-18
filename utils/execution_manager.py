@@ -377,22 +377,30 @@ class ExecutionWorker(QThread):
                 self.progress_update.emit(idx + 1, total_steps)
                 self.status_update.emit(f"Step {idx+1}/{total_steps}: {step_type}")
                 
-                if step_type == "recording":
-                    # Execute recording
-                    recording_name = step.get("name")
-                    self.log_message.emit('info', f"→ Executing recording: {recording_name}")
-                    self._execute_recording_inline(recording_name)
+                if step_type == "action":
+                    # Execute action/recording
+                    action_name = step.get("name")
+                    self.log_message.emit('info', f"→ Executing action: {action_name}")
+                    self._execute_recording_inline(action_name)
                     
                 elif step_type == "delay":
                     # Wait
                     duration = step.get("duration", 1.0)
                     self.log_message.emit('info', f"→ Delay: {duration}s")
                     time.sleep(duration)
+                
+                elif step_type == "home":
+                    # Return to home position
+                    self.log_message.emit('info', "→ Returning to home position")
+                    self._execute_home_inline()
                     
                 elif step_type == "model":
-                    # Execute model
-                    self.log_message.emit('warning', "Model execution not yet implemented in sequences")
-                    # TODO: Implement model execution
+                    # Execute trained policy model
+                    task = step.get("task", "")
+                    checkpoint = step.get("checkpoint", "last")
+                    duration = step.get("duration", 25.0)
+                    self.log_message.emit('info', f"→ Executing model: {task} ({checkpoint}) for {duration}s")
+                    self._execute_model_inline(task, checkpoint, duration)
                 
                 else:
                     self.log_message.emit('warning', f"Unknown step type: {step_type}")
@@ -433,6 +441,169 @@ class ExecutionWorker(QThread):
             self._playback_live_recording(recording)
         else:
             self._playback_position_recording(recording)
+    
+    def _execute_home_inline(self):
+        """Return arm to home/rest position"""
+        # Connect if not already connected
+        if not self.motor_controller.bus:
+            if not self.motor_controller.connect():
+                self.log_message.emit('error', "Failed to connect to motors")
+                return
+        
+        # Get home position from config (or use safe defaults)
+        home_positions = self.config.get("robot", {}).get("home_position", [2048, 2048, 2048, 2048, 2048, 2048])
+        
+        self.log_message.emit('info', f"Moving to home position: {home_positions}")
+        
+        try:
+            # Move to home position
+            self.motor_controller.set_positions(
+                home_positions,
+                velocity=600,
+                wait=True,
+                keep_connection=True
+            )
+            
+            self.log_message.emit('info', "✓ Reached home position")
+            
+        except Exception as e:
+            self.log_message.emit('error', f"Failed to reach home: {e}")
+    
+    def _execute_model_inline(self, task: str, checkpoint: str, duration: float):
+        """Execute a trained policy model for specified duration
+        
+        Args:
+            task: Model task name (folder in training output)
+            checkpoint: Checkpoint name (e.g., "last", "best")
+            duration: How long to run the model (seconds)
+        """
+        import subprocess
+        import time
+        from pathlib import Path
+        
+        try:
+            # Get checkpoint path
+            train_dir = Path(self.config["policy"].get("base_path", ""))
+            checkpoint_path = train_dir / task / "checkpoints" / checkpoint / "pretrained_model"
+            
+            if not checkpoint_path.exists():
+                self.log_message.emit('error', f"Model not found: {checkpoint_path}")
+                return
+            
+            self.log_message.emit('info', f"Starting policy server: {checkpoint_path}")
+            
+            # Build commands (similar to RobotWorker)
+            policy_cmd = self._build_policy_server_cmd(checkpoint_path)
+            robot_cmd = self._build_robot_client_cmd(checkpoint_path)
+            
+            # Start policy server
+            policy_process = subprocess.Popen(
+                policy_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+            
+            # Wait for server to be ready
+            time.sleep(2)
+            
+            # Check if server started successfully
+            if policy_process.poll() is not None:
+                self.log_message.emit('error', "Policy server failed to start")
+                return
+            
+            self.log_message.emit('info', "Starting robot client...")
+            
+            # Start robot client
+            robot_process = subprocess.Popen(
+                robot_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+            
+            # Wait for client to connect
+            time.sleep(2)
+            
+            # Check if client started successfully
+            if robot_process.poll() is not None:
+                self.log_message.emit('error', "Robot client failed to start")
+                # Kill policy server
+                policy_process.terminate()
+                policy_process.wait(5)
+                return
+            
+            self.log_message.emit('info', f"✓ Model running for {duration}s")
+            
+            # Run for specified duration (check for stop every second)
+            start_time = time.time()
+            while time.time() - start_time < duration:
+                if self._stop_requested:
+                    self.log_message.emit('info', "Model execution stopped by user")
+                    break
+                time.sleep(0.5)
+            
+            # Stop processes
+            self.log_message.emit('info', "Stopping model...")
+            robot_process.terminate()
+            policy_process.terminate()
+            
+            # Wait for clean shutdown
+            robot_process.wait(5)
+            policy_process.wait(5)
+            
+            # Force kill if still running
+            if robot_process.poll() is None:
+                robot_process.kill()
+            if policy_process.poll() is None:
+                policy_process.kill()
+            
+            self.log_message.emit('info', "✓ Model execution completed")
+            
+        except Exception as e:
+            self.log_message.emit('error', f"Model execution failed: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _build_policy_server_cmd(self, checkpoint_path: Path) -> list:
+        """Build command for policy server"""
+        lerobot_bin = self.config["lerobot"].get("python_path", "python")
+        
+        return [
+            lerobot_bin, "-m", "lerobot.async_inference.policy_server",
+            f"--policy_device={self.config['policy'].get('device', 'cuda')}",
+            f"--policy_type={self.config['policy'].get('type', 'act')}",
+            f"--pretrained_name_or_path={checkpoint_path}",
+            "--port=8080"
+        ]
+    
+    def _build_robot_client_cmd(self, checkpoint_path: Path) -> list:
+        """Build command for robot client"""
+        lerobot_bin = self.config["lerobot"].get("python_path", "python")
+        robot_config = self.config.get("robot", {})
+        
+        # Build camera config string
+        cameras = robot_config.get("cameras", {})
+        camera_str = "{"
+        for cam_name, cam_config in cameras.items():
+            camera_str += f"{cam_name}: {{type: opencv, index_or_path: '{cam_config['path']}', width: {cam_config['width']}, height: {cam_config['height']}, fps: {cam_config['fps']}}}, "
+        camera_str = camera_str.rstrip(", ") + "}"
+        
+        return [
+            lerobot_bin, "-m", "lerobot.async_inference.robot_client",
+            "--server_address=127.0.0.1:8080",
+            f"--robot.type={robot_config.get('type', 'so100_follower')}",
+            f"--robot.port={robot_config.get('port', '/dev/ttyACM0')}",
+            f"--robot.id={robot_config.get('id', 'follower_arm')}",
+            f"--robot.cameras={camera_str}",
+            f"--policy_type={self.config['policy'].get('type', 'act')}",
+            f"--pretrained_name_or_path={checkpoint_path}",
+            f"--policy_device={self.config['policy'].get('device', 'cuda')}",
+            "--actions_per_chunk=30",
+            "--chunk_size_threshold=0.6"
+        ]
     
     
     def stop(self):
