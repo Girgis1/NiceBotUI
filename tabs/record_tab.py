@@ -499,7 +499,6 @@ class RecordTab(QWidget):
             # Disable other controls during recording
             self.set_btn.setEnabled(False)
             self.play_btn.setEnabled(False)
-            self.delay_btn.setEnabled(False)
             self.save_btn.setEnabled(False)
             self.action_combo.setEnabled(False)
             
@@ -523,7 +522,6 @@ class RecordTab(QWidget):
         # Re-enable controls
         self.set_btn.setEnabled(True)
         self.play_btn.setEnabled(True)
-        self.delay_btn.setEnabled(True)
         self.save_btn.setEnabled(True)
         self.action_combo.setEnabled(True)
         
@@ -839,7 +837,6 @@ class RecordTab(QWidget):
         self.is_playing = True
         self.play_btn.setText("⏹ STOP")
         self.set_btn.setEnabled(False)
-        self.delay_btn.setEnabled(False)
         self.save_btn.setEnabled(False)
         self.live_record_btn.setEnabled(False)
         
@@ -1004,7 +1001,6 @@ class RecordTab(QWidget):
         self.play_btn.setChecked(False)
         self.play_btn.setText("▶ PLAY")
         self.set_btn.setEnabled(True)
-        self.delay_btn.setEnabled(True)
         self.save_btn.setEnabled(True)
         
         # Clear row selection

@@ -725,21 +725,21 @@ class ExecutionWorker(QThread):
             verbose: If True, log each folder being cleaned. If False, only log summary.
         """
         import shutil
-        from pathlib import Path
         
         try:
             # Look for eval folders in lerobot data directory
-            lerobot_data = Path.home() / ".cache" / "huggingface" / "lerobot"
+            # Structure: ~/.cache/huggingface/lerobot/local/eval_*
+            lerobot_data = Path.home() / ".cache" / "huggingface" / "lerobot" / "local"
             
             if not lerobot_data.exists():
                 return
             
-            # Find and delete all folders starting with "local/eval_"
+            # Find and delete all folders starting with "eval_"
             deleted_count = 0
             for item in lerobot_data.iterdir():
-                if item.is_dir() and item.name.startswith("local_eval_"):
+                if item.is_dir() and item.name.startswith("eval_"):
                     if verbose:
-                        self.log_message.emit('info', f"Cleaning up: {item.name}")
+                        self.log_message.emit('info', f"Cleaning up: local/{item.name}")
                     shutil.rmtree(item)
                     deleted_count += 1
             
