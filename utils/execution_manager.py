@@ -718,8 +718,12 @@ class ExecutionWorker(QThread):
             import traceback
             traceback.print_exc()
     
-    def _cleanup_eval_folders(self):
-        """Clean up all eval folders to prevent naming conflicts"""
+    def _cleanup_eval_folders(self, verbose: bool = True):
+        """Clean up all eval folders to prevent naming conflicts
+        
+        Args:
+            verbose: If True, log each folder being cleaned. If False, only log summary.
+        """
         import shutil
         from pathlib import Path
         
@@ -734,7 +738,8 @@ class ExecutionWorker(QThread):
             deleted_count = 0
             for item in lerobot_data.iterdir():
                 if item.is_dir() and item.name.startswith("local_eval_"):
-                    self.log_message.emit('info', f"Cleaning up: {item.name}")
+                    if verbose:
+                        self.log_message.emit('info', f"Cleaning up: {item.name}")
                     shutil.rmtree(item)
                     deleted_count += 1
             
@@ -916,6 +921,10 @@ class ExecutionWorker(QThread):
             self.log_message.emit('error', f"Local model execution failed: {e}")
             import traceback
             traceback.print_exc()
+        
+        finally:
+            # Always cleanup eval folders at the end to keep things tidy
+            self._cleanup_eval_folders(verbose=False)  # Less verbose at end
     
     def _execute_model_inline(self, task: str, checkpoint: str, duration: float, num_episodes: int = None):
         """Execute a trained policy model for specified duration
