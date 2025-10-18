@@ -1,0 +1,39 @@
+{
+  "name": "Pick & Place!",
+  "type": "position",
+  "speed": 150,
+  "positions": [
+    {
+      "name": "Position 1",
+      "motor_positions": [
+        2048,
+        2048,
+        2048,
+        2048,
+        2048,
+        2048
+      ],
+      "velocity": 600
+    },
+    {
+      "name": "Position 2",
+      "motor_positions": [
+        2100,
+        2050,
+        2048,
+        2048,
+        2048,
+        2048
+      ],
+      "velocity": 600
+    }
+  ],
+  "recorded_data": [],
+  "delays": {},
+  "metadata": {
+    "created": "2025-10-18T17:32:26.315988+11:00",
+    "modified": "2025-10-18T17:32:26.315992+11:00",
+    "version": "1.0",
+    "file_format": "lerobot_recording"
+  }
+}

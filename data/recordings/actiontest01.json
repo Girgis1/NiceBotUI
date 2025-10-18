@@ -1,0 +1,39 @@
+{
+  "name": "ActionTest01",
+  "type": "position",
+  "speed": 100,
+  "positions": [
+    {
+      "name": "Recording 1",
+      "motor_positions": [
+        2085,
+        1108,
+        2994,
+        2419,
+        1045,
+        2048
+      ],
+      "velocity": 600
+    },
+    {
+      "name": "Position 2",
+      "motor_positions": [
+        2636,
+        1610,
+        2573,
+        2452,
+        1046,
+        2602
+      ],
+      "velocity": 600
+    }
+  ],
+  "recorded_data": [],
+  "delays": {},
+  "metadata": {
+    "created": "2025-10-18T18:03:17.792833+11:00",
+    "modified": "2025-10-18T18:03:17.792851+11:00",
+    "version": "1.0",
+    "file_format": "lerobot_recording"
+  }
+}

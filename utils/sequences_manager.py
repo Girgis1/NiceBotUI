@@ -1,96 +1,238 @@
 """
-Sequences Manager - Save and load sequences
+Sequences Manager - Save and load sequences (individual files)
+
+ROBUST DESIGN:
+- Each sequence stored as individual JSON file
+- Automatic backups on save
+- File-based listing (no central index to corrupt)
+- Safe filename sanitization
+- Metadata in each file
 """
 
 import json
+import re
+import shutil
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List, Dict
+import pytz
 
 
-DATA_PATH = Path(__file__).parent.parent / "data" / "sequences.json"
+TIMEZONE = pytz.timezone('Australia/Sydney')
+SEQUENCES_DIR = Path(__file__).parent.parent / "data" / "sequences"
+BACKUPS_DIR = Path(__file__).parent.parent / "data" / "backups" / "sequences"
 
 
 class SequencesManager:
-    """Manage saved sequences (combinations of actions, models, delays)"""
+    """Manage saved sequences with individual file storage"""
     
     def __init__(self):
-        self.data_path = DATA_PATH
-        self._ensure_file_exists()
+        self.sequences_dir = SEQUENCES_DIR
+        self.backups_dir = BACKUPS_DIR
+        self._ensure_directories()
     
-    def _ensure_file_exists(self):
-        """Ensure data file exists"""
-        if not self.data_path.exists():
-            self.data_path.parent.mkdir(parents=True, exist_ok=True)
-            self.save_all({})
+    def _ensure_directories(self):
+        """Ensure data directories exist"""
+        self.sequences_dir.mkdir(parents=True, exist_ok=True)
+        self.backups_dir.mkdir(parents=True, exist_ok=True)
     
-    def load_all(self) -> dict:
-        """Load all sequences"""
+    def _sanitize_filename(self, name: str) -> str:
+        """Convert sequence name to safe filename
+        
+        Examples:
+            "Production Run v2" -> "production_run_v2"
+            "Test Sequence!" -> "test_sequence"
+        """
+        # Convert to lowercase
+        safe_name = name.lower()
+        # Replace spaces and special chars with underscore
+        safe_name = re.sub(r'[^a-z0-9_-]+', '_', safe_name)
+        # Remove duplicate underscores
+        safe_name = re.sub(r'_+', '_', safe_name)
+        # Remove leading/trailing underscores
+        safe_name = safe_name.strip('_')
+        # Limit length
+        safe_name = safe_name[:50]
+        return safe_name
+    
+    def _get_filepath(self, name: str) -> Path:
+        """Get filepath for a sequence"""
+        filename = self._sanitize_filename(name) + ".json"
+        return self.sequences_dir / filename
+    
+    def _create_backup(self, filepath: Path):
+        """Create timestamped backup of a file"""
+        if not filepath.exists():
+            return
+        
+        timestamp = datetime.now(TIMEZONE).strftime("%Y%m%d_%H%M%S")
+        backup_name = f"{filepath.stem}_{timestamp}.json"
+        backup_path = self.backups_dir / backup_name
+        
         try:
-            with open(self.data_path, 'r') as f:
-                data = json.load(f)
-                return data.get("sequences", {})
+            shutil.copy2(filepath, backup_path)
+            # Keep only last 10 backups per sequence
+            self._cleanup_old_backups(filepath.stem)
         except Exception as e:
-            print(f"Error loading sequences: {e}")
-            return {}
+            print(f"[WARNING] Backup failed: {e}")
     
-    def save_all(self, sequences: dict):
-        """Save all sequences"""
-        try:
-            with open(self.data_path, 'w') as f:
-                json.dump({"sequences": sequences}, f, indent=2)
-        except Exception as e:
-            print(f"Error saving sequences: {e}")
+    def _cleanup_old_backups(self, sequence_name: str, keep_count: int = 10):
+        """Keep only the most recent N backups for a sequence"""
+        pattern = f"{sequence_name}_*.json"
+        backups = sorted(self.backups_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+        
+        # Delete old backups
+        for old_backup in backups[keep_count:]:
+            try:
+                old_backup.unlink()
+            except Exception as e:
+                print(f"[WARNING] Failed to delete old backup {old_backup}: {e}")
     
-    def save_sequence(self, name: str, steps: list) -> bool:
-        """Save a sequence
+    def save_sequence(self, name: str, steps: List[Dict], loop: bool = False) -> bool:
+        """Save a sequence with full metadata
         
         Args:
-            name: Sequence name
+            name: Sequence name (e.g., "Production Run v2")
             steps: List of step dicts
-                   {"type": "action", "name": "GrabCup_v1"}
+                   {"type": "recording", "name": "GrabCup_v1"}
                    {"type": "delay", "duration": 2.0}
                    {"type": "model", "task": "GrabBlock", "checkpoint": "last", "duration": 25.0}
+            loop: Whether to loop the sequence
+        
+        Sequence data structure:
+            {
+                "name": "Production Run v2",
+                "steps": [...],
+                "loop": false,
+                "metadata": {...}
+            }
         """
         try:
-            sequences = self.load_all()
+            filepath = self._get_filepath(name)
             
-            sequences[name] = {
+            # Create backup if file exists
+            if filepath.exists():
+                self._create_backup(filepath)
+            
+            # Load existing metadata if updating
+            existing_data = self.load_sequence(name)
+            created_time = existing_data['metadata']['created'] if existing_data else datetime.now(TIMEZONE).isoformat()
+            
+            # Build complete sequence structure
+            sequence = {
+                "name": name,
                 "steps": steps,
-                "created": sequences.get(name, {}).get("created", datetime.now().isoformat()),
-                "modified": datetime.now().isoformat()
+                "loop": loop,
+                "metadata": {
+                    "created": created_time,
+                    "modified": datetime.now(TIMEZONE).isoformat(),
+                    "version": "1.0",
+                    "file_format": "lerobot_sequence",
+                    "step_count": len(steps)
+                }
             }
             
-            self.save_all(sequences)
+            # Save to file
+            with open(filepath, 'w') as f:
+                json.dump(sequence, f, indent=2)
+            
+            print(f"[SEQUENCES] ✓ Saved sequence: {name} -> {filepath.name}")
             return True
+            
         except Exception as e:
-            print(f"Error saving sequence {name}: {e}")
+            print(f"[ERROR] Failed to save sequence {name}: {e}")
             return False
     
-    def load_sequence(self, name: str) -> Optional[dict]:
+    def load_sequence(self, name: str) -> Optional[Dict]:
         """Load a specific sequence"""
-        sequences = self.load_all()
-        return sequences.get(name)
+        try:
+            filepath = self._get_filepath(name)
+            
+            if not filepath.exists():
+                return None
+            
+            with open(filepath, 'r') as f:
+                data = json.load(f)
+            
+            return data
+            
+        except Exception as e:
+            print(f"[ERROR] Failed to load sequence {name}: {e}")
+            return None
     
     def delete_sequence(self, name: str) -> bool:
-        """Delete a sequence"""
+        """Delete a sequence (with backup)"""
         try:
-            sequences = self.load_all()
-            if name in sequences:
-                del sequences[name]
-                self.save_all(sequences)
-                return True
-            return False
+            filepath = self._get_filepath(name)
+            
+            if not filepath.exists():
+                return False
+            
+            # Create final backup before deletion
+            self._create_backup(filepath)
+            
+            # Delete the file
+            filepath.unlink()
+            
+            print(f"[SEQUENCES] ✓ Deleted sequence: {name}")
+            return True
+            
         except Exception as e:
-            print(f"Error deleting sequence {name}: {e}")
+            print(f"[ERROR] Failed to delete sequence {name}: {e}")
             return False
     
-    def list_sequences(self) -> list[str]:
-        """List all sequence names"""
-        sequences = self.load_all()
-        return sorted(sequences.keys())
+    def list_sequences(self) -> List[str]:
+        """List all sequence names (from files)"""
+        try:
+            # Get all .json files
+            json_files = self.sequences_dir.glob("*.json")
+            
+            # Load names from files (use stored name, not filename)
+            names = []
+            for filepath in json_files:
+                try:
+                    with open(filepath, 'r') as f:
+                        data = json.load(f)
+                        names.append(data.get("name", filepath.stem))
+                except:
+                    # Fallback to filename if file is corrupted
+                    names.append(filepath.stem)
+            
+            return sorted(names)
+            
+        except Exception as e:
+            print(f"[ERROR] Failed to list sequences: {e}")
+            return []
     
     def sequence_exists(self, name: str) -> bool:
         """Check if sequence exists"""
-        return name in self.load_all()
+        filepath = self._get_filepath(name)
+        return filepath.exists()
+    
+    def get_sequence_info(self, name: str) -> Optional[Dict]:
+        """Get metadata about a sequence without loading full data"""
+        try:
+            filepath = self._get_filepath(name)
+            
+            if not filepath.exists():
+                return None
+            
+            with open(filepath, 'r') as f:
+                data = json.load(f)
+            
+            # Return summary info
+            info = {
+                "name": data.get("name", name),
+                "step_count": len(data.get("steps", [])),
+                "loop": data.get("loop", False),
+                "created": data.get("metadata", {}).get("created", "unknown"),
+                "modified": data.get("metadata", {}).get("modified", "unknown"),
+                "file_size_kb": filepath.stat().st_size / 1024
+            }
+            
+            return info
+            
+        except Exception as e:
+            print(f"[ERROR] Failed to get sequence info for {name}: {e}")
+            return None
 

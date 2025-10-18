@@ -1,0 +1,51 @@
+{
+  "name": "ActionTest02",
+  "type": "position",
+  "speed": 100,
+  "positions": [
+    {
+      "name": "Position 1",
+      "motor_positions": [
+        2087,
+        1108,
+        2994,
+        2424,
+        1046,
+        2719
+      ],
+      "velocity": 600
+    },
+    {
+      "name": "Position 2",
+      "motor_positions": [
+        2079,
+        1771,
+        2263,
+        2413,
+        1045,
+        2712
+      ],
+      "velocity": 600
+    },
+    {
+      "name": "Recording 3",
+      "motor_positions": [
+        2079,
+        1148,
+        2236,
+        1991,
+        1045,
+        2492
+      ],
+      "velocity": 600
+    }
+  ],
+  "recorded_data": [],
+  "delays": {},
+  "metadata": {
+    "created": "2025-10-18T18:08:22.985697+11:00",
+    "modified": "2025-10-18T18:08:22.985719+11:00",
+    "version": "1.0",
+    "file_format": "lerobot_recording"
+  }
+}

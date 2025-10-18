@@ -292,24 +292,65 @@ class MainWindow(QMainWindow):
     
     def closeEvent(self, event):
         """Handle window close event"""
-        # Stop any running operations
-        if hasattr(self.dashboard_tab, 'worker') and self.dashboard_tab.worker:
-            if self.dashboard_tab.worker.isRunning():
-                self.dashboard_tab.worker.stop()
-                self.dashboard_tab.worker.wait(5000)
-        
-        if hasattr(self.record_tab, 'is_playing') and self.record_tab.is_playing:
-            self.record_tab.stop_playback()
-        
-        if hasattr(self.sequence_tab, 'is_running') and self.sequence_tab.is_running:
-            self.sequence_tab.stop_sequence()
-        
-        event.accept()
+        try:
+            # Stop any running operations
+            if hasattr(self.dashboard_tab, 'worker') and self.dashboard_tab.worker:
+                try:
+                    if self.dashboard_tab.worker.isRunning():
+                        self.dashboard_tab.worker.stop()
+                        self.dashboard_tab.worker.wait(5000)
+                except Exception as e:
+                    print(f"[WARNING] Error stopping worker: {e}")
+            
+            if hasattr(self.record_tab, 'is_playing') and self.record_tab.is_playing:
+                try:
+                    self.record_tab.stop_playback()
+                except Exception as e:
+                    print(f"[WARNING] Error stopping playback: {e}")
+            
+            if hasattr(self.sequence_tab, 'is_running') and self.sequence_tab.is_running:
+                try:
+                    self.sequence_tab.stop_sequence()
+                except Exception as e:
+                    print(f"[WARNING] Error stopping sequence: {e}")
+        except Exception as e:
+            print(f"[WARNING] Error in closeEvent: {e}")
+        finally:
+            # Always accept the close event
+            event.accept()
+
+
+def exception_hook(exctype, value, traceback_obj):
+    """Global exception handler to prevent crashes"""
+    import traceback
+    error_msg = ''.join(traceback.format_exception(exctype, value, traceback_obj))
+    print(f"\n{'='*60}")
+    print("CRITICAL ERROR CAUGHT - App will NOT crash!")
+    print(f"{'='*60}")
+    print(error_msg)
+    print(f"{'='*60}\n")
+    
+    # Try to show error in a message box (if Qt is available)
+    try:
+        from PySide6.QtWidgets import QMessageBox
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Critical)
+        msg.setWindowTitle("Error Caught")
+        msg.setText("An error occurred but the app will continue running.")
+        msg.setDetailedText(error_msg)
+        msg.setStandardButtons(QMessageBox.Ok)
+        msg.exec()
+    except:
+        pass
 
 
 def main():
     """Main entry point"""
     import argparse
+    import traceback
+    
+    # Install global exception handler
+    sys.excepthook = exception_hook
     
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="LeRobot Operator Console")
@@ -324,51 +365,62 @@ def main():
     # Determine fullscreen mode
     fullscreen = not (args.windowed or args.no_fullscreen)
     
-    app = QApplication(sys.argv)
+    try:
+        app = QApplication(sys.argv)
+        
+        # Set application style
+        app.setStyle("Fusion")
+        
+        # Set improved contrast palette for cheap screens
+        palette = QPalette()
+        palette.setColor(QPalette.Window, QColor(42, 42, 42))          # Lighter background
+        palette.setColor(QPalette.WindowText, QColor(255, 255, 255))
+        palette.setColor(QPalette.Base, QColor(64, 64, 64))            # Lighter input bg
+        palette.setColor(QPalette.AlternateBase, QColor(72, 72, 72))
+        palette.setColor(QPalette.ToolTipBase, QColor(255, 255, 255))
+        palette.setColor(QPalette.ToolTipText, QColor(0, 0, 0))
+        palette.setColor(QPalette.Text, QColor(255, 255, 255))
+        palette.setColor(QPalette.Button, QColor(70, 70, 70))          # Lighter buttons
+        palette.setColor(QPalette.ButtonText, QColor(255, 255, 255))
+        palette.setColor(QPalette.BrightText, QColor(255, 100, 100))
+        palette.setColor(QPalette.Link, QColor(76, 175, 80))           # Green links
+        palette.setColor(QPalette.Highlight, QColor(76, 175, 80))      # Green highlight
+        palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))
+        app.setPalette(palette)
     
-    # Set application style
-    app.setStyle("Fusion")
-    
-    # Set improved contrast palette for cheap screens
-    palette = QPalette()
-    palette.setColor(QPalette.Window, QColor(42, 42, 42))          # Lighter background
-    palette.setColor(QPalette.WindowText, QColor(255, 255, 255))
-    palette.setColor(QPalette.Base, QColor(64, 64, 64))            # Lighter input bg
-    palette.setColor(QPalette.AlternateBase, QColor(72, 72, 72))
-    palette.setColor(QPalette.ToolTipBase, QColor(255, 255, 255))
-    palette.setColor(QPalette.ToolTipText, QColor(0, 0, 0))
-    palette.setColor(QPalette.Text, QColor(255, 255, 255))
-    palette.setColor(QPalette.Button, QColor(70, 70, 70))          # Lighter buttons
-    palette.setColor(QPalette.ButtonText, QColor(255, 255, 255))
-    palette.setColor(QPalette.BrightText, QColor(255, 100, 100))
-    palette.setColor(QPalette.Link, QColor(76, 175, 80))           # Green links
-    palette.setColor(QPalette.Highlight, QColor(76, 175, 80))      # Green highlight
-    palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))
-    app.setPalette(palette)
-    
-    # Create and show main window
-    window = MainWindow(fullscreen=fullscreen)
-    
-    # Move to specified screen
-    screens = app.screens()
-    if args.screen < len(screens):
-        target_screen = screens[args.screen]
-        window.setScreen(target_screen)
-        if fullscreen:
-            # Fullscreen on the target screen
-            window.windowHandle().setScreen(target_screen)
-            window.showFullScreen()
+        # Create and show main window
+        window = MainWindow(fullscreen=fullscreen)
+        
+        # Move to specified screen
+        screens = app.screens()
+        if args.screen < len(screens):
+            target_screen = screens[args.screen]
+            window.setScreen(target_screen)
+            if fullscreen:
+                # Fullscreen on the target screen
+                window.windowHandle().setScreen(target_screen)
+                window.showFullScreen()
+            else:
+                # Center on target screen
+                screen_geometry = target_screen.geometry()
+                x = screen_geometry.x() + (screen_geometry.width() - 1024) // 2
+                y = screen_geometry.y() + (screen_geometry.height() - 600) // 2
+                window.move(x, y)
+                window.show()
         else:
-            # Center on target screen
-            screen_geometry = target_screen.geometry()
-            x = screen_geometry.x() + (screen_geometry.width() - 1024) // 2
-            y = screen_geometry.y() + (screen_geometry.height() - 600) // 2
-            window.move(x, y)
             window.show()
-    else:
-        window.show()
-    
-    sys.exit(app.exec())
+        
+        # Run the application
+        sys.exit(app.exec())
+        
+    except Exception as e:
+        print(f"\n{'='*60}")
+        print("FATAL ERROR - Failed to start application")
+        print(f"{'='*60}")
+        print(f"Error: {e}")
+        print(traceback.format_exc())
+        print(f"{'='*60}\n")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

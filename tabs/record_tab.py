@@ -378,6 +378,20 @@ class RecordTab(QWidget):
         
         self.action_combo.blockSignals(False)
     
+    def _notify_parent_refresh(self):
+        """Notify parent window to refresh dropdowns"""
+        try:
+            # Walk up to find main window and refresh dashboard
+            parent = self.parent()
+            while parent:
+                if hasattr(parent, 'dashboard_tab'):
+                    parent.dashboard_tab.refresh_run_selector()
+                    print("[RECORD] ✓ Refreshed dashboard dropdown")
+                    break
+                parent = parent.parent()
+        except Exception as e:
+            print(f"[WARNING] Could not refresh parent: {e}")
+    
     def on_action_changed(self, name: str):
         """Handle action selection change"""
         if not name or name == "NewAction01":
@@ -394,25 +408,38 @@ class RecordTab(QWidget):
             self.status_label.setText(f"Loaded action: {name}")
     
     def load_action_to_table(self, action_data: dict):
-        """Load action data into table"""
+        """Load action data into table using new API"""
         self.table.setRowCount(0)
         self.position_counter = 1
         
-        positions = action_data.get("positions", [])
-        delays = action_data.get("delays", {})
+        action_type = action_data.get("type", "position")
+        speed = action_data.get("speed", 100)
         
-        for idx, pos_data in enumerate(positions):
-            self.table.add_position_row(
-                pos_data["name"],
-                pos_data["motor_positions"],
-                pos_data.get("velocity", 600)
-            )
-            
-            # Add delay if exists after this position
-            if str(idx) in delays:
-                self.table.add_delay_row(delays[str(idx)])
+        print(f"[LOAD] Loading {action_type} from file")
         
-        self.position_counter = len(positions) + 1
+        if action_type == "live_recording":
+            # Load live recording
+            recorded_data = action_data.get("recorded_data", [])
+            print(f"[LOAD] Live recording has {len(recorded_data)} points in file")
+            if recorded_data:
+                name = action_data.get("name", f"Recording {self.position_counter}")
+                self.table.add_live_recording(name, recorded_data, speed)
+                print(f"[LOAD] ✓ Added live recording to table: {name}")
+                self.position_counter += 1
+            else:
+                print(f"[LOAD] ⚠️ Warning: recorded_data is empty!")
+        else:
+            # Load positions
+            positions = action_data.get("positions", [])
+            print(f"[LOAD] Position recording has {len(positions)} positions")
+            for pos_data in positions:
+                if isinstance(pos_data, dict):
+                    name = pos_data.get("name", f"Position {self.position_counter}")
+                    motor_positions = pos_data.get("motor_positions", pos_data.get("positions", []))
+                    self.table.add_single_position(name, motor_positions, speed)
+                    self.position_counter += 1
+        
+        print(f"[LOAD] ✓ Loaded {action_type} with {self.position_counter - 1} item(s) in table")
     
     def record_position(self):
         """Record ONE single position action"""
@@ -504,8 +531,10 @@ class RecordTab(QWidget):
         self.save_btn.setEnabled(True)
         self.action_combo.setEnabled(True)
         
+        # Reset button state - CRITICAL FIX
         self.live_record_btn.setChecked(False)
         self.live_record_btn.setText("🔴 LIVE RECORD")
+        self.live_record_btn.setEnabled(True)  # Re-enable for next use!
         
         # Create ONE complete live recording action
         point_count = len(self.live_recorded_data)
@@ -524,9 +553,10 @@ class RecordTab(QWidget):
             self.status_label.setText("⚠️ No positions captured")
             print(f"[LIVE RECORD] ⚠️ No positions captured")
         
-        # Clear buffer
+        # Clear buffer for next recording
         self.live_recorded_data = []
         self.live_record_start_time = None
+        self.last_recorded_position = None  # Reset this too!
     
     def capture_live_position(self):
         """INDUSTRIAL precision position capture at 20Hz with timestamps
@@ -651,27 +681,98 @@ class RecordTab(QWidget):
             if not ok or not name:
                 return
         
-        # Get all data from table
-        positions, delays = self.table.get_all_data()
+        # Get all data from table - NEW FORMAT
+        actions = self.table.get_all_actions()
         
-        if not positions:
+        if not actions:
             self.status_label.setText("❌ No positions to save")
             return
         
-        # Save to file
-        success = self.actions_manager.save_action(name, positions, delays)
+        print(f"[SAVE] Got {len(actions)} action(s) from table:")
+        for i, action in enumerate(actions):
+            print(f"  [{i}] type={action['type']}, name={action['name']}")
+            if action['type'] == 'live_recording':
+                point_count = len(action.get('recorded_data', []))
+                print(f"      recorded_data has {point_count} points")
         
-        if success:
-            self.current_action_name = name
-            self.status_label.setText(f"✓ Saved action: {name}")
-            self.refresh_action_list()
-            
-            # Select the saved action
-            index = self.action_combo.findText(name)
-            if index >= 0:
-                self.action_combo.setCurrentIndex(index)
+        # Build recording data for new ActionsManager
+        # Determine type: if we have live recordings, use that; otherwise simple position
+        has_live_recording = any(action['type'] == 'live_recording' for action in actions)
+        
+        if has_live_recording and len(actions) == 1:
+            # Single live recording - save as live_recording
+            recorded_data = actions[0].get("recorded_data", [])
+            action_data = {
+                "type": "live_recording",
+                "speed": actions[0].get("speed", 100),
+                "recorded_data": recorded_data,
+                "delays": {}
+            }
+            print(f"[SAVE] Saving as live_recording with {len(recorded_data)} points")
         else:
-            self.status_label.setText("❌ Failed to save action")
+            # Multiple positions or mixed
+            positions_list = []
+            for action in actions:
+                if action['type'] == 'position':
+                    positions_list.append({
+                        "name": action['name'],
+                        "motor_positions": action['positions'],
+                        "velocity": 600
+                    })
+                elif action['type'] == 'live_recording':
+                    # For live recordings in a mixed sequence, use first position
+                    recorded_data = action.get('recorded_data', [])
+                    if recorded_data and len(recorded_data) > 0:
+                        first_pos = recorded_data[0]['positions']
+                        positions_list.append({
+                            "name": action['name'],
+                            "motor_positions": first_pos,
+                            "velocity": 600
+                        })
+            
+            action_data = {
+                "type": "position",
+                "speed": 100,
+                "positions": positions_list,
+                "delays": {}
+            }
+        
+        # Save to file using new API
+        try:
+            # Debug: Check what we're about to save
+            if action_data['type'] == 'live_recording':
+                print(f"[SAVE] About to save live_recording with {len(action_data['recorded_data'])} points")
+            
+            success = self.actions_manager.save_action(name, action_data)
+            
+            if success:
+                self.current_action_name = name
+                self.status_label.setText(f"✓ Saved: {name}")
+                
+                # Verify what was saved
+                verify_data = self.actions_manager.load_action(name)
+                if verify_data and verify_data['type'] == 'live_recording':
+                    saved_points = len(verify_data.get('recorded_data', []))
+                    print(f"[SAVE] ✓ Saved recording: {name} - VERIFIED {saved_points} points in file")
+                else:
+                    print(f"[SAVE] ✓ Saved recording: {name}")
+                
+                # Refresh dropdown AND signal parent to refresh dashboard
+                self.refresh_action_list()
+                self._notify_parent_refresh()
+                
+                # Select the saved action
+                index = self.action_combo.findText(name)
+                if index >= 0:
+                    self.action_combo.setCurrentIndex(index)
+            else:
+                self.status_label.setText("❌ Failed to save")
+                
+        except Exception as e:
+            import traceback
+            self.status_label.setText(f"❌ Save error")
+            print(f"[ERROR] Failed to save recording {name}: {e}")
+            print(traceback.format_exc())
     
     def toggle_playback(self):
         """Toggle between play and stop"""

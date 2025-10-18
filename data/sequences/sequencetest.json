@@ -1,0 +1,23 @@
+{
+  "name": "SequenceTest",
+  "steps": [
+    {
+      "checkpoint": "last",
+      "duration": 25.0,
+      "task": "GrabBlock1",
+      "type": "model"
+    },
+    {
+      "duration": 1.0,
+      "type": "delay"
+    }
+  ],
+  "loop": false,
+  "metadata": {
+    "created": "2025-10-18T17:59:40.159694+11:00",
+    "modified": "2025-10-18T17:59:40.159714+11:00",
+    "version": "1.0",
+    "file_format": "lerobot_sequence",
+    "step_count": 2
+  }
+}

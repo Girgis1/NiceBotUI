@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from robot_worker import RobotWorker
 from settings_dialog import SettingsDialog
+from utils.execution_manager import ExecutionWorker
 
 # Timezone
 TIMEZONE = pytz.timezone('Australia/Sydney')
@@ -134,8 +135,10 @@ class DashboardTab(QWidget):
         super().__init__(parent)
         self.config = config
         self.worker = None
+        self.execution_worker = None  # New unified execution worker
         self.start_time = None
         self.elapsed_seconds = 0
+        self.is_running = False
         
         self.init_ui()
         self.validate_config()
@@ -666,16 +669,229 @@ class DashboardTab(QWidget):
             self.stop_run()
     
     def start_run(self):
-        """Start robot run"""
+        """Start robot run - unified execution for models, recordings, and sequences"""
+        if self.is_running:
+            self.log_text.append("[warning] Already running")
+            return
+        
+        # Get selected item
+        selected = self.run_combo.currentText()
+        
+        if selected.startswith("--"):
+            self.log_text.append("[warning] No item selected")
+            self.start_stop_btn.setChecked(False)
+            return
+        
+        # Parse selection
+        execution_type, execution_name = self._parse_run_selection(selected)
+        
+        if not execution_type or not execution_name:
+            self.log_text.append("[error] Invalid selection")
+            self.start_stop_btn.setChecked(False)
+            return
+        
+        # Update UI
         self.start_stop_btn.setText("STOP")
-        self.log_text.append("[info] Starting robot...")
-        # Implementation from original app.py
+        self.is_running = True
+        self.start_time = datetime.now()
+        self.timer.start(1000)  # Update elapsed time every second
+        
+        self.log_text.append(f"[info] Starting {execution_type}: {execution_name}")
+        self.action_label.setText(f"Starting {execution_type}...")
+        
+        # Handle models separately (use RobotWorker directly to avoid nested threads)
+        if execution_type == "model":
+            self._start_model_execution(execution_name)
+        else:
+            # For recordings and sequences, use ExecutionWorker
+            self._start_execution_worker(execution_type, execution_name)
+    
+    def _start_model_execution(self, model_name: str):
+        """Start model execution using RobotWorker directly"""
+        # Get checkpoint path
+        checkpoint_name = self.checkpoint_combo.currentData() if self.checkpoint_combo.isVisible() else "last"
+        
+        try:
+            train_dir = Path(self.config["policy"].get("base_path", ""))
+            checkpoint_path = train_dir / model_name / "checkpoints" / checkpoint_name / "pretrained_model"
+            
+            # Update config for this run
+            model_config = self.config.copy()
+            model_config["policy"]["path"] = str(checkpoint_path)
+            
+            self.log_text.append(f"[info] Loading model: {checkpoint_path}")
+            
+            # Stop any existing worker first
+            if self.worker and self.worker.isRunning():
+                self.log_text.append("[warning] Stopping previous worker...")
+                self.worker.stop()
+                self.worker.wait(2000)
+            
+            # Create RobotWorker directly (not nested in another thread)
+            self.worker = RobotWorker(model_config)
+            
+            # Connect signals with error handling
+            self.worker.status_update.connect(self._on_status_update)
+            self.worker.log_message.connect(self._on_log_message)
+            self.worker.progress_update.connect(self._on_progress_update)
+            self.worker.run_completed.connect(self._on_model_completed)
+            self.worker.finished.connect(self._on_worker_thread_finished)
+            
+            # Start worker
+            self.worker.start()
+            
+        except Exception as e:
+            import traceback
+            self.log_text.append(f"[error] Failed to start model: {e}")
+            self.log_text.append(f"[error] Traceback: {traceback.format_exc()}")
+            self._reset_ui_after_run()
+    
+    def _start_execution_worker(self, execution_type: str, execution_name: str):
+        """Start ExecutionWorker for recordings and sequences"""
+        # Create and start execution worker
+        self.execution_worker = ExecutionWorker(
+            self.config,
+            execution_type,
+            execution_name,
+            {}
+        )
+        
+        # Connect signals
+        self.execution_worker.status_update.connect(self._on_status_update)
+        self.execution_worker.log_message.connect(self._on_log_message)
+        self.execution_worker.progress_update.connect(self._on_progress_update)
+        self.execution_worker.execution_completed.connect(self._on_execution_completed)
+        
+        # Start execution
+        self.execution_worker.start()
     
     def stop_run(self):
         """Stop robot run"""
-        self.start_stop_btn.setChecked(False)
-        self.start_stop_btn.setText("START")
-        self.log_text.append("[info] Stopping robot...")
+        if not self.is_running:
+            return
+        
+        self.log_text.append("[info] Stopping...")
+        self.action_label.setText("Stopping...")
+        
+        # Stop execution worker (for recordings/sequences)
+        if self.execution_worker and self.execution_worker.isRunning():
+            self.execution_worker.stop()
+            self.execution_worker.wait(5000)  # Wait up to 5 seconds
+        
+        # Stop robot worker (for models)
+        if self.worker and self.worker.isRunning():
+            self.worker.stop()
+            self.worker.wait(5000)  # Wait up to 5 seconds
+        
+        # Reset UI
+        self._reset_ui_after_run()
+    
+    def _parse_run_selection(self, selected: str) -> tuple:
+        """Parse run selection into (type, name)
+        
+        Returns:
+            ("model", "GrabBlock") or ("recording", "Grab Cup v1") or ("sequence", "Production Run")
+        """
+        if selected.startswith("🤖 Model:"):
+            return ("model", selected.replace("🤖 Model: ", ""))
+        elif selected.startswith("🔗 Sequence:"):
+            return ("sequence", selected.replace("🔗 Sequence: ", ""))
+        elif selected.startswith("🎬 Action:"):
+            # Note: "Action" in UI = "recording" in code
+            return ("recording", selected.replace("🎬 Action: ", ""))
+        else:
+            return (None, None)
+    
+    def _on_status_update(self, status: str):
+        """Handle status update from worker"""
+        self.action_label.setText(status)
+    
+    def _on_log_message(self, level: str, message: str):
+        """Handle log message from worker"""
+        self.log_text.append(f"[{level}] {message}")
+        # Auto-scroll to bottom
+        self.log_text.verticalScrollBar().setValue(
+            self.log_text.verticalScrollBar().maximum()
+        )
+    
+    def _on_progress_update(self, current: int, total: int):
+        """Handle progress update from worker"""
+        if total > 0:
+            progress = int((current / total) * 100)
+            # Could update a progress bar here if we add one
+    
+    def _on_execution_completed(self, success: bool, summary: str):
+        """Handle execution completion (for recordings/sequences)"""
+        self.log_text.append(f"[info] {'✓' if success else '✗'} {summary}")
+        
+        if success:
+            self.action_label.setText("✓ Completed")
+        else:
+            self.action_label.setText("✗ Failed")
+        
+        # Reset UI
+        self._reset_ui_after_run()
+    
+    def _on_model_completed(self, success: bool, summary: str):
+        """Handle model execution completion"""
+        try:
+            self.log_text.append(f"[info] {'✓' if success else '✗'} {summary}")
+            
+            if success:
+                self.action_label.setText("✓ Model completed")
+            else:
+                self.action_label.setText("✗ Model failed")
+                # Show user-friendly message
+                self.log_text.append("[info] Check robot connection and policy path")
+        except Exception as e:
+            self.log_text.append(f"[error] Error handling completion: {e}")
+        finally:
+            # Always reset UI, even if there's an error
+            self._reset_ui_after_run()
+    
+    def _on_worker_thread_finished(self):
+        """Handle worker thread finished (cleanup)"""
+        try:
+            self.log_text.append("[debug] Worker thread finished")
+            # Give worker time to clean up
+            if self.worker:
+                self.worker.deleteLater()
+        except Exception as e:
+            self.log_text.append(f"[error] Error in thread cleanup: {e}")
+    
+    def _reset_ui_after_run(self):
+        """Reset UI state after run completes or stops"""
+        try:
+            self.is_running = False
+            self.start_stop_btn.setChecked(False)
+            self.start_stop_btn.setText("START")
+            self.timer.stop()
+            
+            # Clean up execution worker (recordings/sequences)
+            if self.execution_worker:
+                try:
+                    if self.execution_worker.isRunning():
+                        self.execution_worker.quit()
+                        self.execution_worker.wait(1000)
+                except:
+                    pass
+                self.execution_worker = None
+            
+            # Clean up robot worker (models) - be very careful here
+            if self.worker:
+                try:
+                    if self.worker.isRunning():
+                        self.worker.quit()
+                        self.worker.wait(2000)
+                    # Mark for deletion but don't set to None yet
+                    # Let Qt handle the cleanup
+                    self.worker.deleteLater()
+                except Exception as e:
+                    self.log_text.append(f"[warning] Worker cleanup: {e}")
+                finally:
+                    self.worker = None
+        except Exception as e:
+            self.log_text.append(f"[error] Error resetting UI: {e}")
     
     def go_home(self):
         """Go to home position"""
@@ -701,16 +917,10 @@ class DashboardTab(QWidget):
             self.log_text.append(f"[error] Home error: {e}")
     
     def run_from_dashboard(self):
-        """Execute the selected RUN item"""
-        selected = self.run_combo.currentText()
-        
-        if selected.startswith("--"):
-            self.log_text.append("[warning] No item selected")
-            return
-        
-        self.action_label.setText(f"Running: {selected}")
-        self.log_text.append(f"[info] Running: {selected}")
-        # TODO: Implement actual execution
+        """Execute the selected RUN item (same as pressing START)"""
+        if not self.is_running:
+            self.start_stop_btn.setChecked(True)
+            self.start_run()
     
     
     def update_elapsed_time(self):

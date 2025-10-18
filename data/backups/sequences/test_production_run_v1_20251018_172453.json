@@ -1,0 +1,31 @@
+{
+  "name": "Test Production Run v1",
+  "steps": [
+    {
+      "type": "recording",
+      "name": "Test Grab Cup v1"
+    },
+    {
+      "type": "delay",
+      "duration": 2.0
+    },
+    {
+      "type": "recording",
+      "name": "Pick & Place!"
+    },
+    {
+      "type": "model",
+      "task": "GrabBlock",
+      "checkpoint": "last",
+      "duration": 25.0
+    }
+  ],
+  "loop": false,
+  "metadata": {
+    "created": "2025-10-18T17:24:53.480210+11:00",
+    "modified": "2025-10-18T17:24:53.480215+11:00",
+    "version": "1.0",
+    "file_format": "lerobot_sequence",
+    "step_count": 4
+  }
+}

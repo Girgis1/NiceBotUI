@@ -322,6 +322,20 @@ class SequenceTab(QWidget):
         
         self.sequence_combo.blockSignals(False)
     
+    def _notify_parent_refresh(self):
+        """Notify parent window to refresh dropdowns"""
+        try:
+            # Walk up to find main window and refresh dashboard
+            parent = self.parent()
+            while parent:
+                if hasattr(parent, 'dashboard_tab'):
+                    parent.dashboard_tab.refresh_run_selector()
+                    print("[SEQUENCE] ✓ Refreshed dashboard dropdown")
+                    break
+                parent = parent.parent()
+        except Exception as e:
+            print(f"[WARNING] Could not refresh parent: {e}")
+    
     def on_sequence_changed(self, name: str):
         """Handle sequence selection change"""
         if not name or name == "NewSequence01":
@@ -491,18 +505,23 @@ class SequenceTab(QWidget):
             self.status_label.setText("❌ No steps to save")
             return
         
-        success = self.sequences_manager.save_sequence(name, steps)
+        loop = self.loop_btn.isChecked() if hasattr(self, 'loop_btn') else False
+        success = self.sequences_manager.save_sequence(name, steps, loop)
         
         if success:
             self.current_sequence_name = name
-            self.status_label.setText(f"✓ Saved sequence: {name}")
+            self.status_label.setText(f"✓ Saved: {name}")
+            print(f"[SEQUENCE] ✓ Saved sequence: {name}")
+            
+            # Refresh dropdown AND signal parent to refresh dashboard
             self.refresh_sequence_list()
+            self._notify_parent_refresh()
             
             index = self.sequence_combo.findText(name)
             if index >= 0:
                 self.sequence_combo.setCurrentIndex(index)
         else:
-            self.status_label.setText("❌ Failed to save sequence")
+            self.status_label.setText("❌ Failed to save")
     
     def new_sequence(self):
         """Create a new sequence"""
