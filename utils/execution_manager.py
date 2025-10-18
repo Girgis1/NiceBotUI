@@ -10,6 +10,8 @@ ROBUST DESIGN:
 
 import time
 import sys
+import threading
+import subprocess
 from pathlib import Path
 from typing import Optional, Dict, List
 from PySide6.QtCore import QThread, Signal
@@ -751,10 +753,6 @@ class ExecutionWorker(QThread):
             duration: How long to run (seconds)
             num_episodes: Number of episodes to run
         """
-        import subprocess
-        import time
-        from pathlib import Path
-        
         try:
             # Clean up old eval folders
             self._cleanup_eval_folders()
@@ -798,7 +796,26 @@ class ExecutionWorker(QThread):
                 f"--policy.path={checkpoint_path}"
             ]
             
+            # Check if we have permissions to access the robot port
+            robot_port = robot_config.get('port', '/dev/ttyACM0')
+            if not Path(robot_port).exists():
+                self.log_message.emit('error', f"Robot port not found: {robot_port}")
+                self.log_message.emit('error', "Make sure the robot is connected")
+                return
+            
+            try:
+                # Test if we can access the port
+                test_result = subprocess.run(['test', '-r', robot_port, '-a', '-w', robot_port], 
+                                            capture_output=True, timeout=1)
+                if test_result.returncode != 0:
+                    self.log_message.emit('warning', f"No permission to access {robot_port}")
+                    self.log_message.emit('warning', f"Run: sudo chmod 666 {robot_port}")
+                    # Continue anyway - lerobot might handle this
+            except:
+                pass  # If test fails, continue anyway
+            
             self.log_message.emit('info', f"Starting local mode: {task} for {duration}s ({num_episodes} episode(s))")
+            self.log_message.emit('info', "Command: lerobot-record ...")
             
             # Start process with correct working directory
             process = subprocess.Popen(
@@ -810,19 +827,88 @@ class ExecutionWorker(QThread):
                 cwd=str(lerobot_dir)  # Run from lerobot directory
             )
             
-            # Wait for duration or stop request
+            # Read and log output in real-time
+            # This is CRITICAL - we must consume the pipe or it will block!
+            output_lines = []
+            def read_output():
+                """Read subprocess output line by line"""
+                try:
+                    for line in iter(process.stdout.readline, ''):
+                        if not line:
+                            break
+                        line = line.rstrip()
+                        output_lines.append(line)
+                        # Log important lines to GUI
+                        if 'INFO' in line or 'ERROR' in line or 'Traceback' in line:
+                            # Extract just the message part
+                            if 'INFO' in line:
+                                self.log_message.emit('info', f"[lerobot] {line.split('INFO')[-1].strip()}")
+                            elif 'ERROR' in line:
+                                self.log_message.emit('error', f"[lerobot] {line.split('ERROR')[-1].strip()}")
+                            elif 'Traceback' in line:
+                                self.log_message.emit('error', f"[lerobot] {line}")
+                except Exception as e:
+                    self.log_message.emit('warning', f"Output reading error: {e}")
+                finally:
+                    if process.stdout:
+                        process.stdout.close()
+            
+            # Start output reader thread
+            output_thread = threading.Thread(target=read_output, daemon=True)
+            output_thread.start()
+            
+            # Wait a moment for process to start
+            time.sleep(2)
+            
+            # Check if process started successfully
+            if process.poll() is not None:
+                exit_code = process.returncode
+                self.log_message.emit('error', f"lerobot-record failed to start (exit code: {exit_code})")
+                self.log_message.emit('error', "Check the logs above for details")
+                # Print last few lines of output
+                for line in output_lines[-10:]:
+                    print(f"[lerobot] {line}")
+                return
+            
+            self.log_message.emit('info', "✓ Process started, running...")
+            
+            # Calculate total runtime (num_episodes * episode_time + buffer)
+            total_time = (num_episodes * duration) + 10  # 10s buffer for startup/shutdown
+            
+            # Wait for process to complete or timeout
             start_time = time.time()
-            while time.time() - start_time < duration + 5:  # Add 5s buffer for startup/shutdown
-                if self._stop_requested or process.poll() is not None:
+            while time.time() - start_time < total_time:
+                if self._stop_requested:
+                    self.log_message.emit('warning', "Stopping by user request...")
                     break
+                
+                # Check if process finished
+                if process.poll() is not None:
+                    exit_code = process.returncode
+                    if exit_code == 0:
+                        self.log_message.emit('info', "✓ lerobot-record completed successfully")
+                    else:
+                        self.log_message.emit('error', f"lerobot-record failed with exit code {exit_code}")
+                        # Print last few lines of output
+                        for line in output_lines[-10:]:
+                            print(f"[lerobot] {line}")
+                    break
+                
                 time.sleep(0.5)
             
-            # Stop process
+            # If still running, terminate it
             if process.poll() is None:
+                self.log_message.emit('info', "Stopping lerobot-record...")
                 process.terminate()
-                process.wait(5)
-                if process.poll() is None:
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.log_message.emit('warning', "Force killing process...")
                     process.kill()
+                    process.wait()
+            
+            # Wait for output thread to finish
+            output_thread.join(timeout=2)
             
             self.log_message.emit('info', "✓ Local model execution completed")
             
@@ -854,10 +940,6 @@ class ExecutionWorker(QThread):
             return
         
         # Otherwise use server mode
-        import subprocess
-        import time
-        from pathlib import Path
-        
         try:
             # Get checkpoint path
             train_dir = Path(self.config["policy"].get("base_path", ""))
