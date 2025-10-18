@@ -130,23 +130,26 @@ class ActionTableWidget(DraggableTableWidget):
                 background-color: #c62828;
             }
         """)
-        delete_btn.clicked.connect(lambda checked, r=row: self._on_delete_clicked(r))
+        # Use lambda to pass button itself, not row number (which can change)
+        delete_btn.clicked.connect(lambda checked, btn=delete_btn: self._on_delete_clicked(btn))
         self.setCellWidget(row, 3, delete_btn)
     
-    def _on_delete_clicked(self, row: int):
-        """Handle delete button click - emit with CURRENT row index"""
-        print(f"[TABLE] Delete clicked, initial row: {row}")
-        # Find actual current row of the button
-        sender_btn = self.sender()
-        print(f"[TABLE] Sender button: {sender_btn}")
+    def _on_delete_clicked(self, button):
+        """Handle delete button click - find row and emit signal
         
+        Args:
+            button: The delete button that was clicked
+        """
+        print(f"[TABLE] Delete clicked, button: {button}")
+        
+        # Find which row contains this button
         for current_row in range(self.rowCount()):
-            if self.cellWidget(current_row, 3) == sender_btn:
+            if self.cellWidget(current_row, 3) == button:
                 print(f"[TABLE] Found button at row {current_row}, emitting delete_clicked signal")
                 self.delete_clicked.emit(current_row)
                 return
         
-        print(f"[TABLE] WARNING: Could not find sender button in table!")
+        print(f"[TABLE] WARNING: Could not find button in table!")
     
     def ensure_delete_buttons(self):
         """Ensure all rows have delete buttons after editing"""
