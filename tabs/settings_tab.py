@@ -197,52 +197,49 @@ class SettingsTab(QWidget):
         """Create robot settings tab - optimized for 1024x600 touchscreen"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(10)
+        layout.setContentsMargins(10, 8, 10, 8)  # Reduced margins
+        layout.setSpacing(6)  # Reduced spacing
         
         # ========== REST POSITION ROW ==========
         rest_section = QLabel("🏠 Rest Position")
-        rest_section.setStyleSheet("color: #4CAF50; font-size: 16px; font-weight: bold; margin-bottom: 5px;")
+        rest_section.setStyleSheet("color: #4CAF50; font-size: 14px; font-weight: bold; margin-bottom: 2px;")
         layout.addWidget(rest_section)
         
         rest_row = QHBoxLayout()
-        rest_row.setSpacing(8)
+        rest_row.setSpacing(6)
         
         self.set_rest_btn = QPushButton("Set Rest Pos")
-        self.set_rest_btn.setMinimumHeight(50)
-        self.set_rest_btn.setMaximumHeight(50)
+        self.set_rest_btn.setFixedHeight(45)
         self.set_rest_btn.setStyleSheet(self.get_button_style("#4CAF50", "#388E3C"))
         self.set_rest_btn.clicked.connect(self.set_rest_position)
         rest_row.addWidget(self.set_rest_btn)
         
         self.test_rest_btn = QPushButton("Test Rest Pos")
-        self.test_rest_btn.setMinimumHeight(50)
-        self.test_rest_btn.setMaximumHeight(50)
+        self.test_rest_btn.setFixedHeight(45)
         self.test_rest_btn.setStyleSheet(self.get_button_style("#2196F3", "#1976D2"))
         self.test_rest_btn.clicked.connect(self.test_rest_position)
         rest_row.addWidget(self.test_rest_btn)
         
         velocity_label = QLabel("Vel:")
-        velocity_label.setStyleSheet("color: #e0e0e0; font-size: 14px;")
-        velocity_label.setFixedWidth(35)
+        velocity_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
+        velocity_label.setFixedWidth(30)
         rest_row.addWidget(velocity_label)
         
         self.rest_velocity_spin = QSpinBox()
         self.rest_velocity_spin.setMinimum(50)
         self.rest_velocity_spin.setMaximum(2000)
         self.rest_velocity_spin.setValue(400)
-        self.rest_velocity_spin.setMinimumHeight(50)
-        self.rest_velocity_spin.setMaximumHeight(50)
-        self.rest_velocity_spin.setFixedWidth(80)
+        self.rest_velocity_spin.setFixedHeight(45)
+        self.rest_velocity_spin.setFixedWidth(75)
         self.rest_velocity_spin.setButtonSymbols(QSpinBox.NoButtons)
         self.rest_velocity_spin.setStyleSheet("""
             QSpinBox {
                 background-color: #505050;
                 color: #ffffff;
                 border: 2px solid #707070;
-                border-radius: 8px;
-                padding: 10px;
-                font-size: 15px;
+                border-radius: 6px;
+                padding: 8px;
+                font-size: 14px;
             }
             QSpinBox:focus {
                 border-color: #4CAF50;
@@ -252,28 +249,24 @@ class SettingsTab(QWidget):
         rest_row.addWidget(self.rest_velocity_spin)
         
         self.find_ports_btn = QPushButton("🔍 Find Ports")
-        self.find_ports_btn.setMinimumHeight(50)
-        self.find_ports_btn.setMaximumHeight(50)
+        self.find_ports_btn.setFixedHeight(45)
         self.find_ports_btn.setStyleSheet(self.get_button_style("#FF9800", "#F57C00"))
         self.find_ports_btn.clicked.connect(self.find_robot_ports)
         rest_row.addWidget(self.find_ports_btn)
         
         layout.addLayout(rest_row)
         
-        # Separator
-        separator1 = QFrame()
-        separator1.setFrameShape(QFrame.HLine)
-        separator1.setStyleSheet("background-color: #606060; margin: 10px 0;")
-        layout.addWidget(separator1)
+        # Spacer instead of separator
+        layout.addSpacing(8)
         
         # ========== ROBOT CONFIGURATION ==========
         config_section = QLabel("🤖 Robot Configuration")
-        config_section.setStyleSheet("color: #4CAF50; font-size: 16px; font-weight: bold; margin-bottom: 5px;")
+        config_section.setStyleSheet("color: #4CAF50; font-size: 14px; font-weight: bold; margin-bottom: 2px;")
         layout.addWidget(config_section)
         
         # Serial Port Row with Status Circle and Calibrate Button
         port_row = QHBoxLayout()
-        port_row.setSpacing(8)
+        port_row.setSpacing(6)
         
         # Status circle
         self.robot_status_circle = self.create_status_circle("empty")
@@ -281,22 +274,21 @@ class SettingsTab(QWidget):
         
         # Label
         port_label = QLabel("Serial Port:")
-        port_label.setStyleSheet("color: #e0e0e0; font-size: 14px;")
-        port_label.setFixedWidth(85)
+        port_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
+        port_label.setFixedWidth(75)
         port_row.addWidget(port_label)
         
         # Text field
         self.robot_port_edit = QLineEdit("/dev/ttyACM0")
-        self.robot_port_edit.setMinimumHeight(50)
-        self.robot_port_edit.setMaximumHeight(50)
+        self.robot_port_edit.setFixedHeight(45)
         self.robot_port_edit.setStyleSheet("""
             QLineEdit {
                 background-color: #505050;
                 color: #ffffff;
                 border: 2px solid #707070;
-                border-radius: 8px;
-                padding: 10px;
-                font-size: 15px;
+                border-radius: 6px;
+                padding: 8px;
+                font-size: 14px;
             }
             QLineEdit:focus {
                 border-color: #4CAF50;
@@ -307,9 +299,8 @@ class SettingsTab(QWidget):
         
         # Calibrate button
         self.calibrate_btn = QPushButton("⚙️ Calibrate")
-        self.calibrate_btn.setMinimumHeight(50)
-        self.calibrate_btn.setMaximumHeight(50)
-        self.calibrate_btn.setFixedWidth(130)
+        self.calibrate_btn.setFixedHeight(45)
+        self.calibrate_btn.setFixedWidth(120)
         self.calibrate_btn.setStyleSheet(self.get_button_style("#9C27B0", "#7B1FA2"))
         self.calibrate_btn.clicked.connect(self.calibrate_arm)
         port_row.addWidget(self.calibrate_btn)
@@ -318,31 +309,30 @@ class SettingsTab(QWidget):
         
         # Hertz Row
         hertz_row = QHBoxLayout()
-        hertz_row.setSpacing(8)
+        hertz_row.setSpacing(6)
         
         # Empty space for alignment (20px for status circle)
         hertz_row.addSpacing(20)
         
         hertz_label = QLabel("Hertz:")
-        hertz_label.setStyleSheet("color: #e0e0e0; font-size: 14px;")
-        hertz_label.setFixedWidth(85)
+        hertz_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
+        hertz_label.setFixedWidth(75)
         hertz_row.addWidget(hertz_label)
         
         self.robot_fps_spin = QSpinBox()
         self.robot_fps_spin.setMinimum(1)
         self.robot_fps_spin.setMaximum(120)
         self.robot_fps_spin.setValue(30)
-        self.robot_fps_spin.setMinimumHeight(50)
-        self.robot_fps_spin.setMaximumHeight(50)
+        self.robot_fps_spin.setFixedHeight(45)
         self.robot_fps_spin.setButtonSymbols(QSpinBox.NoButtons)
         self.robot_fps_spin.setStyleSheet("""
             QSpinBox {
                 background-color: #505050;
                 color: #ffffff;
                 border: 2px solid #707070;
-                border-radius: 8px;
-                padding: 10px;
-                font-size: 15px;
+                border-radius: 6px;
+                padding: 8px;
+                font-size: 14px;
             }
             QSpinBox:focus {
                 border-color: #4CAF50;
@@ -354,15 +344,12 @@ class SettingsTab(QWidget):
         
         layout.addLayout(hertz_row)
         
-        # Separator
-        separator2 = QFrame()
-        separator2.setFrameShape(QFrame.HLine)
-        separator2.setStyleSheet("background-color: #606060; margin: 10px 0;")
-        layout.addWidget(separator2)
+        # Spacer instead of separator
+        layout.addSpacing(8)
         
         # Teleop Port
         teleop_section = QLabel("🎮 Teleoperation")
-        teleop_section.setStyleSheet("color: #4CAF50; font-size: 16px; font-weight: bold; margin-bottom: 5px;")
+        teleop_section.setStyleSheet("color: #4CAF50; font-size: 14px; font-weight: bold; margin-bottom: 2px;")
         layout.addWidget(teleop_section)
         
         self.teleop_port_edit = self.add_setting_row(layout, "Teleop Port:", "/dev/ttyACM1")
@@ -418,17 +405,17 @@ class SettingsTab(QWidget):
         """Create camera settings tab - optimized for 1024x600 touchscreen"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(10)
+        layout.setContentsMargins(10, 8, 10, 8)  # Reduced margins
+        layout.setSpacing(6)  # Reduced spacing
         
         # ========== CAMERA DETECTION ==========
         detect_section = QLabel("🎥 Camera Configuration")
-        detect_section.setStyleSheet("color: #4CAF50; font-size: 16px; font-weight: bold; margin-bottom: 5px;")
+        detect_section.setStyleSheet("color: #4CAF50; font-size: 14px; font-weight: bold; margin-bottom: 2px;")
         layout.addWidget(detect_section)
         
         # Front Camera Row with Status Circle and Find Button
         front_row = QHBoxLayout()
-        front_row.setSpacing(8)
+        front_row.setSpacing(6)
         
         # Status circle
         self.camera_front_circle = self.create_status_circle("empty")
@@ -436,22 +423,21 @@ class SettingsTab(QWidget):
         
         # Label
         front_label = QLabel("Front:")
-        front_label.setStyleSheet("color: #e0e0e0; font-size: 14px;")
-        front_label.setFixedWidth(60)
+        front_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
+        front_label.setFixedWidth(55)
         front_row.addWidget(front_label)
         
         # Text field
         self.cam_front_edit = QLineEdit("/dev/video1")
-        self.cam_front_edit.setMinimumHeight(50)
-        self.cam_front_edit.setMaximumHeight(50)
+        self.cam_front_edit.setFixedHeight(45)
         self.cam_front_edit.setStyleSheet("""
             QLineEdit {
                 background-color: #505050;
                 color: #ffffff;
                 border: 2px solid #707070;
-                border-radius: 8px;
-                padding: 10px;
-                font-size: 15px;
+                border-radius: 6px;
+                padding: 8px;
+                font-size: 14px;
             }
             QLineEdit:focus {
                 border-color: #4CAF50;
@@ -462,9 +448,8 @@ class SettingsTab(QWidget):
         
         # Find button (only on first row)
         self.find_cameras_btn = QPushButton("🔍 Find Cameras")
-        self.find_cameras_btn.setMinimumHeight(50)
-        self.find_cameras_btn.setMaximumHeight(50)
-        self.find_cameras_btn.setFixedWidth(150)
+        self.find_cameras_btn.setFixedHeight(45)
+        self.find_cameras_btn.setFixedWidth(140)
         self.find_cameras_btn.setStyleSheet(self.get_button_style("#FF9800", "#F57C00"))
         self.find_cameras_btn.clicked.connect(self.find_cameras)
         front_row.addWidget(self.find_cameras_btn)
@@ -473,7 +458,7 @@ class SettingsTab(QWidget):
         
         # Wrist Camera Row with Status Circle
         wrist_row = QHBoxLayout()
-        wrist_row.setSpacing(8)
+        wrist_row.setSpacing(6)
         
         # Status circle
         self.camera_wrist_circle = self.create_status_circle("empty")
@@ -481,22 +466,21 @@ class SettingsTab(QWidget):
         
         # Label
         wrist_label = QLabel("Wrist:")
-        wrist_label.setStyleSheet("color: #e0e0e0; font-size: 14px;")
-        wrist_label.setFixedWidth(60)
+        wrist_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
+        wrist_label.setFixedWidth(55)
         wrist_row.addWidget(wrist_label)
         
         # Text field
         self.cam_wrist_edit = QLineEdit("/dev/video3")
-        self.cam_wrist_edit.setMinimumHeight(50)
-        self.cam_wrist_edit.setMaximumHeight(50)
+        self.cam_wrist_edit.setFixedHeight(45)
         self.cam_wrist_edit.setStyleSheet("""
             QLineEdit {
                 background-color: #505050;
                 color: #ffffff;
                 border: 2px solid #707070;
-                border-radius: 8px;
-                padding: 10px;
-                font-size: 15px;
+                border-radius: 6px;
+                padding: 8px;
+                font-size: 14px;
             }
             QLineEdit:focus {
                 border-color: #4CAF50;
@@ -505,20 +489,17 @@ class SettingsTab(QWidget):
         """)
         wrist_row.addWidget(self.cam_wrist_edit)
         
-        # Empty space for alignment (150px for Find button)
-        wrist_row.addSpacing(150)
+        # Empty space for alignment (140px for Find button)
+        wrist_row.addSpacing(140)
         
         layout.addLayout(wrist_row)
         
-        # Separator
-        separator_cam = QFrame()
-        separator_cam.setFrameShape(QFrame.HLine)
-        separator_cam.setStyleSheet("background-color: #606060; margin: 10px 0;")
-        layout.addWidget(separator_cam)
+        # Spacer instead of separator
+        layout.addSpacing(8)
         
         # ========== CAMERA SETTINGS ==========
         settings_section = QLabel("⚙️ Camera Properties")
-        settings_section.setStyleSheet("color: #4CAF50; font-size: 16px; font-weight: bold; margin-bottom: 5px;")
+        settings_section.setStyleSheet("color: #4CAF50; font-size: 14px; font-weight: bold; margin-bottom: 2px;")
         layout.addWidget(settings_section)
         
         self.cam_width_spin = self.add_spinbox_row(layout, "Width:", 320, 1920, 640)
