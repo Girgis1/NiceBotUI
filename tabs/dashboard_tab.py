@@ -36,6 +36,7 @@ class CircularProgress(QWidget):
         super().__init__(parent)
         self.progress = 0
         self.setFixedSize(24, 24)
+        self.setVisible(False)  # Hidden by default, shown when running
     
     def set_progress(self, value):
         self.progress = value
@@ -68,16 +69,19 @@ class StatusIndicator(QLabel):
         super().__init__(text, parent)
         self.connected = False
         self.warning = False
+        self.null = False  # Initialize null attribute
         self.update_style()
     
     def set_connected(self, connected):
         self.connected = connected
         self.warning = False
+        self.null = False  # Clear null state when setting connected
         self.update_style()
     
     def set_warning(self):
         self.connected = False
         self.warning = True
+        self.null = False  # Clear null state when setting warning
         self.update_style()
     
     def set_null(self):
@@ -156,14 +160,15 @@ class DashboardTab(QWidget):
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_elapsed_time)
         
-        self.connection_check_timer = QTimer()
-        self.connection_check_timer.timeout.connect(self.check_connections_background)
-        self.connection_check_timer.start(10000)
+        # Connection checking is now handled by device_manager
+        # self.connection_check_timer = QTimer()
+        # self.connection_check_timer.timeout.connect(self.check_connections_background)
+        # self.connection_check_timer.start(10000)
         
         self.throbber_progress = 0
         self.throbber_update_timer = QTimer()
         self.throbber_update_timer.timeout.connect(self.update_throbber_progress)
-        self.throbber_update_timer.start(100)
+        # Don't start throbber timer until we actually need it
     
     def init_ui(self):
         """Initialize UI - same as original app.py"""
@@ -704,31 +709,14 @@ class DashboardTab(QWidget):
             self.episodes_spin.setValue(self.saved_runs_value)  # Restore saved value
     
     def validate_config(self):
-        """Validate configuration"""
-        # Check robot port
-        port = self.config["robot"]["port"]
-        if not os.path.exists(port):
-            self.robot_indicator1.set_connected(False)
-        else:
-            self.robot_indicator1.set_connected(True)
+        """Validate configuration
         
-        # Check cameras
-        camera_count = 0
-        try:
-            import cv2
-            cameras = self.config.get("cameras", {})
-            for cam_name, cam_config in cameras.items():
-                cam_idx = cam_config.get("index_or_path", 0)
-                cap = cv2.VideoCapture(cam_idx)
-                if cap.isOpened():
-                    camera_count += 1
-                cap.release()
-        except:
-            pass
-        
-        self.camera_indicator1.set_connected(camera_count >= 1)
-        self.camera_indicator2.set_connected(camera_count >= 2)
-        self.camera_indicator3.set_connected(camera_count >= 3)
+        NOTE: Status indicators are now managed by device_manager
+        This method is kept for backwards compatibility but doesn't update indicators
+        """
+        # Status indicators are now updated by device_manager signals
+        # We don't override them here to avoid conflicts
+        pass
     
     def update_throbber_progress(self):
         """Update throbber"""
@@ -738,10 +726,9 @@ class DashboardTab(QWidget):
         self.throbber.set_progress(self.throbber_progress)
     
     def check_connections_background(self):
-        """Check connections"""
-        if self.worker and self.worker.isRunning():
-            return
-        self.validate_config()
+        """Check connections - now handled by device_manager"""
+        # Connection checking is now centralized in device_manager
+        pass
     
     
     def toggle_start_stop(self):
@@ -778,6 +765,10 @@ class DashboardTab(QWidget):
         self.is_running = True
         self.start_time = datetime.now()
         self.timer.start(1000)  # Update elapsed time every second
+        
+        # Show and start throbber
+        self.throbber.setVisible(True)
+        self.throbber_update_timer.start(100)
         
         self.log_text.append(f"[info] Starting {execution_type}: {execution_name}")
         self.action_label.setText(f"Starting {execution_type}...")
@@ -996,6 +987,12 @@ class DashboardTab(QWidget):
             self.start_stop_btn.setChecked(False)
             self.start_stop_btn.setText("START")
             self.timer.stop()
+            
+            # Hide and stop throbber
+            self.throbber.setVisible(False)
+            self.throbber_update_timer.stop()
+            self.throbber_progress = 0
+            self.throbber.set_progress(0)
             
             # Clean up execution worker (recordings/sequences)
             if self.execution_worker:
