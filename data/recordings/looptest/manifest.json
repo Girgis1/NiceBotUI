@@ -32,8 +32,8 @@
       "step_id": "step_003",
       "step_number": 3,
       "type": "position_set",
-      "name": "Position 3",
-      "file": "03_position_3_positions.json",
+      "name": "Position 4",
+      "file": "03_position_4_positions.json",
       "speed": 100,
       "enabled": true,
       "delay_before": 0.0,
@@ -42,8 +42,8 @@
     }
   ],
   "metadata": {
-    "created": "2025-10-18T23:40:35.323882+11:00",
-    "modified": "2025-10-18T23:40:35.326083+11:00",
+    "created": "2025-10-19T10:41:27.246723+11:00",
+    "modified": "2025-10-19T10:41:27.247264+11:00",
     "total_steps": 3
   }
 }

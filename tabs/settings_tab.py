@@ -154,6 +154,101 @@ class SettingsTab(QWidget):
         layout.setContentsMargins(15, 15, 15, 15)
         layout.setSpacing(12)
         
+        # Rest Position Controls - TOP PRIORITY
+        rest_section = QLabel("🏠 Rest Position")
+        rest_section.setStyleSheet("color: #4CAF50; font-size: 16px; font-weight: bold; margin-top: 5px; margin-bottom: 5px;")
+        layout.addWidget(rest_section)
+        
+        rest_row = QHBoxLayout()
+        rest_row.setSpacing(10)
+        
+        self.set_rest_btn = QPushButton("Set Rest Pos")
+        self.set_rest_btn.setMinimumHeight(50)
+        self.set_rest_btn.setStyleSheet(self.get_button_style("#4CAF50", "#388E3C"))
+        self.set_rest_btn.clicked.connect(self.set_rest_position)
+        rest_row.addWidget(self.set_rest_btn)
+        
+        self.test_rest_btn = QPushButton("Test Rest Pos")
+        self.test_rest_btn.setMinimumHeight(50)
+        self.test_rest_btn.setStyleSheet(self.get_button_style("#2196F3", "#1976D2"))
+        self.test_rest_btn.clicked.connect(self.test_rest_position)
+        rest_row.addWidget(self.test_rest_btn)
+        
+        velocity_label = QLabel("Velocity:")
+        velocity_label.setStyleSheet("color: #e0e0e0; font-size: 15px; margin-left: 15px;")
+        rest_row.addWidget(velocity_label)
+        
+        self.rest_velocity_spin = QSpinBox()
+        self.rest_velocity_spin.setMinimum(50)
+        self.rest_velocity_spin.setMaximum(2000)
+        self.rest_velocity_spin.setValue(400)
+        self.rest_velocity_spin.setMinimumHeight(50)
+        self.rest_velocity_spin.setMinimumWidth(100)
+        self.rest_velocity_spin.setButtonSymbols(QSpinBox.NoButtons)
+        self.rest_velocity_spin.setStyleSheet("""
+            QSpinBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 10px;
+                font-size: 15px;
+            }
+            QSpinBox:focus {
+                border-color: #4CAF50;
+                background-color: #555555;
+            }
+        """)
+        rest_row.addWidget(self.rest_velocity_spin)
+        rest_row.addStretch()
+        
+        layout.addLayout(rest_row)
+        
+        # Separator
+        separator1 = QFrame()
+        separator1.setFrameShape(QFrame.HLine)
+        separator1.setStyleSheet("background-color: #606060; margin: 15px 0;")
+        layout.addWidget(separator1)
+        
+        # Port Detection
+        port_section = QLabel("🔌 Port Detection")
+        port_section.setStyleSheet("color: #4CAF50; font-size: 16px; font-weight: bold; margin-top: 5px; margin-bottom: 5px;")
+        layout.addWidget(port_section)
+        
+        self.find_ports_btn = QPushButton("🔍 Find Robot Ports")
+        self.find_ports_btn.setMinimumHeight(50)
+        self.find_ports_btn.setStyleSheet(self.get_button_style("#FF9800", "#F57C00"))
+        self.find_ports_btn.clicked.connect(self.find_robot_ports)
+        layout.addWidget(self.find_ports_btn)
+        
+        # Separator
+        separator2 = QFrame()
+        separator2.setFrameShape(QFrame.HLine)
+        separator2.setStyleSheet("background-color: #606060; margin: 15px 0;")
+        layout.addWidget(separator2)
+        
+        # Calibration
+        calib_section = QLabel("📐 Calibration")
+        calib_section.setStyleSheet("color: #4CAF50; font-size: 16px; font-weight: bold; margin-top: 5px; margin-bottom: 5px;")
+        layout.addWidget(calib_section)
+        
+        self.calibrate_btn = QPushButton("⚙️ Calibrate Arm")
+        self.calibrate_btn.setMinimumHeight(50)
+        self.calibrate_btn.setStyleSheet(self.get_button_style("#9C27B0", "#7B1FA2"))
+        self.calibrate_btn.clicked.connect(self.calibrate_arm)
+        layout.addWidget(self.calibrate_btn)
+        
+        # Separator
+        separator3 = QFrame()
+        separator3.setFrameShape(QFrame.HLine)
+        separator3.setStyleSheet("background-color: #606060; margin: 15px 0;")
+        layout.addWidget(separator3)
+        
+        # Existing Settings
+        settings_section = QLabel("⚙️ Settings")
+        settings_section.setStyleSheet("color: #4CAF50; font-size: 16px; font-weight: bold; margin-top: 5px; margin-bottom: 5px;")
+        layout.addWidget(settings_section)
+        
         self.robot_port_edit = self.add_setting_row(layout, "Serial Port:", "/dev/ttyACM0")
         self.robot_fps_spin = self.add_spinbox_row(layout, "FPS:", 1, 120, 30)
         self.teleop_port_edit = self.add_setting_row(layout, "Teleop Port:", "/dev/ttyACM1")
@@ -211,6 +306,28 @@ class SettingsTab(QWidget):
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(15, 15, 15, 15)
         layout.setSpacing(12)
+        
+        # Camera Detection
+        detect_section = QLabel("🎥 Camera Detection")
+        detect_section.setStyleSheet("color: #4CAF50; font-size: 16px; font-weight: bold; margin-top: 5px; margin-bottom: 5px;")
+        layout.addWidget(detect_section)
+        
+        self.find_cameras_btn = QPushButton("🔍 Find Cameras")
+        self.find_cameras_btn.setMinimumHeight(50)
+        self.find_cameras_btn.setStyleSheet(self.get_button_style("#FF9800", "#F57C00"))
+        self.find_cameras_btn.clicked.connect(self.find_cameras)
+        layout.addWidget(self.find_cameras_btn)
+        
+        # Separator
+        separator_cam = QFrame()
+        separator_cam.setFrameShape(QFrame.HLine)
+        separator_cam.setStyleSheet("background-color: #606060; margin: 15px 0;")
+        layout.addWidget(separator_cam)
+        
+        # Camera Settings
+        settings_section = QLabel("⚙️ Camera Settings")
+        settings_section.setStyleSheet("color: #4CAF50; font-size: 16px; font-weight: bold; margin-top: 5px; margin-bottom: 5px;")
+        layout.addWidget(settings_section)
         
         self.cam_front_edit = self.add_setting_row(layout, "Front Camera:", "/dev/video1")
         self.cam_wrist_edit = self.add_setting_row(layout, "Wrist Camera:", "/dev/video3")
@@ -542,3 +659,454 @@ class SettingsTab(QWidget):
         
         self.status_label.setText("⚠️ Defaults loaded. Click Save to apply.")
         self.status_label.setStyleSheet("QLabel { color: #FF9800; font-size: 15px; padding: 8px; }")
+    
+    # ========== REST POSITION METHODS ==========
+    
+    def set_rest_position(self):
+        """Read current motor positions and save as rest position"""
+        try:
+            from utils.motor_controller import MotorController
+            
+            self.status_label.setText("⏳ Reading motor positions...")
+            self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
+            
+            # Initialize motor controller
+            motor_config = self.config.get("robot", {})
+            motor_controller = MotorController(motor_config)
+            
+            # Connect and read positions
+            if not motor_controller.connect():
+                self.status_label.setText("❌ Failed to connect to motors")
+                self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+                return
+            
+            positions = motor_controller.read_positions()
+            motor_controller.disconnect()
+            
+            if positions is None:
+                self.status_label.setText("❌ Failed to read motor positions")
+                self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+                return
+            
+            # Save to config
+            if "rest_position" not in self.config:
+                self.config["rest_position"] = {}
+            
+            self.config["rest_position"]["positions"] = positions
+            self.config["rest_position"]["velocity"] = self.rest_velocity_spin.value()
+            
+            # Write to file
+            with open(self.config_path, 'w') as f:
+                json.dump(self.config, f, indent=2)
+            
+            self.status_label.setText(f"✓ Rest position saved: {positions}")
+            self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+            self.config_changed.emit()
+            
+        except Exception as e:
+            self.status_label.setText(f"❌ Error: {str(e)}")
+            self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+    
+    def test_rest_position(self):
+        """Move arm to saved rest position"""
+        try:
+            from utils.motor_controller import MotorController
+            
+            # Check if rest position exists
+            rest_config = self.config.get("rest_position", {})
+            rest_positions = rest_config.get("positions")
+            
+            if not rest_positions:
+                self.status_label.setText("❌ No rest position saved. Click 'Set Rest Pos' first.")
+                self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+                return
+            
+            self.status_label.setText("⏳ Moving to rest position...")
+            self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
+            
+            # Initialize motor controller
+            motor_config = self.config.get("robot", {})
+            motor_controller = MotorController(motor_config)
+            
+            # Connect and move
+            if not motor_controller.connect():
+                self.status_label.setText("❌ Failed to connect to motors")
+                self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+                return
+            
+            velocity = self.rest_velocity_spin.value()
+            motor_controller.set_positions(
+                rest_positions,
+                velocity=velocity,
+                wait=True,
+                keep_connection=False
+            )
+            
+            self.status_label.setText(f"✓ Moved to rest position at velocity {velocity}")
+            self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+            
+        except Exception as e:
+            self.status_label.setText(f"❌ Error: {str(e)}")
+            self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+    
+    # ========== PORT DETECTION METHODS ==========
+    
+    def find_robot_ports(self):
+        """Scan serial ports and detect robot arms"""
+        try:
+            import serial.tools.list_ports
+            from utils.motor_controller import MotorController
+            
+            self.status_label.setText("⏳ Scanning serial ports...")
+            self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
+            
+            # Scan all serial ports
+            ports = serial.tools.list_ports.comports()
+            found_robots = []
+            
+            for port in ports:
+                port_name = port.device
+                
+                # Only test ttyACM* and ttyUSB* devices
+                if not ('ttyACM' in port_name or 'ttyUSB' in port_name):
+                    continue
+                
+                # Try to connect and detect robot
+                try:
+                    test_config = self.config.get("robot", {}).copy()
+                    test_config["port"] = port_name
+                    motor_controller = MotorController(test_config)
+                    
+                    if motor_controller.connect():
+                        # Try to read positions (confirms it's a robot)
+                        positions = motor_controller.read_positions()
+                        motor_controller.disconnect()
+                        
+                        if positions:
+                            motor_count = len(positions)
+                            found_robots.append({
+                                "port": port_name,
+                                "motors": motor_count,
+                                "description": port.description
+                            })
+                except:
+                    pass  # Not a robot, continue scanning
+            
+            # Display results
+            if found_robots:
+                from PySide6.QtWidgets import QDialog, QVBoxLayout, QRadioButton, QButtonGroup, QPushButton
+                
+                dialog = QDialog(self)
+                dialog.setWindowTitle("Found Robot Ports")
+                dialog.setMinimumWidth(500)
+                dialog.setStyleSheet("QDialog { background-color: #2a2a2a; }")
+                
+                layout = QVBoxLayout(dialog)
+                
+                title = QLabel(f"✓ Found {len(found_robots)} robot(s):")
+                title.setStyleSheet("color: #4CAF50; font-size: 16px; font-weight: bold; padding: 10px;")
+                layout.addWidget(title)
+                
+                button_group = QButtonGroup(dialog)
+                
+                for robot in found_robots:
+                    radio = QRadioButton(f"{robot['port']} - {robot['motors']} motors - {robot['description']}")
+                    radio.setStyleSheet("QRadioButton { color: #e0e0e0; font-size: 14px; padding: 5px; }")
+                    radio.setProperty("port", robot['port'])
+                    button_group.addButton(radio)
+                    layout.addWidget(radio)
+                
+                # Select first by default
+                if button_group.buttons():
+                    button_group.buttons()[0].setChecked(True)
+                
+                # Buttons
+                btn_layout = QHBoxLayout()
+                btn_layout.addStretch()
+                
+                cancel_btn = QPushButton("Cancel")
+                cancel_btn.setStyleSheet(self.get_button_style("#909090", "#707070"))
+                cancel_btn.clicked.connect(dialog.reject)
+                btn_layout.addWidget(cancel_btn)
+                
+                select_btn = QPushButton("Select")
+                select_btn.setStyleSheet(self.get_button_style("#4CAF50", "#388E3C"))
+                select_btn.clicked.connect(dialog.accept)
+                btn_layout.addWidget(select_btn)
+                
+                layout.addLayout(btn_layout)
+                
+                if dialog.exec() == QDialog.Accepted:
+                    # Get selected port
+                    for button in button_group.buttons():
+                        if button.isChecked():
+                            selected_port = button.property("port")
+                            self.robot_port_edit.setText(selected_port)
+                            self.status_label.setText(f"✓ Selected: {selected_port}")
+                            self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+                            break
+            else:
+                self.status_label.setText("❌ No robot arms found on serial ports")
+                self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+                
+        except Exception as e:
+            self.status_label.setText(f"❌ Error: {str(e)}")
+            self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+    
+    # ========== CALIBRATION METHODS ==========
+    
+    def calibrate_arm(self):
+        """Run arm calibration sequence"""
+        try:
+            from utils.motor_controller import MotorController
+            from PySide6.QtWidgets import QMessageBox
+            
+            # Warning dialog
+            reply = QMessageBox.warning(
+                self,
+                "Calibration Warning",
+                "⚠️ This will move the arm through its full range of motion.\n\n"
+                "Please ensure:\n"
+                "• Workspace is clear\n"
+                "• Arm can move freely\n"
+                "• Emergency stop is accessible\n\n"
+                "Continue with calibration?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            
+            if reply != QMessageBox.Yes:
+                return
+            
+            self.status_label.setText("⏳ Starting calibration...")
+            self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
+            
+            # Initialize motor controller
+            motor_config = self.config.get("robot", {})
+            motor_controller = MotorController(motor_config)
+            
+            if not motor_controller.connect():
+                self.status_label.setText("❌ Failed to connect to motors")
+                self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+                return
+            
+            # Step 1: Read current positions (starting point)
+            self.status_label.setText("⏳ Step 1/3: Reading current positions...")
+            current_positions = motor_controller.read_positions()
+            
+            if not current_positions:
+                self.status_label.setText("❌ Failed to read positions")
+                self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+                motor_controller.disconnect()
+                return
+            
+            # Step 2: Move to home position (2048 - middle for SO-100/SO-101)
+            self.status_label.setText("⏳ Step 2/3: Moving to home position...")
+            home_positions = [2048] * len(current_positions)
+            motor_controller.set_positions(home_positions, velocity=400, wait=True, keep_connection=True)
+            
+            # Step 3: Test range (gentle movement)
+            self.status_label.setText("⏳ Step 3/3: Testing joint range...")
+            import time
+            
+            # Small range test - move each joint slightly
+            for i in range(len(current_positions)):
+                test_positions = home_positions.copy()
+                # Move joint +/- 200 units
+                test_positions[i] = 2248
+                motor_controller.set_positions(test_positions, velocity=300, wait=True, keep_connection=True)
+                time.sleep(0.5)
+                test_positions[i] = 1848
+                motor_controller.set_positions(test_positions, velocity=300, wait=True, keep_connection=True)
+                time.sleep(0.5)
+                # Return to home
+                motor_controller.set_positions(home_positions, velocity=300, wait=True, keep_connection=True)
+            
+            # Save calibration data
+            if "calibration" not in self.config:
+                self.config["calibration"] = {}
+            
+            self.config["calibration"]["home_positions"] = home_positions
+            self.config["calibration"]["calibrated"] = True
+            self.config["calibration"]["date"] = str(Path(__file__).stat().st_mtime)
+            
+            # Write to file
+            with open(self.config_path, 'w') as f:
+                json.dump(self.config, f, indent=2)
+            
+            motor_controller.disconnect()
+            
+            self.status_label.setText("✓ Calibration complete!")
+            self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+            self.config_changed.emit()
+            
+        except Exception as e:
+            self.status_label.setText(f"❌ Error: {str(e)}")
+            self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+    
+    # ========== CAMERA DETECTION METHODS ==========
+    
+    def find_cameras(self):
+        """Scan for available cameras"""
+        try:
+            import cv2
+            from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QRadioButton, QButtonGroup, QPushButton, QComboBox
+            from PySide6.QtGui import QImage, QPixmap
+            from PySide6.QtCore import QTimer
+            
+            self.status_label.setText("⏳ Scanning for cameras...")
+            self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
+            
+            # Scan /dev/video* devices (0-9)
+            found_cameras = []
+            
+            for i in range(10):
+                try:
+                    cap = cv2.VideoCapture(i)
+                    if cap.isOpened():
+                        # Try to read a frame to confirm it's working
+                        ret, frame = cap.read()
+                        if ret:
+                            height, width = frame.shape[:2]
+                            found_cameras.append({
+                                "index": i,
+                                "path": f"/dev/video{i}",
+                                "resolution": f"{width}x{height}",
+                                "capture": cap  # Keep for preview
+                            })
+                        else:
+                            cap.release()
+                    else:
+                        cap.release()
+                except:
+                    pass
+            
+            if not found_cameras:
+                self.status_label.setText("❌ No cameras found")
+                self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+                return
+            
+            # Create selection dialog with preview
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Found Cameras")
+            dialog.setMinimumWidth(600)
+            dialog.setMinimumHeight(500)
+            dialog.setStyleSheet("QDialog { background-color: #2a2a2a; }")
+            
+            layout = QVBoxLayout(dialog)
+            
+            title = QLabel(f"✓ Found {len(found_cameras)} camera(s):")
+            title.setStyleSheet("color: #4CAF50; font-size: 16px; font-weight: bold; padding: 10px;")
+            layout.addWidget(title)
+            
+            # Camera list
+            camera_list = QComboBox()
+            camera_list.setStyleSheet("""
+                QComboBox {
+                    background-color: #505050;
+                    color: #ffffff;
+                    border: 2px solid #707070;
+                    border-radius: 8px;
+                    padding: 10px;
+                    font-size: 15px;
+                }
+            """)
+            for cam in found_cameras:
+                camera_list.addItem(f"{cam['path']} - {cam['resolution']}", cam['index'])
+            layout.addWidget(camera_list)
+            
+            # Preview label
+            preview_label = QLabel("Camera Preview")
+            preview_label.setStyleSheet("background-color: #000000; min-height: 300px;")
+            preview_label.setAlignment(Qt.AlignCenter)
+            layout.addWidget(preview_label)
+            
+            # Assignment section
+            assign_section = QLabel("Assign to:")
+            assign_section.setStyleSheet("color: #e0e0e0; font-size: 14px; padding: 10px;")
+            layout.addWidget(assign_section)
+            
+            assign_group = QButtonGroup(dialog)
+            
+            front_radio = QRadioButton("Front Camera")
+            front_radio.setStyleSheet("QRadioButton { color: #e0e0e0; font-size: 14px; padding: 5px; }")
+            front_radio.setChecked(True)
+            assign_group.addButton(front_radio, 0)
+            layout.addWidget(front_radio)
+            
+            wrist_radio = QRadioButton("Wrist Camera")
+            wrist_radio.setStyleSheet("QRadioButton { color: #e0e0e0; font-size: 14px; padding: 5px; }")
+            assign_group.addButton(wrist_radio, 1)
+            layout.addWidget(wrist_radio)
+            
+            # Preview update function
+            def update_preview():
+                try:
+                    selected_idx = camera_list.currentData()
+                    for cam in found_cameras:
+                        if cam['index'] == selected_idx:
+                            ret, frame = cam['capture'].read()
+                            if ret:
+                                # Resize for preview
+                                frame = cv2.resize(frame, (480, 360))
+                                # Convert to Qt format
+                                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                                h, w, ch = rgb_frame.shape
+                                bytes_per_line = ch * w
+                                qt_image = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
+                                preview_label.setPixmap(QPixmap.fromImage(qt_image))
+                            break
+                except:
+                    pass
+            
+            # Timer for preview updates
+            preview_timer = QTimer(dialog)
+            preview_timer.timeout.connect(update_preview)
+            preview_timer.start(100)  # 10 FPS preview
+            
+            # Buttons
+            btn_layout = QHBoxLayout()
+            btn_layout.addStretch()
+            
+            cancel_btn = QPushButton("Cancel")
+            cancel_btn.setStyleSheet(self.get_button_style("#909090", "#707070"))
+            cancel_btn.clicked.connect(dialog.reject)
+            btn_layout.addWidget(cancel_btn)
+            
+            select_btn = QPushButton("Assign Camera")
+            select_btn.setStyleSheet(self.get_button_style("#4CAF50", "#388E3C"))
+            select_btn.clicked.connect(dialog.accept)
+            btn_layout.addWidget(select_btn)
+            
+            layout.addLayout(btn_layout)
+            
+            if dialog.exec() == QDialog.Accepted:
+                # Get selected camera and assignment
+                selected_idx = camera_list.currentData()
+                selected_cam = None
+                for cam in found_cameras:
+                    if cam['index'] == selected_idx:
+                        selected_cam = cam
+                        break
+                
+                if selected_cam:
+                    camera_path = selected_cam['path']
+                    if assign_group.checkedId() == 0:
+                        # Front camera
+                        self.cam_front_edit.setText(camera_path)
+                        self.status_label.setText(f"✓ Assigned {camera_path} to Front Camera")
+                    else:
+                        # Wrist camera
+                        self.cam_wrist_edit.setText(camera_path)
+                        self.status_label.setText(f"✓ Assigned {camera_path} to Wrist Camera")
+                    
+                    self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+            
+            # Cleanup
+            preview_timer.stop()
+            for cam in found_cameras:
+                cam['capture'].release()
+                
+        except Exception as e:
+            self.status_label.setText(f"❌ Error: {str(e)}")
+            self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
