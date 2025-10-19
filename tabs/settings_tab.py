@@ -206,25 +206,27 @@ class SettingsTab(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)  # No margins - let content breathe
         layout.setSpacing(6)  # Compact spacing
         
-        # ========== REST POSITION ROW ==========
-        rest_section = QLabel("🏠 Rest Position")
+        # ========== HOME/REST POSITION ROW ==========
+        rest_section = QLabel("🏠 Home Position")
         rest_section.setStyleSheet("color: #4CAF50; font-size: 14px; font-weight: bold; margin-bottom: 2px;")
         layout.addWidget(rest_section)
         
         rest_row = QHBoxLayout()
         rest_row.setSpacing(6)
         
-        self.set_rest_btn = QPushButton("Set Rest Pos")
-        self.set_rest_btn.setFixedHeight(45)
-        self.set_rest_btn.setStyleSheet(self.get_button_style("#4CAF50", "#388E3C"))
-        self.set_rest_btn.clicked.connect(self.set_rest_position)
-        rest_row.addWidget(self.set_rest_btn)
+        # Home button (matches Dashboard icon)
+        self.home_btn = QPushButton("🏠 Home")
+        self.home_btn.setFixedHeight(45)
+        self.home_btn.setStyleSheet(self.get_button_style("#2196F3", "#1976D2"))
+        self.home_btn.clicked.connect(self.go_home)
+        rest_row.addWidget(self.home_btn)
         
-        self.test_rest_btn = QPushButton("Test Rest Pos")
-        self.test_rest_btn.setFixedHeight(45)
-        self.test_rest_btn.setStyleSheet(self.get_button_style("#2196F3", "#1976D2"))
-        self.test_rest_btn.clicked.connect(self.test_rest_position)
-        rest_row.addWidget(self.test_rest_btn)
+        # Set Home button (saves current position as home)
+        self.set_home_btn = QPushButton("Set Home")
+        self.set_home_btn.setFixedHeight(45)
+        self.set_home_btn.setStyleSheet(self.get_button_style("#4CAF50", "#388E3C"))
+        self.set_home_btn.clicked.connect(self.set_rest_position)
+        rest_row.addWidget(self.set_home_btn)
         
         velocity_label = QLabel("Vel:")
         velocity_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
@@ -884,8 +886,8 @@ class SettingsTab(QWidget):
             self.status_label.setText(f"❌ Error: {str(e)}")
             self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
     
-    def test_rest_position(self):
-        """Move arm to saved rest position"""
+    def go_home(self):
+        """Move arm to saved home/rest position (same as Dashboard Home button)"""
         try:
             from utils.motor_controller import MotorController
             
@@ -894,11 +896,11 @@ class SettingsTab(QWidget):
             rest_positions = rest_config.get("positions")
             
             if not rest_positions:
-                self.status_label.setText("❌ No rest position saved. Click 'Set Rest Pos' first.")
+                self.status_label.setText("❌ No home position saved. Click 'Set Home' first.")
                 self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
                 return
             
-            self.status_label.setText("⏳ Moving to rest position...")
+            self.status_label.setText("🏠 Moving to home position...")
             self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
             
             # Initialize motor controller
@@ -919,7 +921,7 @@ class SettingsTab(QWidget):
                 keep_connection=False
             )
             
-            self.status_label.setText(f"✓ Moved to rest position at velocity {velocity}")
+            self.status_label.setText(f"✓ Moved to home position at velocity {velocity}")
             self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
             
         except Exception as e:

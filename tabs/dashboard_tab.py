@@ -36,7 +36,7 @@ class CircularProgress(QWidget):
         super().__init__(parent)
         self.progress = 0
         self.setFixedSize(24, 24)
-        self.setVisible(False)  # Hidden by default, shown when running
+        self.setVisible(True)  # Always visible
     
     def set_progress(self, value):
         self.progress = value
@@ -155,6 +155,7 @@ class DashboardTab(QWidget):
         if self.device_manager:
             self.device_manager.robot_status_changed.connect(self.on_robot_status_changed)
             self.device_manager.camera_status_changed.connect(self.on_camera_status_changed)
+            self.device_manager.discovery_log.connect(self.on_discovery_log)
         
         # Timers
         self.timer = QTimer()
@@ -766,8 +767,7 @@ class DashboardTab(QWidget):
         self.start_time = datetime.now()
         self.timer.start(1000)  # Update elapsed time every second
         
-        # Show and start throbber
-        self.throbber.setVisible(True)
+        # Start throbber
         self.throbber_update_timer.start(100)
         
         self.log_text.append(f"[info] Starting {execution_type}: {execution_name}")
@@ -988,8 +988,7 @@ class DashboardTab(QWidget):
             self.start_stop_btn.setText("START")
             self.timer.stop()
             
-            # Hide and stop throbber
-            self.throbber.setVisible(False)
+            # Stop throbber
             self.throbber_update_timer.stop()
             self.throbber_progress = 0
             self.throbber.set_progress(0)
@@ -1094,4 +1093,12 @@ class DashboardTab(QWidget):
                 self.camera_wrist_circle.set_connected(True)
             else:  # offline
                 self.camera_wrist_circle.set_connected(False)
+    
+    def on_discovery_log(self, message: str):
+        """Handle discovery log messages from device manager
+        
+        Args:
+            message: Log message to display
+        """
+        self.log_text.append(f"[info] {message}")
 
