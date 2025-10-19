@@ -130,9 +130,10 @@ class StatusIndicator(QLabel):
 class DashboardTab(QWidget):
     """Main dashboard for robot control (existing UI)"""
     
-    def __init__(self, config: dict, parent=None):
+    def __init__(self, config: dict, parent=None, device_manager=None):
         super().__init__(parent)
         self.config = config
+        self.device_manager = device_manager
         self.worker = None
         self.execution_worker = None  # New unified execution worker
         self.start_time = None
@@ -140,8 +141,16 @@ class DashboardTab(QWidget):
         self.is_running = False
         self.saved_runs_value = 1  # Remember runs value when toggling loop
         
+        # Status circle widget (will be set during init_ui)
+        self.robot_status_circle = None
+        
         self.init_ui()
         self.validate_config()
+        
+        # Connect device manager signals if available
+        if self.device_manager:
+            self.device_manager.robot_status_changed.connect(self.on_robot_status_changed)
+            self.device_manager.camera_status_changed.connect(self.on_camera_status_changed)
         
         # Timers
         self.timer = QTimer()
@@ -174,32 +183,43 @@ class DashboardTab(QWidget):
         self.throbber = CircularProgress()
         status_left.addWidget(self.throbber)
         
-        # Robot
+        # Robot (synced with device_manager)
         robot_group = QHBoxLayout()
         robot_group.setSpacing(6)
         robot_lbl = QLabel("Robot")
         robot_lbl.setStyleSheet("color: #a0a0a0; font-size: 11px;")
         robot_group.addWidget(robot_lbl)
         self.robot_indicator1 = StatusIndicator()
+        self.robot_indicator1.set_null()  # Start as empty until discovery
         robot_group.addWidget(self.robot_indicator1)
         self.robot_indicator2 = StatusIndicator()
         self.robot_indicator2.set_null()
         robot_group.addWidget(self.robot_indicator2)
         status_left.addLayout(robot_group)
         
-        # Cameras
+        # Store reference for device_manager updates
+        self.robot_status_circle = self.robot_indicator1
+        
+        # Cameras (synced with device_manager)
         camera_group = QHBoxLayout()
         camera_group.setSpacing(6)
         camera_lbl = QLabel("Cameras")
         camera_lbl.setStyleSheet("color: #a0a0a0; font-size: 11px;")
         camera_group.addWidget(camera_lbl)
         self.camera_indicator1 = StatusIndicator()
+        self.camera_indicator1.set_null()  # Front camera - start as empty until discovery
         camera_group.addWidget(self.camera_indicator1)
         self.camera_indicator2 = StatusIndicator()
+        self.camera_indicator2.set_null()  # Wrist camera - start as empty until discovery
         camera_group.addWidget(self.camera_indicator2)
         self.camera_indicator3 = StatusIndicator()
+        self.camera_indicator3.set_null()  # Extra indicator (unused)
         camera_group.addWidget(self.camera_indicator3)
         status_left.addLayout(camera_group)
+        
+        # Store references for device_manager updates
+        self.camera_front_circle = self.camera_indicator1
+        self.camera_wrist_circle = self.camera_indicator2
         
         # Time
         time_group = QHBoxLayout()
@@ -1040,4 +1060,41 @@ class DashboardTab(QWidget):
             minutes = self.elapsed_seconds // 60
             seconds = self.elapsed_seconds % 60
             self.time_label.setText(f"Time: {minutes:02d}:{seconds:02d}")
+    
+    # ========== DEVICE MANAGER SIGNAL HANDLERS ==========
+    
+    def on_robot_status_changed(self, status: str):
+        """Handle robot status change from device manager
+        
+        Args:
+            status: "empty", "online", or "offline"
+        """
+        if status == "empty":
+            self.robot_status_circle.set_null()
+        elif status == "online":
+            self.robot_status_circle.set_connected(True)
+        else:  # offline
+            self.robot_status_circle.set_connected(False)
+    
+    def on_camera_status_changed(self, camera_name: str, status: str):
+        """Handle camera status change from device manager
+        
+        Args:
+            camera_name: "front" or "wrist"
+            status: "empty", "online", or "offline"
+        """
+        if camera_name == "front":
+            if status == "empty":
+                self.camera_front_circle.set_null()
+            elif status == "online":
+                self.camera_front_circle.set_connected(True)
+            else:  # offline
+                self.camera_front_circle.set_connected(False)
+        elif camera_name == "wrist":
+            if status == "empty":
+                self.camera_wrist_circle.set_null()
+            elif status == "online":
+                self.camera_wrist_circle.set_connected(True)
+            else:  # offline
+                self.camera_wrist_circle.set_connected(False)
 

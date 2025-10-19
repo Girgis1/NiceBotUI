@@ -18,6 +18,7 @@ from PySide6.QtGui import QPalette, QColor, QShortcut, QKeySequence
 from tabs.dashboard_tab import DashboardTab
 from tabs.record_tab import RecordTab
 from tabs.sequence_tab import SequenceTab
+from utils.device_manager import DeviceManager
 
 
 # Paths
@@ -36,6 +37,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("LeRobot Operator Console")
         self.setMinimumSize(1024, 600)
         
+        # Create device manager (shared across all tabs)
+        self.device_manager = DeviceManager(self.config)
+        
         self.init_ui()
         
         # Set fullscreen if requested
@@ -43,6 +47,21 @@ class MainWindow(QMainWindow):
             self.showFullScreen()
         else:
             self.resize(1024, 600)
+    
+    def discover_devices_on_startup(self):
+        """Run device discovery and update all UI elements"""
+        # This will print to terminal and emit signals
+        self.device_manager.discover_all_devices()
+    
+    def showEvent(self, event):
+        """Called when window is shown - run device discovery here"""
+        super().showEvent(event)
+        # Run discovery only once after window is shown
+        if not hasattr(self, '_discovery_run'):
+            self._discovery_run = True
+            # Use QTimer to run discovery after event loop starts
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(100, self.discover_devices_on_startup)
     
     def init_ui(self):
         """Initialize user interface with tab system"""
@@ -145,13 +164,13 @@ class MainWindow(QMainWindow):
         # Create tabs
         from tabs.settings_tab import SettingsTab
         
-        self.dashboard_tab = DashboardTab(self.config, self)
+        self.dashboard_tab = DashboardTab(self.config, self, self.device_manager)
         self.sequence_tab = SequenceTab(self.config, self)
         self.record_tab = RecordTab(self.config, self)
         
         # Connect sequence execution signal
         self.sequence_tab.execute_sequence_signal.connect(self.dashboard_tab.run_sequence)
-        self.settings_tab = SettingsTab(self.config, self)
+        self.settings_tab = SettingsTab(self.config, self, self.device_manager)
         
         # Add tabs to stacked widget
         self.content_stack.addWidget(self.dashboard_tab)

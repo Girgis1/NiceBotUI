@@ -18,12 +18,13 @@ class SettingsTab(QWidget):
     # Signal to notify config changes
     config_changed = Signal()
     
-    def __init__(self, config: dict, parent=None):
+    def __init__(self, config: dict, parent=None, device_manager=None):
         super().__init__(parent)
         self.config = config
         self.config_path = Path(__file__).parent.parent / "config.json"
+        self.device_manager = device_manager
         
-        # Device status tracking
+        # Device status tracking (synced with device_manager)
         self.robot_status = "empty"          # empty/online/offline
         self.camera_front_status = "empty"   # empty/online/offline
         self.camera_wrist_status = "empty"   # empty/online/offline
@@ -35,6 +36,11 @@ class SettingsTab(QWidget):
         
         self.init_ui()
         self.load_settings()
+        
+        # Connect device manager signals if available
+        if self.device_manager:
+            self.device_manager.robot_status_changed.connect(self.on_robot_status_changed)
+            self.device_manager.camera_status_changed.connect(self.on_camera_status_changed)
     
     def init_ui(self):
         """Initialize UI"""
@@ -1014,9 +1020,11 @@ class SettingsTab(QWidget):
                             selected_port = button.property("port")
                             self.robot_port_edit.setText(selected_port)
                             
-                            # Update status to online
+                            # Update status to online (both local and device_manager)
                             self.robot_status = "online"
                             self.update_status_circle(self.robot_status_circle, "online")
+                            if self.device_manager:
+                                self.device_manager.update_robot_status("online")
                             
                             self.status_label.setText(f"✓ Selected: {selected_port}")
                             self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
@@ -1271,18 +1279,22 @@ class SettingsTab(QWidget):
                         # Front camera
                         self.cam_front_edit.setText(camera_path)
                         
-                        # Update status to online
+                        # Update status to online (both local and device_manager)
                         self.camera_front_status = "online"
                         self.update_status_circle(self.camera_front_circle, "online")
+                        if self.device_manager:
+                            self.device_manager.update_camera_status("front", "online")
                         
                         self.status_label.setText(f"✓ Assigned {camera_path} to Front Camera")
                     else:
                         # Wrist camera
                         self.cam_wrist_edit.setText(camera_path)
                         
-                        # Update status to online
+                        # Update status to online (both local and device_manager)
                         self.camera_wrist_status = "online"
                         self.update_status_circle(self.camera_wrist_circle, "online")
+                        if self.device_manager:
+                            self.device_manager.update_camera_status("wrist", "online")
                         
                         self.status_label.setText(f"✓ Assigned {camera_path} to Wrist Camera")
                     
@@ -1296,3 +1308,31 @@ class SettingsTab(QWidget):
         except Exception as e:
             self.status_label.setText(f"❌ Error: {str(e)}")
             self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+    
+    # ========== DEVICE MANAGER SIGNAL HANDLERS ==========
+    
+    def on_robot_status_changed(self, status: str):
+        """Handle robot status change from device manager
+        
+        Args:
+            status: "empty", "online", or "offline"
+        """
+        self.robot_status = status
+        if self.robot_status_circle:
+            self.update_status_circle(self.robot_status_circle, status)
+    
+    def on_camera_status_changed(self, camera_name: str, status: str):
+        """Handle camera status change from device manager
+        
+        Args:
+            camera_name: "front" or "wrist"
+            status: "empty", "online", or "offline"
+        """
+        if camera_name == "front":
+            self.camera_front_status = status
+            if self.camera_front_circle:
+                self.update_status_circle(self.camera_front_circle, status)
+        elif camera_name == "wrist":
+            self.camera_wrist_status = status
+            if self.camera_wrist_circle:
+                self.update_status_circle(self.camera_wrist_circle, status)
