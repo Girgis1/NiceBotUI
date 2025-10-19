@@ -197,8 +197,8 @@ class SettingsTab(QWidget):
         """Create robot settings tab - optimized for 1024x600 touchscreen"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10, 8, 10, 8)  # Reduced margins
-        layout.setSpacing(6)  # Reduced spacing
+        layout.setContentsMargins(0, 0, 0, 0)  # No margins - let content breathe
+        layout.setSpacing(6)  # Compact spacing
         
         # ========== REST POSITION ROW ==========
         rest_section = QLabel("🏠 Rest Position")
@@ -405,8 +405,8 @@ class SettingsTab(QWidget):
         """Create camera settings tab - optimized for 1024x600 touchscreen"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10, 8, 10, 8)  # Reduced margins
-        layout.setSpacing(6)  # Reduced spacing
+        layout.setContentsMargins(0, 0, 0, 0)  # No margins - let content breathe
+        layout.setSpacing(6)  # Compact spacing
         
         # ========== CAMERA DETECTION ==========
         detect_section = QLabel("🎥 Camera Configuration")
@@ -513,8 +513,8 @@ class SettingsTab(QWidget):
         """Create policy settings tab"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(12)
+        layout.setContentsMargins(0, 0, 0, 0)  # No margins
+        layout.setSpacing(6)  # Compact spacing
         
         self.policy_base_edit = self.add_setting_row(layout, "Base Path:", "/home/daniel/lerobot/outputs/train")
         self.policy_device_edit = self.add_setting_row(layout, "Device:", "cuda")
@@ -559,8 +559,8 @@ class SettingsTab(QWidget):
         """Create control settings tab"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(12)
+        layout.setContentsMargins(0, 0, 0, 0)  # No margins
+        layout.setSpacing(6)  # Compact spacing
         
         self.num_episodes_spin = self.add_spinbox_row(layout, "Episodes:", 1, 100, 10)
         self.episode_time_spin = self.add_doublespinbox_row(layout, "Episode Time (s):", 1.0, 300.0, 20.0)
