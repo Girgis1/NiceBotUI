@@ -1,30 +1,30 @@
 """
-Touch-screen robot teleop control panel.
+Touch-screen robot teleop control panel - Direct Joint Control.
 Based on HIL-SERL keyboard teleop system from LeRobot.
 
 Provides:
-- XY movement control (4-way directional)
-- Z-axis control (up/down)
-- Gripper control (open/close)
-- Manual mode (torque toggle - press & hold)
-- Speed adjustment
+- Direct joint control (6 joints mapped to buttons)
+- Wrist roll control (Joint 5)
+- Gripper control (Joint 6)
+- HOLD button for manual positioning (torque disable)
+- Torque toggle for persistent control
+- Adjustable step size (user-controlled)
 - Live position display
 """
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QPushButton, QLabel, QFrame
+    QPushButton, QLabel, QSpinBox
 )
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QFont
 import logging
 
 
 class TouchTeleopPanel(QWidget):
-    """Touch-screen teleop control panel for robot arm"""
+    """Touch-screen teleop control panel for robot arm - Direct Joint Control"""
     
     # Signals
-    position_updated = Signal(dict)  # Emits current X/Y/Z position
+    position_updated = Signal(dict)  # Emits current joint positions
     torque_changed = Signal(bool)    # Emits torque state (True=enabled)
     
     def __init__(self, motor_controller, config, parent=None):
@@ -34,12 +34,7 @@ class TouchTeleopPanel(QWidget):
         
         # State
         self.torque_enabled = True  # True = motors locked (holding position)
-        self.speed_level = 2  # 1=slow, 2=medium, 3=fast
-        self.step_sizes = {
-            1: 5,   # 5 motor steps per press (fine)
-            2: 10,  # 10 motor steps per press (medium)
-            3: 20   # 20 motor steps per press (coarse)
-        }
+        self.current_step_size = 10  # Default step size in motor units (1-100)
         
         # Track all movement buttons for enable/disable
         self.movement_buttons = []
@@ -48,7 +43,7 @@ class TouchTeleopPanel(QWidget):
         self.setup_position_update_timer()
         
     def init_ui(self):
-        """Build the compact 3x3 grid touch panel UI"""
+        """Build the compact touch panel UI with direct joint control"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
@@ -95,84 +90,102 @@ class TouchTeleopPanel(QWidget):
         # Add spacing between HOLD and arrows
         layout.addSpacing(8)
         
-        # Main 3x3 Grid
+        # Main 3x3 Grid for Joints 1-3
         grid = QGridLayout()
         grid.setSpacing(3)
         
-        # Row 1: Z Up | Forward | Z Down
-        self.btn_z_up = self.create_grid_button("▲", "#10B981")
-        self.btn_z_up.clicked.connect(lambda: self.on_move_delta(0, 0, 1))
-        grid.addWidget(self.btn_z_up, 0, 0)
+        # Row 1: Joint 3 Up (Elbow) | Joint 2 Up (Shoulder) | Joint 3 Down (Elbow)
+        self.btn_joint3_up = self.create_grid_button("▲\nJ3", "#10B981")
+        self.btn_joint3_up.clicked.connect(lambda: self.on_joint_move(2, 1))  # Joint 2 (0-indexed), positive
+        grid.addWidget(self.btn_joint3_up, 0, 0)
         
-        self.btn_forward = self.create_grid_button("↑", "#3B82F6")
-        self.btn_forward.clicked.connect(lambda: self.on_move_delta(0, -1, 0))
-        grid.addWidget(self.btn_forward, 0, 1)
+        self.btn_joint2_up = self.create_grid_button("↑\nJ2", "#3B82F6")
+        self.btn_joint2_up.clicked.connect(lambda: self.on_joint_move(1, 1))  # Joint 1, positive
+        grid.addWidget(self.btn_joint2_up, 0, 1)
         
-        self.btn_z_down = self.create_grid_button("▼", "#10B981")
-        self.btn_z_down.clicked.connect(lambda: self.on_move_delta(0, 0, -1))
-        grid.addWidget(self.btn_z_down, 0, 2)
+        self.btn_joint3_down = self.create_grid_button("▼\nJ3", "#10B981")
+        self.btn_joint3_down.clicked.connect(lambda: self.on_joint_move(2, -1))  # Joint 2, negative
+        grid.addWidget(self.btn_joint3_down, 0, 2)
         
-        # Row 2: Left | None | Right
-        self.btn_left = self.create_grid_button("←", "#3B82F6")
-        self.btn_left.clicked.connect(lambda: self.on_move_delta(1, 0, 0))
-        grid.addWidget(self.btn_left, 1, 0)
+        # Row 2: Joint 1 Left (Base) | Empty | Joint 1 Right (Base)
+        self.btn_joint1_left = self.create_grid_button("←\nJ1", "#3B82F6")
+        self.btn_joint1_left.clicked.connect(lambda: self.on_joint_move(0, -1))  # Joint 0, negative
+        grid.addWidget(self.btn_joint1_left, 1, 0)
         
         # Center: Empty space
         center_spacer = QLabel()
         center_spacer.setStyleSheet("background: #1F2937; border-radius: 3px;")
         grid.addWidget(center_spacer, 1, 1)
         
-        self.btn_right = self.create_grid_button("→", "#3B82F6")
-        self.btn_right.clicked.connect(lambda: self.on_move_delta(-1, 0, 0))
-        grid.addWidget(self.btn_right, 1, 2)
+        self.btn_joint1_right = self.create_grid_button("→\nJ1", "#3B82F6")
+        self.btn_joint1_right.clicked.connect(lambda: self.on_joint_move(0, 1))  # Joint 0, positive
+        grid.addWidget(self.btn_joint1_right, 1, 2)
         
-        # Row 3: Close | Backward | Open
-        self.btn_gripper_close = self.create_grid_button("CLOSE", "#F59E0B", text=True)
-        self.btn_gripper_close.clicked.connect(lambda: self.on_gripper_action(0))
-        grid.addWidget(self.btn_gripper_close, 2, 0)
+        # Row 3: Wrist Roll CCW (J5) | Joint 2 Down (Shoulder) | Wrist Roll CW (J5)
+        self.btn_wrist_ccw = self.create_grid_button("◀\nJ5", "#F59E0B")
+        self.btn_wrist_ccw.clicked.connect(lambda: self.on_joint_move(4, -1))  # Joint 4 (wrist roll), CCW
+        grid.addWidget(self.btn_wrist_ccw, 2, 0)
         
-        self.btn_backward = self.create_grid_button("↓", "#3B82F6")
-        self.btn_backward.clicked.connect(lambda: self.on_move_delta(0, 1, 0))
-        grid.addWidget(self.btn_backward, 2, 1)
+        self.btn_joint2_down = self.create_grid_button("↓\nJ2", "#3B82F6")
+        self.btn_joint2_down.clicked.connect(lambda: self.on_joint_move(1, -1))  # Joint 1, negative
+        grid.addWidget(self.btn_joint2_down, 2, 1)
         
-        self.btn_gripper_open = self.create_grid_button("OPEN", "#F59E0B", text=True)
-        self.btn_gripper_open.clicked.connect(lambda: self.on_gripper_action(2))
-        grid.addWidget(self.btn_gripper_open, 2, 2)
+        self.btn_wrist_cw = self.create_grid_button("▶\nJ5", "#F59E0B")
+        self.btn_wrist_cw.clicked.connect(lambda: self.on_joint_move(4, 1))  # Joint 4 (wrist roll), CW
+        grid.addWidget(self.btn_wrist_cw, 2, 2)
         
         layout.addLayout(grid)
         
-        # Speed Control Row
-        speed_row = QGridLayout()
-        speed_row.setSpacing(3)
+        # Gripper Control Row (below grid) - Joint 6
+        gripper_row = QHBoxLayout()
+        gripper_row.setSpacing(3)
         
-        btn_speed_down = QPushButton("▼")
-        btn_speed_down.setFixedHeight(35)
-        btn_speed_down.clicked.connect(self.on_speed_decrease)
-        btn_speed_down.setStyleSheet(self.get_speed_button_style())
-        speed_row.addWidget(btn_speed_down, 0, 0)
+        self.btn_gripper_close = self.create_gripper_button("CLOSE\nJ6")
+        self.btn_gripper_close.clicked.connect(lambda: self.on_gripper_action(0))
+        gripper_row.addWidget(self.btn_gripper_close)
         
-        self.speed_display = QLabel(f"{self.speed_level}")
-        self.speed_display.setAlignment(Qt.AlignCenter)
-        self.speed_display.setFixedHeight(35)
-        self.speed_display.setStyleSheet("""
-            QLabel {
+        self.btn_gripper_open = self.create_gripper_button("OPEN\nJ6")
+        self.btn_gripper_open.clicked.connect(lambda: self.on_gripper_action(2))
+        gripper_row.addWidget(self.btn_gripper_open)
+        
+        layout.addLayout(gripper_row)
+        
+        # Step Size Control (User-adjustable)
+        step_row = QHBoxLayout()
+        step_row.setSpacing(4)
+        
+        step_label = QLabel("Step:")
+        step_label.setStyleSheet("font-size: 10px; color: #9CA3AF; font-weight: bold;")
+        step_row.addWidget(step_label)
+        
+        self.step_spinbox = QSpinBox()
+        self.step_spinbox.setRange(1, 100)  # 1-100 motor units
+        self.step_spinbox.setValue(self.current_step_size)
+        self.step_spinbox.setSuffix(" units")
+        self.step_spinbox.setFixedHeight(32)
+        self.step_spinbox.valueChanged.connect(self.on_step_size_changed)
+        self.step_spinbox.setStyleSheet("""
+            QSpinBox {
                 background: #111827;
                 color: #10B981;
                 border: 1px solid #374151;
                 border-radius: 3px;
-                font-size: 16px;
+                font-size: 11px;
                 font-weight: bold;
+                padding: 2px 4px;
+            }
+            QSpinBox::up-button, QSpinBox::down-button {
+                background: #374151;
+                border: none;
+                width: 16px;
+            }
+            QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+                background: #4B5563;
             }
         """)
-        speed_row.addWidget(self.speed_display, 0, 1)
+        step_row.addWidget(self.step_spinbox)
         
-        btn_speed_up = QPushButton("▲")
-        btn_speed_up.setFixedHeight(35)
-        btn_speed_up.clicked.connect(self.on_speed_increase)
-        btn_speed_up.setStyleSheet(self.get_speed_button_style())
-        speed_row.addWidget(btn_speed_up, 0, 2)
-        
-        layout.addLayout(speed_row)
+        layout.addLayout(step_row)
         
         # Position Display (All 6 motors)
         self.position_label = QLabel("M1:0 M2:0 M3:0\nM4:0 M5:0 M6:0")
@@ -189,12 +202,6 @@ class TouchTeleopPanel(QWidget):
             }
         """)
         layout.addWidget(self.position_label)
-        
-        # Step size display (motor steps)
-        self.step_label = QLabel(f"Step: {self.step_sizes[self.speed_level]} units")
-        self.step_label.setAlignment(Qt.AlignCenter)
-        self.step_label.setStyleSheet("font-size: 9px; color: #6B7280;")
-        layout.addWidget(self.step_label)
         
         # Torque Toggle Button (bottom right corner)
         torque_row = QHBoxLayout()
@@ -216,147 +223,10 @@ class TouchTeleopPanel(QWidget):
         
         layout.addStretch()
         
-    def create_xy_controls(self):
-        """Create XY movement control grid (4-way + home)"""
-        grid = QGridLayout()
-        grid.setSpacing(4)
-        
-        # Forward (↑)
-        self.btn_forward = self.create_movement_button("↑", "#3B82F6")
-        self.btn_forward.clicked.connect(lambda: self.on_move_delta(0, -1, 0))
-        grid.addWidget(self.btn_forward, 0, 1)
-        
-        # Left (←)
-        self.btn_left = self.create_movement_button("←", "#3B82F6")
-        self.btn_left.clicked.connect(lambda: self.on_move_delta(1, 0, 0))
-        grid.addWidget(self.btn_left, 1, 0)
-        
-        # Home (⊙)
-        self.btn_home = self.create_movement_button("⊙", "#EF4444", small=True)
-        self.btn_home.clicked.connect(self.on_go_home)
-        grid.addWidget(self.btn_home, 1, 1)
-        
-        # Right (→)
-        self.btn_right = self.create_movement_button("→", "#3B82F6")
-        self.btn_right.clicked.connect(lambda: self.on_move_delta(-1, 0, 0))
-        grid.addWidget(self.btn_right, 1, 2)
-        
-        # Backward (↓)
-        self.btn_backward = self.create_movement_button("↓", "#3B82F6")
-        self.btn_backward.clicked.connect(lambda: self.on_move_delta(0, 1, 0))
-        grid.addWidget(self.btn_backward, 2, 1)
-        
-        return grid
-        
-    def create_z_controls(self):
-        """Create Z-axis control buttons"""
-        layout = QVBoxLayout()
-        layout.setSpacing(4)
-        
-        # Up (▲)
-        self.btn_z_up = self.create_movement_button("▲", "#10B981")
-        self.btn_z_up.clicked.connect(lambda: self.on_move_delta(0, 0, 1))
-        layout.addWidget(self.btn_z_up)
-        
-        # Down (▼)
-        self.btn_z_down = self.create_movement_button("▼", "#10B981")
-        self.btn_z_down.clicked.connect(lambda: self.on_move_delta(0, 0, -1))
-        layout.addWidget(self.btn_z_down)
-        
-        return layout
-        
-    def create_gripper_controls(self):
-        """Create gripper control buttons"""
-        layout = QVBoxLayout()
-        layout.setSpacing(4)
-        
-        # Open
-        self.btn_gripper_open = self.create_movement_button("OPEN", "#F59E0B", text=True)
-        self.btn_gripper_open.clicked.connect(lambda: self.on_gripper_action(2))
-        layout.addWidget(self.btn_gripper_open)
-        
-        # Close
-        self.btn_gripper_close = self.create_movement_button("CLOSE", "#F59E0B", text=True)
-        self.btn_gripper_close.clicked.connect(lambda: self.on_gripper_action(0))
-        layout.addWidget(self.btn_gripper_close)
-        
-        return layout
-        
-    def create_speed_controls(self):
-        """Create speed adjustment controls"""
-        layout = QHBoxLayout()
-        layout.setSpacing(4)
-        
-        # Decrease speed
-        btn_speed_down = QPushButton("▼")
-        btn_speed_down.setFixedSize(50, 35)
-        btn_speed_down.clicked.connect(self.on_speed_decrease)
-        btn_speed_down.setStyleSheet("""
-            QPushButton {
-                background: #374151;
-                color: white;
-                border: 1px solid #4B5563;
-                border-radius: 4px;
-                font-size: 18px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background: #4B5563;
-            }
-            QPushButton:pressed {
-                background: #1F2937;
-            }
-        """)
-        layout.addWidget(btn_speed_down)
-        
-        # Speed display
-        self.speed_display = QLabel(f"{self.speed_level}")
-        self.speed_display.setAlignment(Qt.AlignCenter)
-        self.speed_display.setFixedSize(60, 35)
-        self.speed_display.setStyleSheet("""
-            QLabel {
-                background: #111827;
-                color: #10B981;
-                border: 1px solid #374151;
-                border-radius: 4px;
-                font-size: 20px;
-                font-weight: bold;
-            }
-        """)
-        layout.addWidget(self.speed_display)
-        
-        # Increase speed
-        btn_speed_up = QPushButton("▲")
-        btn_speed_up.setFixedSize(50, 35)
-        btn_speed_up.clicked.connect(self.on_speed_increase)
-        btn_speed_up.setStyleSheet("""
-            QPushButton {
-                background: #374151;
-                color: white;
-                border: 1px solid #4B5563;
-                border-radius: 4px;
-                font-size: 18px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background: #4B5563;
-            }
-            QPushButton:pressed {
-                background: #1F2937;
-            }
-        """)
-        layout.addWidget(btn_speed_up)
-        
-        layout.addStretch()
-        
-        return layout
-        
-    def create_grid_button(self, label, color, text=False):
-        """Create a compact grid button"""
+    def create_grid_button(self, label, color):
+        """Create a compact grid button for joint control"""
         btn = QPushButton(label)
         btn.setFixedHeight(65)
-        
-        font_size = "11px" if text else "20px"
         
         btn.setStyleSheet(f"""
             QPushButton {{
@@ -364,7 +234,7 @@ class TouchTeleopPanel(QWidget):
                 color: white;
                 border: 2px solid {self.darken_color(color)};
                 border-radius: 4px;
-                font-size: {font_size};
+                font-size: 13px;
                 font-weight: bold;
             }}
             QPushButton:hover {{
@@ -386,25 +256,38 @@ class TouchTeleopPanel(QWidget):
         
         return btn
     
-    def get_speed_button_style(self):
-        """Get stylesheet for speed control buttons"""
-        return """
+    def create_gripper_button(self, label):
+        """Create a gripper control button"""
+        btn = QPushButton(label)
+        btn.setFixedHeight(45)
+        
+        btn.setStyleSheet("""
             QPushButton {
-                background: #374151;
+                background: #9333EA;
                 color: white;
-                border: 1px solid #4B5563;
-                border-radius: 3px;
-                font-size: 14px;
+                border: 2px solid #7C3AED;
+                border-radius: 4px;
+                font-size: 12px;
                 font-weight: bold;
             }
             QPushButton:hover {
-                background: #4B5563;
+                background: #A855F7;
+                border: 2px solid #9333EA;
             }
             QPushButton:pressed {
-                background: #1F2937;
+                background: #7C3AED;
             }
-        """
+            QPushButton:disabled {
+                background: #374151;
+                color: #6B7280;
+                border: 2px solid #4B5563;
+            }
+        """)
         
+        # Track for enable/disable
+        self.movement_buttons.append(btn)
+        
+        return btn
     
     def darken_color(self, hex_color):
         """Darken a hex color by 20%"""
@@ -534,27 +417,31 @@ class TouchTeleopPanel(QWidget):
                 }
             """)
         
-    def on_move_delta(self, dx, dy, dz):
-        """Handle movement button press"""
+    def on_joint_move(self, joint_index, direction):
+        """
+        Handle joint movement button press.
+        
+        Args:
+            joint_index: Joint number (0-5)
+            direction: -1 for negative, +1 for positive
+        """
         if not self.torque_enabled:
             logging.warning("Movement disabled - torque is off")
             return
-            
-        # Get step size in motor units (5, 10, or 20)
-        step = self.step_sizes[self.speed_level]
         
-        # Scale deltas by step size (now in motor units)
-        actual_dx = dx * step
-        actual_dy = dy * step
-        actual_dz = dz * step
+        # Calculate delta steps
+        delta_steps = direction * self.current_step_size
         
-        logging.info(f"Move delta: dx={actual_dx} units, dy={actual_dy} units, dz={actual_dz} units")
+        joint_names = ["Base", "Shoulder", "Elbow", "Wrist1", "Wrist Roll", "Gripper"]
+        logging.info(
+            f"Moving Joint {joint_index + 1} ({joint_names[joint_index]}): "
+            f"{'+' if direction > 0 else ''}{delta_steps} steps"
+        )
         
         try:
-            # Pass motor steps directly (not meters)
-            self.motor_controller.move_end_effector_delta(actual_dx, actual_dy, actual_dz)
+            self.motor_controller.move_joint_delta(joint_index, delta_steps)
         except Exception as e:
-            logging.error(f"Failed to move: {e}")
+            logging.error(f"Failed to move joint {joint_index}: {e}")
             
     def on_gripper_action(self, action):
         """Handle gripper button press"""
@@ -569,31 +456,8 @@ class TouchTeleopPanel(QWidget):
             self.motor_controller.set_gripper(action)
         except Exception as e:
             logging.error(f"Failed to control gripper: {e}")
-            
-    def on_go_home(self):
-        """Handle home button press"""
-        if not self.torque_enabled:
-            logging.warning("Home disabled - torque is off")
-            return
-            
-        logging.info("Moving to home position")
-        
-        try:
-            self.motor_controller.go_to_home()
-        except Exception as e:
-            logging.error(f"Failed to go home: {e}")
-            
-    def on_speed_increase(self):
-        """Increase movement speed (more motor steps per press)"""
-        self.speed_level = min(self.speed_level + 1, 3)
-        self.speed_display.setText(f"{self.speed_level}")
-        self.step_label.setText(f"Step: {self.step_sizes[self.speed_level]} units")
-        logging.info(f"Speed level: {self.speed_level} ({self.step_sizes[self.speed_level]} units)")
-        
-    def on_speed_decrease(self):
-        """Decrease movement speed (fewer motor steps per press)"""
-        self.speed_level = max(self.speed_level - 1, 1)
-        self.speed_display.setText(f"{self.speed_level}")
-        self.step_label.setText(f"Step: {self.step_sizes[self.speed_level]} units")
-        logging.info(f"Speed level: {self.speed_level} ({self.step_sizes[self.speed_level]} units)")
-
+    
+    def on_step_size_changed(self, value):
+        """Handle step size spinbox value change"""
+        self.current_step_size = value
+        logging.info(f"Step size changed to {value} units")

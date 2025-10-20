@@ -398,21 +398,21 @@ class MotorController:
             print(f"[MOTOR] Error getting position: {e}")
             return {}
     
-    def move_end_effector_delta(self, dx: float, dy: float, dz: float, velocity: int = 400):
+    def move_joint_delta(self, joint_index: int, delta_steps: int, velocity: int = 400):
         """
-        Move end effector by delta amounts in Cartesian space.
-        Uses proper IK if available, falls back to direct joint control.
+        Move a specific joint by delta motor steps (direct joint control).
+        This is the simplest, most reliable control method matching HIL-SERL keyboard teleop.
         
         Args:
-            dx: Delta X in meters (positive = right)
-            dy: Delta Y in meters (positive = backward)
-            dz: Delta Z in meters (positive = up)
+            joint_index: Joint number (0-5)
+            delta_steps: Motor steps to move (positive or negative, typically 5-100)
             velocity: Movement velocity (0-4000)
         """
         if not MOTOR_CONTROL_AVAILABLE:
             raise RuntimeError("Motor control not available")
         
-        print(f"[MOTOR] Move delta: dx={dx:.4f}m, dy={dy:.4f}m, dz={dz:.4f}m")
+        if not 0 <= joint_index < 6:
+            raise ValueError(f"Invalid joint index {joint_index}, must be 0-5")
         
         try:
             # Read current joint positions
@@ -420,86 +420,32 @@ class MotorController:
             if not current_joints or len(current_joints) != 6:
                 raise RuntimeError("Failed to read current position")
             
-            # Try to use proper IK if available
-            if self.ik_processor and self.ik_solver:
-                target_joints = self._move_with_ik(dx, dy, dz, current_joints)
-            else:
-                # Fallback: Direct joint control
-                print("[MOTOR] ⚠️ Using direct joint control (IK not available)")
-                target_joints = self._move_without_ik(dx, dy, dz, current_joints)
-            
-            # Move to target position
-            self.set_positions(target_joints, velocity=velocity, wait=True, keep_connection=True)
-            
-        except Exception as e:
-            print(f"[MOTOR] Error moving end effector: {e}")
-            raise
-    
-    def _move_with_ik(self, dx: float, dy: float, dz: float, current_joints: list[int]) -> list[int]:
-        """
-        Move using proper inverse kinematics (HIL-SERL style).
-        
-        Returns:
-            Target joint positions
-        """
-        try:
-            # Get current end-effector pose using forward kinematics
-            current_ee_pose = self.ik_solver.forward_kinematics(current_joints)
-            
-            # Apply delta to end-effector position
-            target_ee_pose = current_ee_pose.copy()
-            target_ee_pose[0] += dx  # X
-            target_ee_pose[1] += dy  # Y
-            target_ee_pose[2] += dz  # Z
-            # Keep orientation unchanged (indices 3-6)
-            
-            # Solve IK to get target joint positions
-            target_joints = self.ik_solver.inverse_kinematics(
-                target_ee_pose,
-                initial_guess=current_joints  # Use current joints as starting point
-            )
+            # Calculate target position for this joint
+            target_joints = current_joints.copy()
+            target_joints[joint_index] += delta_steps
             
             # Clamp to valid range [0, 4095]
-            target_joints = [max(0, min(4095, int(pos))) for pos in target_joints]
+            target_joints[joint_index] = max(0, min(4095, target_joints[joint_index]))
             
-            print(f"[MOTOR] ✓ IK solution: {target_joints[:3]} (first 3)")
-            return target_joints
+            logging.info(
+                f"[MOTOR] Joint {joint_index} ({self.motor_names[joint_index]}): "
+                f"{current_joints[joint_index]} → {target_joints[joint_index]} "
+                f"(delta: {delta_steps})"
+            )
+            
+            # Move to target position
+            self.set_positions(target_joints, velocity=velocity, wait=False, keep_connection=True)
             
         except Exception as e:
-            print(f"[MOTOR] ⚠️ IK failed: {e}, falling back to direct control")
-            return self._move_without_ik(dx, dy, dz, current_joints)
+            logging.error(f"[MOTOR] Error moving joint {joint_index}: {e}")
+            raise
     
-    def _move_without_ik(self, dx: float, dy: float, dz: float, current_joints: list[int]) -> list[int]:
+    def move_wrist_roll(self, delta_steps: int, velocity: int = 400):
         """
-        Fallback: Direct joint control with motor position steps.
-        dx, dy, dz are already in motor steps (5, 10, or 20 units).
-        
-        Returns:
-            Target joint positions
+        Move wrist roll joint (Joint 5) by delta steps.
+        Convenience method for teleop panel.
         """
-        # dx, dy, dz are already motor steps from the teleop panel
-        # Map to joints: dx→joint0 (base), dy→joint1 (shoulder), dz→joint2 (elbow)
-        
-        delta_joints = [
-            int(dx * -1),  # Base rotation (inverted)
-            int(dy * -1),  # Shoulder (inverted)
-            int(dz * 1),   # Elbow
-            0,  # Wrist 1
-            0,  # Wrist 2
-            0   # Wrist 3
-        ]
-        
-        # Calculate target positions
-        target_joints = [
-            current_joints[i] + delta_joints[i]
-            for i in range(6)
-        ]
-        
-        # Clamp to valid range [0, 4095]
-        target_joints = [max(0, min(4095, pos)) for pos in target_joints]
-        
-        print(f"[MOTOR] Direct joint control: {target_joints[:3]} (first 3), delta: {delta_joints[:3]}")
-        return target_joints
+        self.move_joint_delta(4, delta_steps, velocity)  # Joint 4 = wrist roll
     
     def set_gripper(self, action: int, velocity: int = 400):
         """
@@ -509,11 +455,8 @@ class MotorController:
             action: 0 = close, 1 = hold, 2 = open
             velocity: Movement velocity (0-4000)
         """
-        if not MOTOR_CONTROL_AVAILABLE:
-            raise RuntimeError("Motor control not available")
-        
-        # Gripper is typically the last motor (index 5)
-        gripper_name = self.motor_names[5]  # "gripper"
+        # Use move_joint_delta for gripper control
+        # Gripper is joint 5 (last motor)
         
         # Map action to position
         # Adjust these values based on your gripper's actual range
@@ -525,33 +468,23 @@ class MotorController:
         
         target_position = gripper_positions.get(action, 2048)
         
-        print(f"[MOTOR] Gripper action {action} -> position {target_position}")
-        
-        connected_locally = False
-        if not self.bus:
-            if not self.connect():
-                raise RuntimeError("Failed to connect to motors")
-            connected_locally = True
+        logging.info(f"[MOTOR] Gripper action {action} -> position {target_position}")
         
         try:
-            # Enable torque
-            self.bus.write("Torque_Enable", gripper_name, 1, normalize=False)
+            # Read current positions
+            current_joints = self.read_positions()
+            if not current_joints or len(current_joints) != 6:
+                raise RuntimeError("Failed to read current position")
             
-            # Set velocity
-            self.bus.write("Goal_Velocity", gripper_name, velocity, normalize=False)
+            # Set gripper to target position
+            target_joints = current_joints.copy()
+            target_joints[5] = target_position  # Joint 5 = gripper
             
-            # Set position
-            self.bus.write("Goal_Position", gripper_name, target_position, normalize=False)
-            
-            # Brief wait for gripper to move
-            time.sleep(0.3)
+            self.set_positions(target_joints, velocity=velocity, wait=False, keep_connection=True)
             
         except Exception as e:
-            print(f"[MOTOR] Error controlling gripper: {e}")
+            logging.error(f"[MOTOR] Error controlling gripper: {e}")
             raise
-        finally:
-            if connected_locally:
-                self.disconnect()
     
     def go_to_home(self):
         """Move to configured home/rest position"""
