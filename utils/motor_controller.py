@@ -471,18 +471,19 @@ class MotorController:
     
     def _move_without_ik(self, dx: float, dy: float, dz: float, current_joints: list[int]) -> list[int]:
         """
-        Fallback: Direct joint control with small steps.
+        Fallback: Direct joint control with motor position steps.
+        dx, dy, dz are already in motor steps (5, 10, or 20 units).
         
         Returns:
             Target joint positions
         """
-        # Small incremental movement (~0.5 degrees per press)
-        joint_step = 20
+        # dx, dy, dz are already motor steps from the teleop panel
+        # Map to joints: dx→joint0 (base), dy→joint1 (shoulder), dz→joint2 (elbow)
         
         delta_joints = [
-            int(dx * joint_step * -1),  # Base rotation
-            int(dy * joint_step * -1),  # Shoulder
-            int(dz * joint_step * 1),   # Elbow
+            int(dx * -1),  # Base rotation (inverted)
+            int(dy * -1),  # Shoulder (inverted)
+            int(dz * 1),   # Elbow
             0,  # Wrist 1
             0,  # Wrist 2
             0   # Wrist 3
@@ -497,7 +498,7 @@ class MotorController:
         # Clamp to valid range [0, 4095]
         target_joints = [max(0, min(4095, pos)) for pos in target_joints]
         
-        print(f"[MOTOR] Direct joint control: {target_joints[:3]} (first 3)")
+        print(f"[MOTOR] Direct joint control: {target_joints[:3]} (first 3), delta: {delta_joints[:3]}")
         return target_joints
     
     def set_gripper(self, action: int, velocity: int = 400):

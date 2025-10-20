@@ -33,12 +33,12 @@ class TouchTeleopPanel(QWidget):
         self.config = config
         
         # State
-        self.torque_enabled = True
+        self.torque_enabled = True  # True = motors locked (holding position)
         self.speed_level = 2  # 1=slow, 2=medium, 3=fast
         self.step_sizes = {
-            1: 0.005,  # 0.5mm per press
-            2: 0.01,   # 1.0mm per press
-            3: 0.02    # 2.0mm per press
+            1: 5,   # 5 motor steps per press (fine)
+            2: 10,  # 10 motor steps per press (medium)
+            3: 20   # 20 motor steps per press (coarse)
         }
         
         # Track all movement buttons for enable/disable
@@ -68,8 +68,32 @@ class TouchTeleopPanel(QWidget):
         """)
         layout.addWidget(header)
         
-        # Note: Torque stays ON during panel use for stable control
-        # Torque toggle button is at the bottom of the panel
+        # HOLD Button (press to disable torque temporarily for manual positioning)
+        self.hold_btn = QPushButton("HOLD")
+        self.hold_btn.setFixedHeight(40)
+        self.hold_btn.pressed.connect(self.on_hold_pressed)
+        self.hold_btn.released.connect(self.on_hold_released)
+        self.hold_btn.setStyleSheet("""
+            QPushButton {
+                background: #6B7280;
+                color: white;
+                border: 2px solid #4B5563;
+                border-radius: 4px;
+                font-size: 13px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: #9CA3AF;
+            }
+            QPushButton:pressed {
+                background: #EF4444;
+                border-color: #DC2626;
+            }
+        """)
+        layout.addWidget(self.hold_btn)
+        
+        # Add spacing between HOLD and arrows
+        layout.addSpacing(8)
         
         # Main 3x3 Grid
         grid = QGridLayout()
@@ -166,8 +190,8 @@ class TouchTeleopPanel(QWidget):
         """)
         layout.addWidget(self.position_label)
         
-        # Step size display
-        self.step_label = QLabel(f"Step: {self.step_sizes[self.speed_level]*1000:.1f}mm")
+        # Step size display (motor steps)
+        self.step_label = QLabel(f"Step: {self.step_sizes[self.speed_level]} units")
         self.step_label.setAlignment(Qt.AlignCenter)
         self.step_label.setStyleSheet("font-size: 9px; color: #6B7280;")
         layout.addWidget(self.step_label)
@@ -433,6 +457,32 @@ class TouchTeleopPanel(QWidget):
             
     # ============ Button Handlers ============
     
+    def on_hold_pressed(self):
+        """Called when HOLD button is pressed - disable torque for manual positioning"""
+        logging.info("HOLD pressed - disabling torque for manual positioning")
+        
+        try:
+            self.motor_controller.set_torque_enable(False)
+        except Exception as e:
+            logging.error(f"Failed to disable torque: {e}")
+        
+        # Disable movement buttons during hold
+        for btn in self.movement_buttons:
+            btn.setEnabled(False)
+    
+    def on_hold_released(self):
+        """Called when HOLD button is released - re-enable torque to lock position"""
+        logging.info("HOLD released - re-enabling torque to lock position")
+        
+        try:
+            self.motor_controller.set_torque_enable(True)
+        except Exception as e:
+            logging.error(f"Failed to enable torque: {e}")
+        
+        # Re-enable movement buttons
+        for btn in self.movement_buttons:
+            btn.setEnabled(True)
+    
     def on_torque_toggle(self, checked):
         """Handle torque toggle button click"""
         self.torque_enabled = checked
@@ -490,16 +540,18 @@ class TouchTeleopPanel(QWidget):
             logging.warning("Movement disabled - torque is off")
             return
             
+        # Get step size in motor units (5, 10, or 20)
         step = self.step_sizes[self.speed_level]
         
-        # Scale deltas by step size
+        # Scale deltas by step size (now in motor units)
         actual_dx = dx * step
         actual_dy = dy * step
         actual_dz = dz * step
         
-        logging.info(f"Move delta: dx={actual_dx:.4f}, dy={actual_dy:.4f}, dz={actual_dz:.4f}")
+        logging.info(f"Move delta: dx={actual_dx} units, dy={actual_dy} units, dz={actual_dz} units")
         
         try:
+            # Pass motor steps directly (not meters)
             self.motor_controller.move_end_effector_delta(actual_dx, actual_dy, actual_dz)
         except Exception as e:
             logging.error(f"Failed to move: {e}")
@@ -532,16 +584,16 @@ class TouchTeleopPanel(QWidget):
             logging.error(f"Failed to go home: {e}")
             
     def on_speed_increase(self):
-        """Increase movement speed"""
+        """Increase movement speed (more motor steps per press)"""
         self.speed_level = min(self.speed_level + 1, 3)
         self.speed_display.setText(f"{self.speed_level}")
-        self.step_label.setText(f"Step: {self.step_sizes[self.speed_level]*1000:.1f}mm")
-        logging.info(f"Speed level: {self.speed_level}")
+        self.step_label.setText(f"Step: {self.step_sizes[self.speed_level]} units")
+        logging.info(f"Speed level: {self.speed_level} ({self.step_sizes[self.speed_level]} units)")
         
     def on_speed_decrease(self):
-        """Decrease movement speed"""
+        """Decrease movement speed (fewer motor steps per press)"""
         self.speed_level = max(self.speed_level - 1, 1)
         self.speed_display.setText(f"{self.speed_level}")
-        self.step_label.setText(f"Step: {self.step_sizes[self.speed_level]*1000:.1f}mm")
-        logging.info(f"Speed level: {self.speed_level}")
+        self.step_label.setText(f"Step: {self.step_sizes[self.speed_level]} units")
+        logging.info(f"Speed level: {self.speed_level} ({self.step_sizes[self.speed_level]} units)")
 
