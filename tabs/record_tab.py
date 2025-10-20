@@ -65,10 +65,17 @@ class RecordTab(QWidget):
         self.refresh_action_list()
     
     def init_ui(self):
-        """Initialize UI"""
-        layout = QVBoxLayout(self)
+        """Initialize UI with teleop panel on right side (1/4 width)"""
+        # Main horizontal layout: content (3/4) | teleop panel (1/4)
+        main_layout = QHBoxLayout(self)
+        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        
+        # Left side: Original record content (3/4 width)
+        content_widget = QWidget()
+        layout = QVBoxLayout(content_widget)
         layout.setSpacing(10)
-        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setContentsMargins(5, 5, 5, 5)
         
         # Top bar: Action selector and Save button
         top_bar = QHBoxLayout()
@@ -331,19 +338,9 @@ class RecordTab(QWidget):
         
         velocity_frame.addStretch()
         
-        # Combine primary controls with teleop keypad
-        primary_controls = QVBoxLayout()
-        primary_controls.setSpacing(12)
-        primary_controls.addLayout(control_bar)
-        primary_controls.addLayout(velocity_frame)
-        primary_controls.addStretch()
-
-        controls_section = QHBoxLayout()
-        controls_section.setSpacing(15)
-        controls_section.addLayout(primary_controls, stretch=2)
-        controls_section.addWidget(self._create_teleop_panel(), stretch=1)
-
-        layout.addLayout(controls_section)
+        # Add control sections to content layout
+        layout.addLayout(control_bar)
+        layout.addLayout(velocity_frame)
 
         # Table for recorded positions
         self.table = ActionTableWidget()
@@ -365,6 +362,15 @@ class RecordTab(QWidget):
         """)
         self.status_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.status_label)
+        
+        # Add content widget to main layout (left side, 3/4 width)
+        main_layout.addWidget(content_widget, stretch=3)
+        
+        # Right side: Teleop control panel (1/4 width)
+        teleop_panel = self._create_teleop_panel()
+        teleop_panel.setMaximumWidth(256)
+        teleop_panel.setMinimumWidth(220)
+        main_layout.addWidget(teleop_panel, stretch=1)
 
     def _create_teleop_panel(self) -> QWidget:
         """Create keypad teleoperation panel - 5 row layout for 600px height."""
