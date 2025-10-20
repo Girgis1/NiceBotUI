@@ -10,6 +10,8 @@ from PySide6.QtWidgets import (
     QTabWidget, QCheckBox
 )
 from PySide6.QtCore import Qt, Signal
+from widgets import TouchTeleopPanel
+from utils.motor_controller import MotorController
 
 
 class SettingsTab(QWidget):
@@ -108,6 +110,10 @@ class SettingsTab(QWidget):
         # Control tab
         control_tab = self.create_control_tab()
         self.tab_widget.addTab(control_tab, "🎮 Control")
+        
+        # Teleop tab
+        teleop_tab = self.create_teleop_tab()
+        self.tab_widget.addTab(teleop_tab, "🕹️ Teleop")
         
         main_layout.addWidget(self.tab_widget)
         
@@ -585,6 +591,71 @@ class SettingsTab(QWidget):
         layout.addWidget(self.object_gate_check)
         
         layout.addStretch()
+        return widget
+    
+    def create_teleop_tab(self) -> QWidget:
+        """Create touch teleop control panel tab"""
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        
+        # Info panel on the left
+        info_widget = QWidget()
+        info_layout = QVBoxLayout(info_widget)
+        info_layout.setSpacing(10)
+        
+        info_label = QLabel(
+            "<h3>🕹️ Touch Teleop Control</h3>"
+            "<p>Use this panel to manually position the robot arm with precision.</p>"
+            "<h4>Features:</h4>"
+            "<ul>"
+            "<li><b>XY Movement:</b> Move end effector forward/back/left/right</li>"
+            "<li><b>Z-Axis:</b> Move end effector up/down</li>"
+            "<li><b>Gripper:</b> Open/close gripper</li>"
+            "<li><b>Manual Mode:</b> Hold button to disable torque and manually move arm</li>"
+            "<li><b>Speed Control:</b> Adjust movement step size (1=slow, 3=fast)</li>"
+            "</ul>"
+            "<h4>Workflow:</h4>"
+            "<ol>"
+            "<li>Press & hold <b>Manual Mode</b> → Arm goes limp</li>"
+            "<li>Manually position arm roughly</li>"
+            "<li>Release <b>Manual Mode</b> → Torque re-enables</li>"
+            "<li>Use arrow buttons for fine-tuning</li>"
+            "<li>Press <b>Home (⊙)</b> to return to rest position</li>"
+            "</ol>"
+            "<p style='color: #F59E0B;'><b>⚠️ Safety:</b> Ensure clear workspace before moving robot!</p>"
+        )
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("""
+            QLabel {
+                background: #2D3748;
+                color: #E2E8F0;
+                border: 2px solid #4A5568;
+                border-radius: 8px;
+                padding: 15px;
+                font-size: 13px;
+            }
+            h3 { color: #10B981; }
+            h4 { color: #60A5FA; margin-top: 10px; }
+        """)
+        info_layout.addWidget(info_label)
+        info_layout.addStretch()
+        
+        layout.addWidget(info_widget, stretch=2)
+        
+        # Teleop panel on the right
+        try:
+            motor_controller = MotorController(self.config)
+            self.teleop_panel = TouchTeleopPanel(motor_controller, self.config)
+            self.teleop_panel.setMaximumWidth(280)
+            layout.addWidget(self.teleop_panel, stretch=1)
+        except Exception as e:
+            error_label = QLabel(f"⚠️ Teleop panel unavailable:\n{str(e)}")
+            error_label.setStyleSheet("color: #F59E0B; padding: 20px;")
+            error_label.setWordWrap(True)
+            layout.addWidget(error_label, stretch=1)
+        
         return widget
     
     def add_setting_row(self, layout: QVBoxLayout, label_text: str, default_value: str) -> QLineEdit:

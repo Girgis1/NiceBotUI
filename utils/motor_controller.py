@@ -261,4 +261,208 @@ class MotorController:
                 self.bus.write("Torque_Enable", name, 0, normalize=False)
         except:
             pass
+    
+    def set_torque_enable(self, enable: bool):
+        """
+        Enable or disable torque for all motors.
+        Used by touch teleop panel for manual positioning mode.
+        
+        Args:
+            enable: True to turn torque ON (hold position)
+                   False to turn torque OFF (limp/free movement)
+        """
+        if not MOTOR_CONTROL_AVAILABLE:
+            raise RuntimeError("Motor control not available")
+        
+        connected_locally = False
+        if not self.bus:
+            if not self.connect():
+                raise RuntimeError("Failed to connect to motors")
+            connected_locally = True
+        
+        try:
+            for name in self.motor_names:
+                self.bus.write("Torque_Enable", name, int(enable), normalize=False)
+            
+            print(f"[MOTOR] Torque {'enabled' if enable else 'disabled'} for all motors")
+            
+        except Exception as e:
+            print(f"[MOTOR] Error setting torque: {e}")
+            raise
+        finally:
+            if connected_locally:
+                self.disconnect()
+    
+    def get_torque_status(self) -> dict:
+        """Get torque enable status for all motors"""
+        if not self.bus:
+            return {}
+        
+        status = {}
+        try:
+            for name in self.motor_names:
+                status[name] = bool(self.bus.read("Torque_Enable", name, normalize=False))
+        except Exception as e:
+            print(f"[MOTOR] Error reading torque status: {e}")
+        return status
+    
+    def get_current_position(self) -> dict:
+        """
+        Get current end-effector position in Cartesian coordinates.
+        
+        Returns:
+            dict with keys 'x', 'y', 'z' (in meters) or empty dict on error
+        """
+        try:
+            # Read joint positions
+            joint_positions = self.read_positions()
+            if not joint_positions or len(joint_positions) != 6:
+                return {}
+            
+            # TODO: Implement forward kinematics to convert joint angles to X/Y/Z
+            # For now, return joint positions as placeholder
+            # This should be replaced with proper FK using robot URDF/DH parameters
+            
+            # Placeholder: Use first 3 joint positions scaled to mm
+            # In production, this needs proper FK calculation
+            x = joint_positions[0] / 4095.0 * 100.0  # Scale to ~100mm range
+            y = joint_positions[1] / 4095.0 * 100.0
+            z = joint_positions[2] / 4095.0 * 100.0
+            
+            return {
+                'x': x,
+                'y': y,
+                'z': z,
+                '_raw_joints': joint_positions  # Include raw data for debugging
+            }
+            
+        except Exception as e:
+            print(f"[MOTOR] Error getting position: {e}")
+            return {}
+    
+    def move_end_effector_delta(self, dx: float, dy: float, dz: float, velocity: int = 400):
+        """
+        Move end effector by delta amounts in Cartesian space.
+        Used by touch teleop panel for incremental positioning.
+        
+        Args:
+            dx: Delta X in meters (positive = right)
+            dy: Delta Y in meters (positive = backward)
+            dz: Delta Z in meters (positive = up)
+            velocity: Movement velocity (0-4000)
+        """
+        if not MOTOR_CONTROL_AVAILABLE:
+            raise RuntimeError("Motor control not available")
+        
+        print(f"[MOTOR] Move delta: dx={dx:.4f}m, dy={dy:.4f}m, dz={dz:.4f}m")
+        
+        try:
+            # Read current joint positions
+            current_joints = self.read_positions()
+            if not current_joints or len(current_joints) != 6:
+                raise RuntimeError("Failed to read current position")
+            
+            # TODO: Implement inverse kinematics to convert delta X/Y/Z to joint deltas
+            # For now, use a simple mapping as placeholder
+            # This should be replaced with proper IK using robot URDF/DH parameters
+            
+            # Placeholder mapping (REQUIRES PROPER IK IN PRODUCTION):
+            # Assume: dx affects joint 0 (base rotation)
+            #         dy affects joint 1 (shoulder)
+            #         dz affects joint 2 (elbow)
+            
+            # Scale meters to joint units (very rough approximation)
+            scale_factor = 4095.0 / 0.1  # ~4095 units per 100mm
+            
+            delta_joints = [
+                int(dx * scale_factor * -10),  # Base rotation (scaled)
+                int(dy * scale_factor * -10),  # Shoulder
+                int(dz * scale_factor * 10),   # Elbow
+                0,  # Wrist 1
+                0,  # Wrist 2
+                0   # Wrist 3
+            ]
+            
+            # Calculate target positions
+            target_joints = [
+                current_joints[i] + delta_joints[i]
+                for i in range(6)
+            ]
+            
+            # Clamp to valid range [0, 4095]
+            target_joints = [max(0, min(4095, pos)) for pos in target_joints]
+            
+            print(f"[MOTOR] Target joints: {target_joints[:3]} (first 3)")
+            
+            # Move to target position
+            self.set_positions(target_joints, velocity=velocity, wait=True, keep_connection=True)
+            
+        except Exception as e:
+            print(f"[MOTOR] Error moving end effector: {e}")
+            raise
+    
+    def set_gripper(self, action: int, velocity: int = 400):
+        """
+        Control gripper state.
+        
+        Args:
+            action: 0 = close, 1 = hold, 2 = open
+            velocity: Movement velocity (0-4000)
+        """
+        if not MOTOR_CONTROL_AVAILABLE:
+            raise RuntimeError("Motor control not available")
+        
+        # Gripper is typically the last motor (index 5)
+        gripper_name = self.motor_names[5]  # "gripper"
+        
+        # Map action to position
+        # Adjust these values based on your gripper's actual range
+        gripper_positions = {
+            0: 1024,   # Closed
+            1: 2048,   # Hold/neutral
+            2: 3072    # Open
+        }
+        
+        target_position = gripper_positions.get(action, 2048)
+        
+        print(f"[MOTOR] Gripper action {action} -> position {target_position}")
+        
+        connected_locally = False
+        if not self.bus:
+            if not self.connect():
+                raise RuntimeError("Failed to connect to motors")
+            connected_locally = True
+        
+        try:
+            # Enable torque
+            self.bus.write("Torque_Enable", gripper_name, 1, normalize=False)
+            
+            # Set velocity
+            self.bus.write("Goal_Velocity", gripper_name, velocity, normalize=False)
+            
+            # Set position
+            self.bus.write("Goal_Position", gripper_name, target_position, normalize=False)
+            
+            # Brief wait for gripper to move
+            time.sleep(0.3)
+            
+        except Exception as e:
+            print(f"[MOTOR] Error controlling gripper: {e}")
+            raise
+        finally:
+            if connected_locally:
+                self.disconnect()
+    
+    def go_to_home(self):
+        """Move to configured home/rest position"""
+        if not MOTOR_CONTROL_AVAILABLE:
+            raise RuntimeError("Motor control not available")
+        
+        # Get home position from config
+        home_position = self.config.get("rest_position")
+        if not home_position:
+            raise RuntimeError("No home position configured")
+        
+        print(f"[MOTOR] Moving to home position")
+        self.set_positions(home_position, velocity=600, wait=True)
 
