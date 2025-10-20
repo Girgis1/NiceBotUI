@@ -914,6 +914,15 @@ class RecordTab(QWidget):
             self.table.add_single_position(name, positions, velocity)
             self.position_counter += 1
             
+            # Keep torque enabled so arm doesn't drop
+            try:
+                if self.motor_controller.bus:
+                    for motor_name in self.motor_controller.motor_names:
+                        self.motor_controller.bus.write("Torque_Enable", motor_name, 1, normalize=False)
+                    print("[RECORD] ✓ Torque kept enabled")
+            except Exception as e:
+                print(f"[RECORD] ⚠️ Could not ensure torque: {e}")
+            
             self.status_label.setText(f"✓ Recorded {name} @ vel {velocity}")
             print(f"[RECORD] Added single position action: {name} with velocity {velocity}")
             
@@ -1343,10 +1352,18 @@ class RecordTab(QWidget):
     def _execute_single_position(self, action: dict, is_last: bool):
         """Execute a single position action with precision"""
         positions = action['positions']
-        speed = action['speed']
         
-        # Convert speed % to velocity (600 base * speed/100)
-        velocity = int(600 * (speed / 100.0))
+        # Handle both 'velocity' (new format) and 'speed' (old format)
+        if 'velocity' in action:
+            velocity = action['velocity']
+            speed = int((velocity / 600.0) * 100)  # Calculate speed % for display
+        elif 'speed' in action:
+            speed = action['speed']
+            velocity = int(600 * (speed / 100.0))
+        else:
+            # Fallback to default
+            velocity = 600
+            speed = 100
         
         print(f"[PLAYBACK]   Single position, speed={speed}%, velocity={velocity}")
         
