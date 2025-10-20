@@ -600,31 +600,42 @@ class SettingsTab(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
         
-        # Info panel on the left
+        # Info panel on the left (scrollable for 600px height)
+        info_scroll = QScrollArea()
+        info_scroll.setWidgetResizable(True)
+        info_scroll.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background: transparent;
+            }
+        """)
+        
         info_widget = QWidget()
         info_layout = QVBoxLayout(info_widget)
-        info_layout.setSpacing(10)
+        info_layout.setSpacing(8)
+        info_layout.setContentsMargins(5, 5, 5, 5)
         
         info_label = QLabel(
-            "<h3>🕹️ Touch Teleop Control</h3>"
-            "<p>Use this panel to manually position the robot arm with precision.</p>"
-            "<h4>Features:</h4>"
-            "<ul>"
-            "<li><b>XY Movement:</b> Move end effector forward/back/left/right</li>"
-            "<li><b>Z-Axis:</b> Move end effector up/down</li>"
-            "<li><b>Gripper:</b> Open/close gripper</li>"
-            "<li><b>Manual Mode:</b> Hold button to disable torque and manually move arm</li>"
-            "<li><b>Speed Control:</b> Adjust movement step size (1=slow, 3=fast)</li>"
+            "<h3 style='margin:0;'>🕹️ Touch Teleop</h3>"
+            "<p style='margin:5px 0;'>Manually position the robot arm with precision.</p>"
+            "<h4 style='margin:8px 0 4px 0;'>Controls:</h4>"
+            "<ul style='margin:0; padding-left:20px;'>"
+            "<li><b>↑↓←→</b> XY movement</li>"
+            "<li><b>▲▼</b> Z-axis (up/down)</li>"
+            "<li><b>OPEN/CLOSE</b> Gripper</li>"
+            "<li><b>Manual Mode</b> Hold to disable torque</li>"
+            "<li><b>⊙</b> Return home</li>"
+            "<li><b>Speed</b> 1=slow, 2=med, 3=fast</li>"
             "</ul>"
-            "<h4>Workflow:</h4>"
-            "<ol>"
-            "<li>Press & hold <b>Manual Mode</b> → Arm goes limp</li>"
+            "<h4 style='margin:8px 0 4px 0;'>Workflow:</h4>"
+            "<ol style='margin:0; padding-left:20px;'>"
+            "<li>Hold <b>Manual Mode</b> → arm goes limp</li>"
             "<li>Manually position arm roughly</li>"
-            "<li>Release <b>Manual Mode</b> → Torque re-enables</li>"
+            "<li>Release button → torque re-enables</li>"
             "<li>Use arrow buttons for fine-tuning</li>"
-            "<li>Press <b>Home (⊙)</b> to return to rest position</li>"
             "</ol>"
-            "<p style='color: #F59E0B;'><b>⚠️ Safety:</b> Ensure clear workspace before moving robot!</p>"
+            "<p style='color:#F59E0B; margin:8px 0;'><b>⚠️ Warning:</b> Movement uses placeholder kinematics! "
+            "Arrows move individual joints, NOT true Cartesian X/Y/Z. Proper IK needed for production.</p>"
         )
         info_label.setWordWrap(True)
         info_label.setStyleSheet("""
@@ -633,16 +644,17 @@ class SettingsTab(QWidget):
                 color: #E2E8F0;
                 border: 2px solid #4A5568;
                 border-radius: 8px;
-                padding: 15px;
-                font-size: 13px;
+                padding: 12px;
+                font-size: 12px;
             }
             h3 { color: #10B981; }
-            h4 { color: #60A5FA; margin-top: 10px; }
+            h4 { color: #60A5FA; }
         """)
         info_layout.addWidget(info_label)
         info_layout.addStretch()
         
-        layout.addWidget(info_widget, stretch=2)
+        info_scroll.setWidget(info_widget)
+        layout.addWidget(info_scroll, stretch=2)
         
         # Teleop panel on the right
         try:
