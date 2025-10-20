@@ -197,6 +197,13 @@ class MainWindow(QMainWindow):
             self.sequence_btn.setChecked(True)
         elif index == 2:
             self.record_btn.setChecked(True)
+        elif index == 3:
+            self.settings_btn.setChecked(True)
+        else:
+            # Guard for future tabs to keep button states in sync
+            button = self.tab_buttons.button(index)
+            if button is not None:
+                button.setChecked(True)
     
     def load_config(self):
         """Load configuration from JSON"""
