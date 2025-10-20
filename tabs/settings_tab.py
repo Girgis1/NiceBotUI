@@ -10,8 +10,6 @@ from PySide6.QtWidgets import (
     QTabWidget, QCheckBox
 )
 from PySide6.QtCore import Qt, Signal
-from widgets import TouchTeleopPanel
-from utils.motor_controller import MotorController
 
 
 class SettingsTab(QWidget):
@@ -110,10 +108,6 @@ class SettingsTab(QWidget):
         # Control tab
         control_tab = self.create_control_tab()
         self.tab_widget.addTab(control_tab, "🎮 Control")
-        
-        # Teleop tab
-        teleop_tab = self.create_teleop_tab()
-        self.tab_widget.addTab(teleop_tab, "🕹️ Teleop")
         
         main_layout.addWidget(self.tab_widget)
         

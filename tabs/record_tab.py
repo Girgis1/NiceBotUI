@@ -16,6 +16,7 @@ from PySide6.QtGui import QFont
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from widgets.action_table import ActionTableWidget
+from widgets import TouchTeleopPanel
 from utils.actions_manager import ActionsManager
 from utils.motor_controller import MotorController
 
@@ -52,10 +53,17 @@ class RecordTab(QWidget):
         self.refresh_action_list()
     
     def init_ui(self):
-        """Initialize UI"""
-        layout = QVBoxLayout(self)
+        """Initialize UI with teleop panel on right"""
+        # Main horizontal layout: content | teleop panel
+        main_layout = QHBoxLayout(self)
+        main_layout.setSpacing(5)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        
+        # Left side: Original record tab content
+        content_widget = QWidget()
+        layout = QVBoxLayout(content_widget)
         layout.setSpacing(10)
-        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setContentsMargins(5, 5, 5, 5)
         
         # Top bar: Action selector and Save button
         top_bar = QHBoxLayout()
@@ -342,6 +350,22 @@ class RecordTab(QWidget):
         """)
         self.status_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.status_label)
+        
+        # Add content widget to main layout (left side, 3/4 width)
+        main_layout.addWidget(content_widget, stretch=3)
+        
+        # Right side: Teleop control panel (1/4 width)
+        try:
+            self.teleop_panel = TouchTeleopPanel(self.motor_controller, self.config)
+            self.teleop_panel.setMaximumWidth(256)
+            self.teleop_panel.setMinimumWidth(200)
+            main_layout.addWidget(self.teleop_panel, stretch=1)
+        except Exception as e:
+            error_label = QLabel(f"⚠️ Teleop unavailable:\n{str(e)}")
+            error_label.setStyleSheet("color: #F59E0B; padding: 10px; font-size: 10px;")
+            error_label.setWordWrap(True)
+            error_label.setMaximumWidth(256)
+            main_layout.addWidget(error_label, stretch=1)
     
     def refresh_action_list(self):
         """Refresh the action dropdown list"""
