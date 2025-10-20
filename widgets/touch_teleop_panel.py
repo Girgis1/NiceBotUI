@@ -68,30 +68,8 @@ class TouchTeleopPanel(QWidget):
         """)
         layout.addWidget(header)
         
-        # Manual Mode Warning (hidden by default)
-        self.manual_mode_warning = QLabel("⚠️ MANUAL MODE ⚠️")
-        self.manual_mode_warning.setAlignment(Qt.AlignCenter)
-        self.manual_mode_warning.setStyleSheet("""
-            QLabel {
-                background: #EF4444;
-                color: white;
-                font-size: 10px;
-                font-weight: bold;
-                padding: 3px;
-                border: 2px solid #991B1B;
-                border-radius: 3px;
-            }
-        """)
-        self.manual_mode_warning.setVisible(False)
-        layout.addWidget(self.manual_mode_warning)
-        
-        # Row 1: Manual Mode Button (full width)
-        self.manual_mode_btn = QPushButton("🔓 MANUAL MODE")
-        self.manual_mode_btn.setFixedHeight(45)
-        self.manual_mode_btn.pressed.connect(self.on_torque_disable)
-        self.manual_mode_btn.released.connect(self.on_torque_enable)
-        self.manual_mode_btn.setStyleSheet(self.get_manual_mode_style(False))
-        layout.addWidget(self.manual_mode_btn)
+        # Note: Torque stays ON during panel use for stable control
+        # Torque toggle button is at the bottom of the panel
         
         # Main 3x3 Grid
         grid = QGridLayout()
@@ -193,6 +171,24 @@ class TouchTeleopPanel(QWidget):
         self.step_label.setAlignment(Qt.AlignCenter)
         self.step_label.setStyleSheet("font-size: 9px; color: #6B7280;")
         layout.addWidget(self.step_label)
+        
+        # Torque Toggle Button (bottom right corner)
+        torque_row = QHBoxLayout()
+        torque_row.addStretch()
+        
+        torque_label = QLabel("Torque:")
+        torque_label.setStyleSheet("font-size: 11px; color: #9CA3AF; font-weight: bold;")
+        torque_row.addWidget(torque_label)
+        
+        self.torque_toggle_btn = QPushButton()
+        self.torque_toggle_btn.setFixedSize(40, 40)
+        self.torque_toggle_btn.setCheckable(True)
+        self.torque_toggle_btn.setChecked(True)  # ON by default
+        self.torque_toggle_btn.clicked.connect(self.on_torque_toggle)
+        self.update_torque_button_style()
+        torque_row.addWidget(self.torque_toggle_btn)
+        
+        layout.addLayout(torque_row)
         
         layout.addStretch()
         
@@ -385,39 +381,6 @@ class TouchTeleopPanel(QWidget):
             }
         """
         
-    def get_manual_mode_style(self, active):
-        """Get stylesheet for manual mode button"""
-        if active:
-            # Torque OFF - Red warning style
-            return """
-                QPushButton {
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                        stop:0 #DC2626, stop:0.5 #EF4444, stop:1 #DC2626);
-                    color: white;
-                    border: 3px solid #991B1B;
-                    border-radius: 6px;
-                    font-size: 14px;
-                    font-weight: bold;
-                }
-            """
-        else:
-            # Torque ON - Normal gray style
-            return """
-                QPushButton {
-                    background: #6B7280;
-                    color: white;
-                    border: 2px solid #4B5563;
-                    border-radius: 6px;
-                    font-size: 14px;
-                    font-weight: bold;
-                }
-                QPushButton:hover {
-                    background: #9CA3AF;
-                }
-                QPushButton:pressed {
-                    background: #EF4444;
-                }
-            """
     
     def darken_color(self, hex_color):
         """Darken a hex color by 20%"""
@@ -470,55 +433,56 @@ class TouchTeleopPanel(QWidget):
             
     # ============ Button Handlers ============
     
-    def on_torque_disable(self):
-        """Called when manual mode button is pressed"""
-        logging.info("Manual mode activated - disabling torque")
-        self.torque_enabled = False
+    def on_torque_toggle(self, checked):
+        """Handle torque toggle button click"""
+        self.torque_enabled = checked
         
-        # Disable torque on robot
+        logging.info(f"Torque {'enabled' if checked else 'disabled'}")
+        
+        # Enable/disable torque on robot
         try:
-            self.motor_controller.set_torque_enable(False)
+            self.motor_controller.set_torque_enable(checked)
         except Exception as e:
-            logging.error(f"Failed to disable torque: {e}")
-            
-        # Disable all movement buttons
-        for btn in self.movement_buttons:
-            btn.setEnabled(False)
-            
-        # Show warning
-        self.manual_mode_warning.setVisible(True)
+            logging.error(f"Failed to set torque: {e}")
         
-        # Update button style
-        self.manual_mode_btn.setText("⚠️ TORQUE OFF ⚠️")
-        self.manual_mode_btn.setStyleSheet(self.get_manual_mode_style(True))
+        # Update button appearance
+        self.update_torque_button_style()
         
         # Emit signal
-        self.torque_changed.emit(False)
-        
-    def on_torque_enable(self):
-        """Called when manual mode button is released"""
-        logging.info("Manual mode deactivated - enabling torque")
-        self.torque_enabled = True
-        
-        # Re-enable torque on robot
-        try:
-            self.motor_controller.set_torque_enable(True)
-        except Exception as e:
-            logging.error(f"Failed to enable torque: {e}")
-            
-        # Re-enable all movement buttons
-        for btn in self.movement_buttons:
-            btn.setEnabled(True)
-            
-        # Hide warning
-        self.manual_mode_warning.setVisible(False)
-        
-        # Reset button style
-        self.manual_mode_btn.setText("🔓 MANUAL MODE")
-        self.manual_mode_btn.setStyleSheet(self.get_manual_mode_style(False))
-        
-        # Emit signal
-        self.torque_changed.emit(True)
+        self.torque_changed.emit(checked)
+    
+    def update_torque_button_style(self):
+        """Update torque button appearance based on state"""
+        if self.torque_toggle_btn.isChecked():
+            # Torque ON - Green lit square
+            self.torque_toggle_btn.setStyleSheet("""
+                QPushButton {
+                    background: #10B981;
+                    border: 2px solid #059669;
+                    border-radius: 4px;
+                }
+                QPushButton:hover {
+                    background: #34D399;
+                }
+                QPushButton:pressed {
+                    background: #059669;
+                }
+            """)
+        else:
+            # Torque OFF - Dark gray null square
+            self.torque_toggle_btn.setStyleSheet("""
+                QPushButton {
+                    background: #374151;
+                    border: 2px solid #4B5563;
+                    border-radius: 4px;
+                }
+                QPushButton:hover {
+                    background: #4B5563;
+                }
+                QPushButton:pressed {
+                    background: #1F2937;
+                }
+            """)
         
     def on_move_delta(self, dx, dy, dz):
         """Handle movement button press"""
