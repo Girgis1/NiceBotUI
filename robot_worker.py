@@ -43,8 +43,8 @@ class RobotWorker(QThread):
             server_args = self._build_server_command()
             self.server_proc = subprocess.Popen(
                 server_args,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,  # Don't capture - prevents pipe deadlock
+                stderr=subprocess.DEVNULL,  # Don't capture - prevents pipe deadlock
                 text=True,
                 bufsize=1
             )
@@ -63,7 +63,7 @@ class RobotWorker(QThread):
             self.client_proc = subprocess.Popen(
                 client_args,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.STDOUT,  # Merge stderr into stdout - prevents pipe deadlock
                 text=True,
                 bufsize=1
             )
@@ -156,16 +156,19 @@ class RobotWorker(QThread):
         
     def _monitor_process(self):
         """Monitor robot client subprocess output and parse for status/errors"""
-        stderr_buffer = []
+        output_buffer = []  # Capture all output (stdout + stderr merged)
         current_episode = 0
         total_episodes = 1  # Async inference runs continuously
         
         try:
-            # Read client stdout line by line
+            # Read client stdout line by line (stderr is merged in)
             for line in self.client_proc.stdout:
                 line = line.rstrip()
                 if not line:
                     continue
+                
+                # Save all output for error parsing
+                output_buffer.append(line)
                     
                 self.log_message.emit('info', line)
                 
@@ -183,11 +186,6 @@ class RobotWorker(QThread):
                     self.status_update.emit("Moving to rest position...")
                 elif 'recording' in line.lower():
                     self.status_update.emit(f"Recording Episode {current_episode}/{total_episodes}")
-                    
-            # Client finished, read stderr
-            stderr = self.client_proc.stderr.read()
-            if stderr:
-                stderr_buffer.append(stderr)
                 
             # Wait for client to complete
             return_code = self.client_proc.wait()
@@ -200,13 +198,13 @@ class RobotWorker(QThread):
                 self.log_message.emit('info', "✓ Run completed successfully")
                 self.run_completed.emit(True, f"Completed {total_episodes} episodes")
             else:
-                # Parse errors
-                stderr_text = '\n'.join(stderr_buffer)
-                error_key, context = self._parse_error(stderr_text, return_code)
+                # Parse errors from captured output
+                output_text = '\n'.join(output_buffer)
+                error_key, context = self._parse_error(output_text, return_code)
                 self.error_occurred.emit(error_key, context)
                 self.log_message.emit('error', f"Process exited with code {return_code}")
-                if stderr_text:
-                    self.log_message.emit('error', stderr_text)
+                if output_text:
+                    self.log_message.emit('error', output_text)
                 self.run_completed.emit(False, f"Failed with code {return_code}")
                 
         except Exception as e:
