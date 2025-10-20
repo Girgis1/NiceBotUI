@@ -5,9 +5,12 @@ Allows recording sequences of motor positions for playback
 
 import sys
 from pathlib import Path
+from functools import partial
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QComboBox, QInputDialog, QMessageBox, QLineEdit, QSlider
+    QComboBox, QInputDialog, QMessageBox, QLineEdit, QSlider,
+    QGridLayout, QFrame
 )
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont
@@ -47,7 +50,17 @@ class RecordTab(QWidget):
         self.live_position_threshold = 3  # INDUSTRIAL: 3 units for tighter precision
         self.live_recorded_data = []  # Store {positions, timestamp, velocity}
         self.live_record_start_time = None
-        
+
+        # Touch teleop state
+        self.teleop_step = 10
+        self.teleop_active_joint = None
+        self.teleop_direction = 0
+        self.teleop_multiplier = 1
+        self.teleop_torque_enabled = False
+        self.teleop_hold_timer = QTimer()
+        self.teleop_hold_timer.setInterval(180)
+        self.teleop_hold_timer.timeout.connect(self._apply_active_teleop_step)
+
         self.init_ui()
         self.refresh_action_list()
     
@@ -259,8 +272,6 @@ class RecordTab(QWidget):
         self.live_record_btn.clicked.connect(self.toggle_live_recording)
         control_bar.addWidget(self.live_record_btn)
         
-        layout.addLayout(control_bar)
-        
         # Speed controls - Velocity and Playback Speed Scale
         velocity_frame = QHBoxLayout()
         velocity_frame.setSpacing(15)
@@ -320,8 +331,20 @@ class RecordTab(QWidget):
         
         velocity_frame.addStretch()
         
-        layout.addLayout(velocity_frame)
-        
+        # Combine primary controls with teleop keypad
+        primary_controls = QVBoxLayout()
+        primary_controls.setSpacing(12)
+        primary_controls.addLayout(control_bar)
+        primary_controls.addLayout(velocity_frame)
+        primary_controls.addStretch()
+
+        controls_section = QHBoxLayout()
+        controls_section.setSpacing(15)
+        controls_section.addLayout(primary_controls, stretch=2)
+        controls_section.addWidget(self._create_teleop_panel(), stretch=1)
+
+        layout.addLayout(controls_section)
+
         # Table for recorded positions
         self.table = ActionTableWidget()
         self.table.delete_clicked.connect(self.delete_position)
@@ -342,6 +365,347 @@ class RecordTab(QWidget):
         """)
         self.status_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.status_label)
+
+    def _create_teleop_panel(self) -> QWidget:
+        """Create keypad teleoperation panel (from touch-teleop branch)."""
+
+        teleop_panel = QFrame()
+        teleop_panel.setStyleSheet("""
+            QFrame {
+                background-color: #1f1f1f;
+                border: 1px solid #363636;
+                border-radius: 8px;
+            }
+        """)
+
+        panel_layout = QVBoxLayout(teleop_panel)
+        panel_layout.setContentsMargins(14, 14, 14, 14)
+        panel_layout.setSpacing(12)
+
+        header_row = QHBoxLayout()
+        header_label = QLabel("TELEOP")
+        header_label.setStyleSheet("color: #90CAF9; font-size: 14px; font-weight: bold;")
+        header_row.addWidget(header_label)
+        header_row.addStretch()
+
+        self.hold_btn = QPushButton("HOLD")
+        self.hold_btn.setCheckable(True)
+        self.hold_btn.setMinimumHeight(44)
+        self.hold_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #424242;
+                color: white;
+                border: 1px solid #616161;
+                border-radius: 6px;
+                font-size: 16px;
+                font-weight: bold;
+                padding: 6px 18px;
+            }
+            QPushButton:pressed, QPushButton:checked {
+                background-color: #f44336;
+                border-color: #ef9a9a;
+            }
+        """)
+        self.hold_btn.pressed.connect(self.on_hold_pressed)
+        self.hold_btn.released.connect(self.on_hold_released)
+        header_row.addWidget(self.hold_btn)
+
+        panel_layout.addLayout(header_row)
+
+        keypad_body = QHBoxLayout()
+        keypad_body.setSpacing(12)
+
+        keypad_layout = QGridLayout()
+        keypad_layout.setHorizontalSpacing(10)
+        keypad_layout.setVerticalSpacing(8)
+
+        joint_labels = {
+            "shoulder_pan": "J1 Base",
+            "shoulder_lift": "J2 Shoulder",
+            "elbow_flex": "J3 Elbow",
+            "wrist_flex": "J4 Pitch",
+            "wrist_roll": "J5 Yaw",
+            "gripper": "J6 Roll",
+        }
+
+        joint_pairs = [(0, 1), (2, 3), (4, 5)]
+        row = 0
+        for pair in joint_pairs:
+            for col, joint_index in enumerate(pair):
+                if joint_index >= len(self.motor_controller.motor_names):
+                    continue
+
+                motor_name = self.motor_controller.motor_names[joint_index]
+                label = joint_labels.get(motor_name, motor_name.replace('_', ' ').title())
+
+                plus_button = self._create_teleop_button(f"{label} +", joint_index, +1)
+                keypad_layout.addWidget(plus_button, row, col)
+
+                minus_button = self._create_teleop_button(f"{label} -", joint_index, -1)
+                keypad_layout.addWidget(minus_button, row + 1, col)
+            row += 2
+
+        # Gripper controls (mapped to last joint)
+        gripper_index = len(self.motor_controller.motor_names) - 1
+        if gripper_index >= 0:
+            close_btn = QPushButton("CLOSE J6")
+            close_btn.setMinimumHeight(44)
+            close_btn.setStyleSheet(self._teleop_secondary_button_style("#7E57C2"))
+            close_btn.clicked.connect(partial(self._apply_teleop_step, gripper_index, -1, 4))
+            keypad_layout.addWidget(close_btn, row, 0)
+
+            open_btn = QPushButton("OPEN J6")
+            open_btn.setMinimumHeight(44)
+            open_btn.setStyleSheet(self._teleop_secondary_button_style("#4CAF50"))
+            open_btn.clicked.connect(partial(self._apply_teleop_step, gripper_index, +1, 4))
+            keypad_layout.addWidget(open_btn, row, 1)
+
+        keypad_body.addLayout(keypad_layout, stretch=3)
+
+        # Step slider column
+        slider_layout = QVBoxLayout()
+        slider_layout.setSpacing(6)
+        slider_layout.setAlignment(Qt.AlignHCenter)
+
+        step_label = QLabel("Step")
+        step_label.setStyleSheet("color: #ffffff; font-size: 13px; font-weight: bold;")
+        slider_layout.addWidget(step_label, alignment=Qt.AlignHCenter)
+
+        self.teleop_step_slider = QSlider(Qt.Vertical)
+        self.teleop_step_slider.setMinimum(1)
+        self.teleop_step_slider.setMaximum(200)
+        self.teleop_step_slider.setValue(self.teleop_step)
+        self.teleop_step_slider.setTickPosition(QSlider.TicksBothSides)
+        self.teleop_step_slider.setTickInterval(10)
+        self.teleop_step_slider.setStyleSheet("""
+            QSlider::groove:vertical {
+                border: 1px solid #404040;
+                width: 6px;
+                background: #2d2d2d;
+                border-radius: 3px;
+            }
+            QSlider::handle:vertical {
+                background: #2196F3;
+                border: 2px solid #1976D2;
+                height: 20px;
+                margin: -2px 0;
+                border-radius: 8px;
+            }
+            QSlider::handle:vertical:hover {
+                background: #1E88E5;
+            }
+            QSlider::add-page:vertical {
+                background: #2196F3;
+                border-radius: 3px;
+            }
+        """)
+        self.teleop_step_slider.valueChanged.connect(self.on_teleop_step_changed)
+        slider_layout.addWidget(self.teleop_step_slider, stretch=1)
+
+        self.teleop_step_value = QLabel(f"{self.teleop_step} units")
+        self.teleop_step_value.setStyleSheet("color: #ffffff; font-size: 12px;")
+        slider_layout.addWidget(self.teleop_step_value, alignment=Qt.AlignHCenter)
+
+        keypad_body.addLayout(slider_layout, stretch=1)
+
+        panel_layout.addLayout(keypad_body)
+
+        self.torque_status_label = QLabel()
+        self._update_torque_label(locked=False)
+        panel_layout.addWidget(self.torque_status_label)
+
+        return teleop_panel
+
+    def _teleop_button_style(self) -> str:
+        return """
+            QPushButton {
+                background-color: #1976D2;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 10px;
+                min-height: 48px;
+            }
+            QPushButton:hover {
+                background-color: #1565C0;
+            }
+            QPushButton:pressed {
+                background-color: #0D47A1;
+            }
+        """
+
+    def _teleop_secondary_button_style(self, color: str) -> str:
+        hover = self._adjust_color(color, 1.1)
+        pressed = self._adjust_color(color, 0.9)
+        return f"""
+            QPushButton {{
+                background-color: {color};
+                color: white;
+                border: none;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: bold;
+                padding: 10px;
+            }}
+            QPushButton:hover {{
+                background-color: {hover};
+            }}
+            QPushButton:pressed {{
+                background-color: {pressed};
+            }}
+        """
+
+    def _create_teleop_button(self, label: str, joint_index: int, direction: int) -> QPushButton:
+        button = QPushButton(label)
+        button.setMinimumHeight(48)
+        button.setStyleSheet(self._teleop_button_style())
+        button.pressed.connect(partial(self.start_teleop_move, joint_index, direction))
+        button.released.connect(self.stop_teleop_move)
+        return button
+
+    @staticmethod
+    def _adjust_color(color: str, factor: float) -> str:
+        """Lighten or darken a hex color string."""
+        color = color.lstrip('#')
+        if len(color) != 6:
+            return f"#{color}"
+
+        r = int(color[0:2], 16)
+        g = int(color[2:4], 16)
+        b = int(color[4:6], 16)
+
+        r = max(0, min(255, int(r * factor)))
+        g = max(0, min(255, int(g * factor)))
+        b = max(0, min(255, int(b * factor)))
+
+        return f"#{r:02X}{g:02X}{b:02X}"
+
+    def on_teleop_step_changed(self, value: int):
+        """Update teleop step size display."""
+        self.teleop_step = value
+        self.teleop_step_value.setText(f"{value} units")
+
+    def ensure_teleop_connection(self) -> bool:
+        """Ensure bus connection is available for teleop operations."""
+        try:
+            if not self.motor_controller.bus:
+                if not self.motor_controller.connect():
+                    self.status_label.setText("❌ Failed to connect to motors")
+                    return False
+        except Exception as exc:
+            print(f"[TELEOP] ❌ Failed to connect: {exc}")
+            self.status_label.setText("❌ Failed to connect to motors")
+            return False
+        return bool(self.motor_controller.bus)
+
+    def ensure_teleop_ready(self) -> bool:
+        """Ensure teleop connection and torque lock are active."""
+        if not self.ensure_teleop_connection():
+            return False
+
+        if not self.teleop_torque_enabled:
+            try:
+                for name in self.motor_controller.motor_names:
+                    self.motor_controller.bus.write("Torque_Enable", name, 1, normalize=False)
+                self.teleop_torque_enabled = True
+                self._update_torque_label(locked=True)
+            except Exception as exc:
+                print(f"[TELEOP] ❌ Failed to enable torque: {exc}")
+                self.status_label.setText("❌ Failed to enable torque")
+                return False
+
+        return True
+
+    def on_hold_pressed(self):
+        """Hold button pressed - release torque for manual positioning."""
+        self.stop_teleop_move()
+        if not self.ensure_teleop_connection():
+            return
+
+        try:
+            for name in self.motor_controller.motor_names:
+                self.motor_controller.bus.write("Torque_Enable", name, 0, normalize=False)
+            self.teleop_torque_enabled = False
+            self._update_torque_label(locked=False)
+            self.status_label.setText("Torque released - manually move the arm, then press SET")
+        except Exception as exc:
+            print(f"[TELEOP] ❌ Failed to release torque: {exc}")
+            self.status_label.setText("❌ Failed to release torque")
+
+    def on_hold_released(self):
+        """Hold released - re-enable torque lock."""
+        self.hold_btn.setChecked(False)
+        if self.ensure_teleop_ready():
+            self.status_label.setText("Torque locked - use keypad for fine adjustments")
+
+    def start_teleop_move(self, joint_index: int, direction: int):
+        """Start continuous teleop adjustments for a joint."""
+        if not self.ensure_teleop_ready():
+            return
+
+        self.teleop_active_joint = joint_index
+        self.teleop_direction = direction
+        self.teleop_multiplier = 1
+        self._apply_active_teleop_step()
+        self.teleop_hold_timer.start()
+
+    def stop_teleop_move(self):
+        """Stop continuous teleop adjustments."""
+        if self.teleop_hold_timer.isActive():
+            self.teleop_hold_timer.stop()
+        self.teleop_active_joint = None
+        self.teleop_direction = 0
+        self.teleop_multiplier = 1
+
+    def _apply_active_teleop_step(self):
+        """Apply a step for the active joint during continuous teleop."""
+        if self.teleop_active_joint is None or self.teleop_direction == 0:
+            return
+
+        self._apply_teleop_step(
+            self.teleop_active_joint,
+            self.teleop_direction,
+            self.teleop_multiplier,
+        )
+
+    def _apply_teleop_step(self, joint_index: int, direction: int, multiplier: int = 1):
+        """Apply a teleop step to the given joint."""
+        if not self.ensure_teleop_ready():
+            return
+
+        try:
+            positions = self.motor_controller.read_positions_from_bus()
+            if not positions:
+                positions = self.motor_controller.read_positions()
+            if not positions or joint_index >= len(positions):
+                return
+
+            step = self.teleop_step * multiplier
+            target_positions = positions[:]
+            target_positions[joint_index] = max(0, min(4095, positions[joint_index] + direction * step))
+
+            motor_name = self.motor_controller.motor_names[joint_index]
+            velocity = max(120, min(1200, self.default_velocity))
+            self.motor_controller.bus.write("Goal_Velocity", motor_name, velocity, normalize=False)
+            self.motor_controller.bus.write("Goal_Position", motor_name, target_positions[joint_index], normalize=False)
+
+            print(
+                f"[TELEOP] Joint {motor_name}: {positions[joint_index]} -> {target_positions[joint_index]}"
+            )
+
+        except Exception as exc:
+            print(f"[TELEOP] ❌ Failed to move joint: {exc}")
+            self.status_label.setText("❌ Teleop move failed")
+
+    def _update_torque_label(self, locked: bool):
+        if locked:
+            self.torque_status_label.setText("Torque: LOCKED")
+            self.torque_status_label.setStyleSheet("color: #A5D6A7; font-size: 12px; font-weight: bold;")
+        else:
+            self.torque_status_label.setText("Torque: RELEASED")
+            self.torque_status_label.setStyleSheet("color: #FFAB91; font-size: 12px; font-weight: bold;")
     
     def refresh_action_list(self):
         """Refresh the action dropdown list"""
