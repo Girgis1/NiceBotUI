@@ -5,6 +5,7 @@ Motor Controller - Unified interface for motor operations with position verifica
 import time
 from pathlib import Path
 import sys
+import logging
 
 # Add parent directory to path to import rest_pos
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -15,6 +16,16 @@ try:
 except ImportError:
     MOTOR_CONTROL_AVAILABLE = False
     print("Warning: Motor control not available")
+
+# Try to import LeRobot IK components
+try:
+    from lerobot.model.kinematics import RobotKinematics
+    from lerobot.robots.so100_follower.robot_kinematic_processor import InverseKinematicsEEToJoints
+    from lerobot.processor import RobotAction, RobotObservation
+    LEROBOT_IK_AVAILABLE = True
+except ImportError:
+    LEROBOT_IK_AVAILABLE = False
+    logging.warning("LeRobot IK not available - using direct joint control")
 
 
 class MotorController:
@@ -41,6 +52,14 @@ class MotorController:
         # Load position tolerance from config if available
         if "position_tolerance" in config.get("robot", {}):
             self.POSITION_TOLERANCE = config["robot"]["position_tolerance"]
+        
+        # Initialize IK solver if available
+        self.ik_solver = None
+        self.ik_processor = None
+        self.ee_reference = None  # Current end-effector reference position
+        
+        if LEROBOT_IK_AVAILABLE:
+            self._init_ik_solver()
     
     def read_positions(self) -> list[int]:
         """Read current motor positions
@@ -262,6 +281,45 @@ class MotorController:
         except:
             pass
     
+    def _init_ik_solver(self):
+        """Initialize IK solver using LeRobot's kinematics"""
+        try:
+            # Check for URDF file path in config
+            urdf_path = self.config.get("urdf_path")
+            
+            if not urdf_path:
+                # Default URDF path (user needs to download it)
+                urdf_path = Path(__file__).parent.parent / "SO101" / "so101_new_calib.urdf"
+                
+            if not Path(urdf_path).exists():
+                logging.warning(
+                    f"URDF file not found at {urdf_path}. "
+                    "Download from: https://github.com/TheRobotStudio/SO-ARM100/blob/main/Simulation/SO101/so101_new_calib.urdf"
+                )
+                return
+            
+            # Initialize kinematics solver
+            self.ik_solver = RobotKinematics(
+                urdf_path=str(urdf_path),
+                target_frame_name="gripper_frame_link",
+                joint_names=self.motor_names
+            )
+            
+            # Initialize IK processor
+            self.ik_processor = InverseKinematicsEEToJoints(
+                kinematics=self.ik_solver,
+                motor_names=self.motor_names,
+                initial_guess_current_joints=True  # Use current joint state as IK starting point
+            )
+            
+            logging.info("✓ IK solver initialized successfully")
+            print("[MOTOR] ✓ IK solver initialized - using proper end-effector control")
+            
+        except Exception as e:
+            logging.error(f"Failed to initialize IK solver: {e}")
+            self.ik_solver = None
+            self.ik_processor = None
+    
     def set_torque_enable(self, enable: bool):
         """
         Enable or disable torque for all motors.
@@ -343,7 +401,7 @@ class MotorController:
     def move_end_effector_delta(self, dx: float, dy: float, dz: float, velocity: int = 400):
         """
         Move end effector by delta amounts in Cartesian space.
-        Used by touch teleop panel for incremental positioning.
+        Uses proper IK if available, falls back to direct joint control.
         
         Args:
             dx: Delta X in meters (positive = right)
@@ -362,37 +420,13 @@ class MotorController:
             if not current_joints or len(current_joints) != 6:
                 raise RuntimeError("Failed to read current position")
             
-            # TODO: Implement inverse kinematics to convert delta X/Y/Z to joint deltas
-            # For now, use a simple mapping as placeholder
-            # This should be replaced with proper IK using robot URDF/DH parameters
-            
-            # Placeholder mapping (REQUIRES PROPER IK IN PRODUCTION):
-            # Assume: dx affects joint 0 (base rotation)
-            #         dy affects joint 1 (shoulder)
-            #         dz affects joint 2 (elbow)
-            
-            # Scale meters to joint units (very rough approximation)
-            scale_factor = 4095.0 / 0.1  # ~4095 units per 100mm
-            
-            delta_joints = [
-                int(dx * scale_factor * -10),  # Base rotation (scaled)
-                int(dy * scale_factor * -10),  # Shoulder
-                int(dz * scale_factor * 10),   # Elbow
-                0,  # Wrist 1
-                0,  # Wrist 2
-                0   # Wrist 3
-            ]
-            
-            # Calculate target positions
-            target_joints = [
-                current_joints[i] + delta_joints[i]
-                for i in range(6)
-            ]
-            
-            # Clamp to valid range [0, 4095]
-            target_joints = [max(0, min(4095, pos)) for pos in target_joints]
-            
-            print(f"[MOTOR] Target joints: {target_joints[:3]} (first 3)")
+            # Try to use proper IK if available
+            if self.ik_processor and self.ik_solver:
+                target_joints = self._move_with_ik(dx, dy, dz, current_joints)
+            else:
+                # Fallback: Direct joint control
+                print("[MOTOR] ⚠️ Using direct joint control (IK not available)")
+                target_joints = self._move_without_ik(dx, dy, dz, current_joints)
             
             # Move to target position
             self.set_positions(target_joints, velocity=velocity, wait=True, keep_connection=True)
@@ -400,6 +434,71 @@ class MotorController:
         except Exception as e:
             print(f"[MOTOR] Error moving end effector: {e}")
             raise
+    
+    def _move_with_ik(self, dx: float, dy: float, dz: float, current_joints: list[int]) -> list[int]:
+        """
+        Move using proper inverse kinematics (HIL-SERL style).
+        
+        Returns:
+            Target joint positions
+        """
+        try:
+            # Get current end-effector pose using forward kinematics
+            current_ee_pose = self.ik_solver.forward_kinematics(current_joints)
+            
+            # Apply delta to end-effector position
+            target_ee_pose = current_ee_pose.copy()
+            target_ee_pose[0] += dx  # X
+            target_ee_pose[1] += dy  # Y
+            target_ee_pose[2] += dz  # Z
+            # Keep orientation unchanged (indices 3-6)
+            
+            # Solve IK to get target joint positions
+            target_joints = self.ik_solver.inverse_kinematics(
+                target_ee_pose,
+                initial_guess=current_joints  # Use current joints as starting point
+            )
+            
+            # Clamp to valid range [0, 4095]
+            target_joints = [max(0, min(4095, int(pos))) for pos in target_joints]
+            
+            print(f"[MOTOR] ✓ IK solution: {target_joints[:3]} (first 3)")
+            return target_joints
+            
+        except Exception as e:
+            print(f"[MOTOR] ⚠️ IK failed: {e}, falling back to direct control")
+            return self._move_without_ik(dx, dy, dz, current_joints)
+    
+    def _move_without_ik(self, dx: float, dy: float, dz: float, current_joints: list[int]) -> list[int]:
+        """
+        Fallback: Direct joint control with small steps.
+        
+        Returns:
+            Target joint positions
+        """
+        # Small incremental movement (~0.5 degrees per press)
+        joint_step = 20
+        
+        delta_joints = [
+            int(dx * joint_step * -1),  # Base rotation
+            int(dy * joint_step * -1),  # Shoulder
+            int(dz * joint_step * 1),   # Elbow
+            0,  # Wrist 1
+            0,  # Wrist 2
+            0   # Wrist 3
+        ]
+        
+        # Calculate target positions
+        target_joints = [
+            current_joints[i] + delta_joints[i]
+            for i in range(6)
+        ]
+        
+        # Clamp to valid range [0, 4095]
+        target_joints = [max(0, min(4095, pos)) for pos in target_joints]
+        
+        print(f"[MOTOR] Direct joint control: {target_joints[:3]} (first 3)")
+        return target_joints
     
     def set_gripper(self, action: int, velocity: int = 400):
         """
