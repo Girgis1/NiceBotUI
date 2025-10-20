@@ -356,9 +356,20 @@ class RecordTab(QWidget):
         
         # Right side: Teleop control panel (1/4 width)
         try:
-            self.teleop_panel = TouchTeleopPanel(self.motor_controller, self.config)
+            self.teleop_panel = TouchTeleopPanel()  # No motor controller passed
             self.teleop_panel.setMaximumWidth(256)
             self.teleop_panel.setMinimumWidth(200)
+            
+            # Connect teleop signals to RecordTab handlers
+            self.teleop_panel.move_joint_requested.connect(self.on_teleop_move_joint)
+            self.teleop_panel.gripper_requested.connect(self.on_teleop_gripper)
+            self.teleop_panel.torque_change_requested.connect(self.on_teleop_torque_change)
+            
+            # Start position update timer for teleop display
+            self.teleop_position_timer = QTimer()
+            self.teleop_position_timer.timeout.connect(self.update_teleop_position_display)
+            self.teleop_position_timer.start(100)  # 10Hz
+            
             main_layout.addWidget(self.teleop_panel, stretch=1)
         except Exception as e:
             error_label = QLabel(f"⚠️ Teleop unavailable:\n{str(e)}")
@@ -1040,4 +1051,37 @@ class RecordTab(QWidget):
         
         self.status_label.setText("⏹ Playback stopped")
         self.playback_status.emit("stopped")
+    
+    # ============ Teleop Panel Signal Handlers ============
+    
+    def on_teleop_move_joint(self, joint_index: int, delta_steps: int):
+        """Handle joint movement request from teleop panel"""
+        try:
+            # Use motor controller's move_joint_delta method
+            self.motor_controller.move_joint_delta(joint_index, delta_steps)
+        except Exception as e:
+            print(f"[TELEOP] Error moving joint {joint_index}: {e}")
+    
+    def on_teleop_gripper(self, action: int):
+        """Handle gripper request from teleop panel"""
+        try:
+            self.motor_controller.set_gripper(action)
+        except Exception as e:
+            print(f"[TELEOP] Error controlling gripper: {e}")
+    
+    def on_teleop_torque_change(self, enable: bool):
+        """Handle torque change request from teleop panel"""
+        try:
+            self.motor_controller.set_torque_enable(enable)
+        except Exception as e:
+            print(f"[TELEOP] Error setting torque: {e}")
+    
+    def update_teleop_position_display(self):
+        """Update teleop panel position display (10Hz)"""
+        try:
+            positions = self.motor_controller.read_positions()
+            if positions and len(positions) == 6:
+                self.teleop_panel.update_position_display(positions)
+        except Exception as e:
+            pass  # Silently fail, don't spam terminal
 

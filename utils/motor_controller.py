@@ -342,8 +342,6 @@ class MotorController:
             for name in self.motor_names:
                 self.bus.write("Torque_Enable", name, int(enable), normalize=False)
             
-            print(f"[MOTOR] Torque {'enabled' if enable else 'disabled'} for all motors")
-            
         except Exception as e:
             print(f"[MOTOR] Error setting torque: {e}")
             raise
@@ -427,11 +425,8 @@ class MotorController:
             # Clamp to valid range [0, 4095]
             target_joints[joint_index] = max(0, min(4095, target_joints[joint_index]))
             
-            logging.info(
-                f"[MOTOR] Joint {joint_index} ({self.motor_names[joint_index]}): "
-                f"{current_joints[joint_index]} → {target_joints[joint_index]} "
-                f"(delta: {delta_steps})"
-            )
+            # Silently move joint (no terminal spam)
+            pass
             
             # Move to target position
             self.set_positions(target_joints, velocity=velocity, wait=False, keep_connection=True)
@@ -467,8 +462,6 @@ class MotorController:
         }
         
         target_position = gripper_positions.get(action, 2048)
-        
-        logging.info(f"[MOTOR] Gripper action {action} -> position {target_position}")
         
         try:
             # Read current positions
