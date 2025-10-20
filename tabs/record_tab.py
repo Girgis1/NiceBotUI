@@ -367,7 +367,7 @@ class RecordTab(QWidget):
         layout.addWidget(self.status_label)
 
     def _create_teleop_panel(self) -> QWidget:
-        """Create keypad teleoperation panel (from touch-teleop branch)."""
+        """Create keypad teleoperation panel - 5 row layout for 600px height."""
 
         teleop_panel = QFrame()
         teleop_panel.setStyleSheet("""
@@ -379,27 +379,28 @@ class RecordTab(QWidget):
         """)
 
         panel_layout = QVBoxLayout(teleop_panel)
-        panel_layout.setContentsMargins(14, 14, 14, 14)
-        panel_layout.setSpacing(12)
+        panel_layout.setContentsMargins(8, 8, 8, 8)
+        panel_layout.setSpacing(4)
 
+        # Header with HOLD button
         header_row = QHBoxLayout()
         header_label = QLabel("TELEOP")
-        header_label.setStyleSheet("color: #90CAF9; font-size: 14px; font-weight: bold;")
+        header_label.setStyleSheet("color: #90CAF9; font-size: 12px; font-weight: bold;")
         header_row.addWidget(header_label)
         header_row.addStretch()
 
         self.hold_btn = QPushButton("HOLD")
         self.hold_btn.setCheckable(True)
-        self.hold_btn.setMinimumHeight(44)
+        self.hold_btn.setFixedHeight(32)
         self.hold_btn.setStyleSheet("""
             QPushButton {
                 background-color: #424242;
                 color: white;
                 border: 1px solid #616161;
-                border-radius: 6px;
-                font-size: 16px;
+                border-radius: 4px;
+                font-size: 11px;
                 font-weight: bold;
-                padding: 6px 18px;
+                padding: 4px 12px;
             }
             QPushButton:pressed, QPushButton:checked {
                 background-color: #f44336;
@@ -412,107 +413,168 @@ class RecordTab(QWidget):
 
         panel_layout.addLayout(header_row)
 
-        keypad_body = QHBoxLayout()
-        keypad_body.setSpacing(12)
+        # Main grid layout (5 rows x 3 columns)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(3)
+        grid.setVerticalSpacing(3)
 
-        keypad_layout = QGridLayout()
-        keypad_layout.setHorizontalSpacing(10)
-        keypad_layout.setVerticalSpacing(8)
+        # Helper to create compact buttons
+        def create_btn(text, color):
+            btn = QPushButton(text)
+            btn.setFixedHeight(48)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {color};
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    font-size: 10px;
+                    font-weight: bold;
+                }}
+                QPushButton:hover {{
+                    background-color: {self._adjust_color(color, 1.1)};
+                }}
+                QPushButton:pressed {{
+                    background-color: {self._adjust_color(color, 0.9)};
+                }}
+            """)
+            return btn
 
-        joint_labels = {
-            "shoulder_pan": "J1 Base",
-            "shoulder_lift": "J2 Shoulder",
-            "elbow_flex": "J3 Elbow",
-            "wrist_flex": "J4 Pitch",
-            "wrist_roll": "J5 Yaw",
-            "gripper": "J6 Roll",
-        }
+        # ROW 0: J3 Elbow + J2 Shoulder
+        btn_j3_up = create_btn("▲\nJ3", "#10B981")
+        btn_j3_up.pressed.connect(partial(self.start_teleop_move, 2, 1))
+        btn_j3_up.released.connect(self.stop_teleop_move)
+        grid.addWidget(btn_j3_up, 0, 0)
 
-        joint_pairs = [(0, 1), (2, 3), (4, 5)]
-        row = 0
-        for pair in joint_pairs:
-            for col, joint_index in enumerate(pair):
-                if joint_index >= len(self.motor_controller.motor_names):
-                    continue
+        btn_j2_up = create_btn("↑\nJ2", "#1976D2")
+        btn_j2_up.pressed.connect(partial(self.start_teleop_move, 1, 1))
+        btn_j2_up.released.connect(self.stop_teleop_move)
+        grid.addWidget(btn_j2_up, 0, 1)
 
-                motor_name = self.motor_controller.motor_names[joint_index]
-                label = joint_labels.get(motor_name, motor_name.replace('_', ' ').title())
+        btn_j3_down = create_btn("▼\nJ3", "#10B981")
+        btn_j3_down.pressed.connect(partial(self.start_teleop_move, 2, -1))
+        btn_j3_down.released.connect(self.stop_teleop_move)
+        grid.addWidget(btn_j3_down, 0, 2)
 
-                plus_button = self._create_teleop_button(f"{label} +", joint_index, +1)
-                keypad_layout.addWidget(plus_button, row, col)
+        # ROW 1: J1 Base (with center spacer)
+        btn_j1_left = create_btn("←\nJ1", "#1976D2")
+        btn_j1_left.pressed.connect(partial(self.start_teleop_move, 0, -1))
+        btn_j1_left.released.connect(self.stop_teleop_move)
+        grid.addWidget(btn_j1_left, 1, 0)
 
-                minus_button = self._create_teleop_button(f"{label} -", joint_index, -1)
-                keypad_layout.addWidget(minus_button, row + 1, col)
-            row += 2
+        spacer = QLabel()
+        spacer.setStyleSheet("background: #2d2d2d; border-radius: 4px;")
+        grid.addWidget(spacer, 1, 1)
 
-        # Gripper controls (mapped to last joint)
-        gripper_index = len(self.motor_controller.motor_names) - 1
-        if gripper_index >= 0:
-            close_btn = QPushButton("CLOSE J6")
-            close_btn.setMinimumHeight(44)
-            close_btn.setStyleSheet(self._teleop_secondary_button_style("#7E57C2"))
-            close_btn.clicked.connect(partial(self._apply_teleop_step, gripper_index, -1, 4))
-            keypad_layout.addWidget(close_btn, row, 0)
+        btn_j1_right = create_btn("→\nJ1", "#1976D2")
+        btn_j1_right.pressed.connect(partial(self.start_teleop_move, 0, 1))
+        btn_j1_right.released.connect(self.stop_teleop_move)
+        grid.addWidget(btn_j1_right, 1, 2)
 
-            open_btn = QPushButton("OPEN J6")
-            open_btn.setMinimumHeight(44)
-            open_btn.setStyleSheet(self._teleop_secondary_button_style("#4CAF50"))
-            open_btn.clicked.connect(partial(self._apply_teleop_step, gripper_index, +1, 4))
-            keypad_layout.addWidget(open_btn, row, 1)
+        # ROW 2: J4 Wrist Pitch + J2 Shoulder
+        btn_j4_up = create_btn("↑\nJ4", "#F59E0B")
+        btn_j4_up.pressed.connect(partial(self.start_teleop_move, 3, 1))
+        btn_j4_up.released.connect(self.stop_teleop_move)
+        grid.addWidget(btn_j4_up, 2, 0)
 
-        keypad_body.addLayout(keypad_layout, stretch=3)
+        btn_j2_down = create_btn("↓\nJ2", "#1976D2")
+        btn_j2_down.pressed.connect(partial(self.start_teleop_move, 1, -1))
+        btn_j2_down.released.connect(self.stop_teleop_move)
+        grid.addWidget(btn_j2_down, 2, 1)
 
-        # Step slider column
-        slider_layout = QVBoxLayout()
-        slider_layout.setSpacing(6)
-        slider_layout.setAlignment(Qt.AlignHCenter)
+        btn_j4_down = create_btn("↓\nJ4", "#F59E0B")
+        btn_j4_down.pressed.connect(partial(self.start_teleop_move, 3, -1))
+        btn_j4_down.released.connect(self.stop_teleop_move)
+        grid.addWidget(btn_j4_down, 2, 2)
 
-        step_label = QLabel("Step")
-        step_label.setStyleSheet("color: #ffffff; font-size: 13px; font-weight: bold;")
-        slider_layout.addWidget(step_label, alignment=Qt.AlignHCenter)
+        # ROW 3: J5 Wrist Roll (2 wide buttons)
+        btn_j5_left = create_btn("◀ J5", "#F59E0B")
+        btn_j5_left.setFixedHeight(38)
+        btn_j5_left.pressed.connect(partial(self.start_teleop_move, 4, -1))
+        btn_j5_left.released.connect(self.stop_teleop_move)
+        grid.addWidget(btn_j5_left, 3, 0, 1, 2)  # Span 2 columns
 
-        self.teleop_step_slider = QSlider(Qt.Vertical)
-        self.teleop_step_slider.setMinimum(1)
-        self.teleop_step_slider.setMaximum(200)
-        self.teleop_step_slider.setValue(self.teleop_step)
-        self.teleop_step_slider.setTickPosition(QSlider.TicksBothSides)
-        self.teleop_step_slider.setTickInterval(10)
-        self.teleop_step_slider.setStyleSheet("""
-            QSlider::groove:vertical {
-                border: 1px solid #404040;
-                width: 6px;
-                background: #2d2d2d;
+        btn_j5_right = create_btn("▶ J5", "#F59E0B")
+        btn_j5_right.setFixedHeight(38)
+        btn_j5_right.pressed.connect(partial(self.start_teleop_move, 4, 1))
+        btn_j5_right.released.connect(self.stop_teleop_move)
+        grid.addWidget(btn_j5_right, 3, 2)
+
+        # ROW 4: J6 Gripper (2 wide buttons)
+        btn_gripper_close = create_btn("CLOSE J6", "#9333EA")
+        btn_gripper_close.setFixedHeight(38)
+        btn_gripper_close.clicked.connect(partial(self._apply_teleop_step, 5, -1, 4))
+        grid.addWidget(btn_gripper_close, 4, 0, 1, 2)  # Span 2 columns
+
+        btn_gripper_open = create_btn("OPEN J6", "#9333EA")
+        btn_gripper_open.setFixedHeight(38)
+        btn_gripper_open.clicked.connect(partial(self._apply_teleop_step, 5, 1, 4))
+        grid.addWidget(btn_gripper_open, 4, 2)
+
+        panel_layout.addLayout(grid)
+
+        # Step control with up/down arrows
+        step_row = QHBoxLayout()
+        step_row.setSpacing(4)
+
+        step_label = QLabel("Step:")
+        step_label.setStyleSheet("color: #fff; font-size: 9px; font-weight: bold;")
+        step_row.addWidget(step_label)
+
+        btn_step_down = QPushButton("▼")
+        btn_step_down.setFixedSize(24, 24)
+        btn_step_down.clicked.connect(lambda: self.adjust_step(-5))
+        btn_step_down.setStyleSheet("""
+            QPushButton {
+                background: #424242;
+                color: white;
+                border: none;
                 border-radius: 3px;
+                font-size: 12px;
             }
-            QSlider::handle:vertical {
-                background: #2196F3;
-                border: 2px solid #1976D2;
-                height: 20px;
-                margin: -2px 0;
-                border-radius: 8px;
-            }
-            QSlider::handle:vertical:hover {
-                background: #1E88E5;
-            }
-            QSlider::add-page:vertical {
-                background: #2196F3;
-                border-radius: 3px;
-            }
+            QPushButton:hover { background: #616161; }
         """)
-        self.teleop_step_slider.valueChanged.connect(self.on_teleop_step_changed)
-        slider_layout.addWidget(self.teleop_step_slider, stretch=1)
+        step_row.addWidget(btn_step_down)
 
-        self.teleop_step_value = QLabel(f"{self.teleop_step} units")
-        self.teleop_step_value.setStyleSheet("color: #ffffff; font-size: 12px;")
-        slider_layout.addWidget(self.teleop_step_value, alignment=Qt.AlignHCenter)
+        self.teleop_step_value = QLabel(f"{self.teleop_step}")
+        self.teleop_step_value.setFixedWidth(40)
+        self.teleop_step_value.setAlignment(Qt.AlignCenter)
+        self.teleop_step_value.setStyleSheet("""
+            background: #2d2d2d;
+            color: #10B981;
+            border: 1px solid #404040;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: bold;
+            padding: 2px;
+        """)
+        step_row.addWidget(self.teleop_step_value)
 
-        keypad_body.addLayout(slider_layout, stretch=1)
+        btn_step_up = QPushButton("▲")
+        btn_step_up.setFixedSize(24, 24)
+        btn_step_up.clicked.connect(lambda: self.adjust_step(5))
+        btn_step_up.setStyleSheet("""
+            QPushButton {
+                background: #424242;
+                color: white;
+                border: none;
+                border-radius: 3px;
+                font-size: 12px;
+            }
+            QPushButton:hover { background: #616161; }
+        """)
+        step_row.addWidget(btn_step_up)
 
-        panel_layout.addLayout(keypad_body)
+        step_row.addStretch()
+        panel_layout.addLayout(step_row)
 
+        # Torque status
         self.torque_status_label = QLabel()
+        self.torque_status_label.setStyleSheet("font-size: 9px;")
         self._update_torque_label(locked=False)
         panel_layout.addWidget(self.torque_status_label)
+
+        panel_layout.addStretch()
 
         return teleop_panel
 
@@ -582,10 +644,15 @@ class RecordTab(QWidget):
 
         return f"#{r:02X}{g:02X}{b:02X}"
 
+    def adjust_step(self, delta: int):
+        """Adjust step size by delta amount."""
+        self.teleop_step = max(1, min(200, self.teleop_step + delta))
+        self.teleop_step_value.setText(f"{self.teleop_step}")
+    
     def on_teleop_step_changed(self, value: int):
         """Update teleop step size display."""
         self.teleop_step = value
-        self.teleop_step_value.setText(f"{value} units")
+        self.teleop_step_value.setText(f"{value}")
 
     def ensure_teleop_connection(self) -> bool:
         """Ensure bus connection is available for teleop operations."""
