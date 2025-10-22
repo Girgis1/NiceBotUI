@@ -137,6 +137,12 @@ class RobotWorker(QThread):
 
         def _format_value(value):
             if isinstance(value, str):
+                stripped = value.strip()
+                if stripped and (
+                    stripped.isdigit()
+                    or (stripped[0] in {"-", "+"} and stripped[1:].isdigit())
+                ):
+                    return str(int(stripped))
                 escaped = value.replace('"', '\\"')
                 return f'"{escaped}"'
             return str(value)
