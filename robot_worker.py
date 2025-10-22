@@ -9,7 +9,7 @@ import sys
 import signal
 import re
 import time
-from pathlib import Path
+import socket
 from PySide6.QtCore import QThread, Signal
 
 
@@ -39,8 +39,11 @@ class RobotWorker(QThread):
             # Step 1: Start policy server
             self.log_message.emit('info', "Starting policy server...")
             self.status_update.emit("Starting policy server...")
-            
+
             server_args = self._build_server_command()
+            async_cfg = self.config.get("async_inference", {})
+            server_host = async_cfg.get("server_host", "127.0.0.1")
+            server_port = async_cfg.get("server_port", 8080)
             self.server_proc = subprocess.Popen(
                 server_args,
                 stdout=subprocess.DEVNULL,  # Don't capture - prevents pipe deadlock
@@ -48,18 +51,18 @@ class RobotWorker(QThread):
                 text=True,
                 bufsize=1
             )
-            
-            # Wait for server to be ready (give it 3 seconds)
-            time.sleep(3)
+
+            # Wait for server to be ready (fail fast if it crashes)
+            self._wait_for_server_ready(server_host, server_port)
             self.log_message.emit('info', "Policy server ready")
-            
+
             # Step 2: Start robot client
             self.log_message.emit('info', "Starting robot client...")
             self.status_update.emit("Connecting to robot...")
-            
+
             client_args = self._build_client_command()
             self.log_message.emit('info', f"Launching client: {' '.join(client_args)}")
-            
+
             self.client_proc = subprocess.Popen(
                 client_args,
                 stdout=subprocess.PIPE,
@@ -104,7 +107,7 @@ class RobotWorker(QThread):
         p = self.config["policy"]
         cams = self.config.get("cameras", {})
         async_cfg = self.config.get("async_inference", {})
-        
+
         # Build camera dict string
         camera_dict = self._build_camera_dict(cams)
         
@@ -116,59 +119,66 @@ class RobotWorker(QThread):
         args = [
             sys.executable, "-m", "lerobot.async_inference.robot_client",
             f"--server_address={server_address}",
-            "--robot.type", r["type"],
-            "--robot.port", r["port"],
-            "--robot.id", r.get("id", "follower_arm"),
+            "--robot.type", str(r["type"]),
+            "--robot.port", str(r["port"]),
+            "--robot.id", str(r.get("id", "follower_arm")),
             f"--robot.cameras={camera_dict}",
-            "--policy_type", async_cfg.get("policy_type", "act"),
-            f"--pretrained_name_or_path={p['path']}",
-            "--policy_device", p.get("device", "cpu"),
+            "--policy_type", str(async_cfg.get("policy_type", "act")),
+            f"--pretrained_name_or_path={str(p['path'])}",
+            "--policy_device", str(p.get("device", "cpu")),
             "--actions_per_chunk", str(async_cfg.get("actions_per_chunk", 30)),
             "--chunk_size_threshold", str(async_cfg.get("chunk_size_threshold", 0.6)),
             "--debug_visualize_queue_size=False"
         ]
-        
+
         return args
-    
+
     def _build_camera_dict(self, cameras):
         """Build camera dictionary string for command line"""
         if not cameras:
             return "{}"
-        
+
         # Format: { front: {type: opencv, index_or_path: "/dev/video0", ...}, wrist: {...} }
         cam_parts = []
         for name, cfg in cameras.items():
             index_or_path = cfg.get("index_or_path", 0)
-            # Quote paths, leave integers as-is
-            if isinstance(index_or_path, str) and '/' in index_or_path:
-                path_str = f'"{index_or_path}"'
+            if isinstance(index_or_path, str):
+                escaped = index_or_path.replace('"', '\\"')
+                path_str = f'"{escaped}"'
             else:
                 path_str = str(index_or_path)
-            
+
+            cam_type = cfg.get("type", "opencv")
+
             cam_str = (
-                f"{name}: {{type: opencv, index_or_path: {path_str}, "
+                f"{name}: {{type: {cam_type}, index_or_path: {path_str}, "
                 f"width: {cfg.get('width', 640)}, height: {cfg.get('height', 480)}, "
                 f"fps: {cfg.get('fps', 30)}}}"
             )
             cam_parts.append(cam_str)
-        
+
         return "{ " + ", ".join(cam_parts) + " }"
-        
+
     def _monitor_process(self):
         """Monitor robot client subprocess output and parse for status/errors"""
         output_buffer = []  # Capture all output (stdout + stderr merged)
         current_episode = 0
         total_episodes = 1  # Async inference runs continuously
-        
+
         try:
             # Read client stdout line by line (stderr is merged in)
+            if not self.client_proc or not self.client_proc.stdout:
+                raise RuntimeError("Robot client stdout is unavailable")
+
             for line in self.client_proc.stdout:
                 line = line.rstrip()
                 if not line:
                     continue
-                
+
                 # Save all output for error parsing
                 output_buffer.append(line)
+                if len(output_buffer) > 1000:
+                    output_buffer.pop(0)
                     
                 self.log_message.emit('info', line)
                 
@@ -232,7 +242,8 @@ class RobotWorker(QThread):
             
         # Camera error
         if 'could not open camera' in stderr_lower or 'videoio' in stderr_lower:
-            cam_idx = self.config["cameras"]["front"]["index_or_path"]
+            cam_cfg = self.config.get("cameras", {}).get("front", {})
+            cam_idx = cam_cfg.get("index_or_path")
             return 'camera_not_found', {'index': cam_idx, 'stderr': stderr_text}
             
         # Servo timeout (specific motor)
@@ -269,6 +280,11 @@ class RobotWorker(QThread):
             except:
                 pass
             finally:
+                if self.client_proc.stdout:
+                    try:
+                        self.client_proc.stdout.close()
+                    except Exception:
+                        pass
                 self.client_proc = None
         
         # Then stop server
@@ -291,4 +307,29 @@ class RobotWorker(QThread):
         """Request worker to stop - stop both server and client"""
         self._stop_requested = True
         self._cleanup_processes()
+
+    def _wait_for_server_ready(self, host, port, timeout=5.0):
+        """Wait until the policy server accepts TCP connections.
+
+        Raises:
+            RuntimeError: If the server process exits before becoming ready.
+            TimeoutError: If the server does not become ready within timeout.
+        """
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.server_proc and self.server_proc.poll() is not None:
+                raise RuntimeError("Policy server exited unexpectedly")
+
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(0.2)
+                try:
+                    sock.connect((host, port))
+                except (ConnectionRefusedError, OSError, socket.timeout):
+                    time.sleep(0.1)
+                    continue
+                else:
+                    return
+
+        raise TimeoutError("Timed out waiting for policy server to become ready")
 
