@@ -206,7 +206,7 @@ class SettingsTab(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)  # No margins - let content breathe
         layout.setSpacing(6)  # Compact spacing
         
-        # ========== HOME/REST POSITION ROW ==========
+        # ========== HOME ROW ==========
         rest_section = QLabel("🏠 Home Position")
         rest_section.setStyleSheet("color: #4CAF50; font-size: 14px; font-weight: bold; margin-bottom: 2px;")
         layout.addWidget(rest_section)
@@ -839,10 +839,10 @@ class SettingsTab(QWidget):
         self.status_label.setText("⚠️ Defaults loaded. Click Save to apply.")
         self.status_label.setStyleSheet("QLabel { color: #FF9800; font-size: 15px; padding: 8px; }")
     
-    # ========== REST POSITION METHODS ==========
-    
+    # ========== HOME METHODS ==========
+
     def set_rest_position(self):
-        """Read current motor positions and save as rest position"""
+        """Read current motor positions and save as Home position"""
         try:
             from utils.motor_controller import MotorController
             
@@ -878,7 +878,7 @@ class SettingsTab(QWidget):
             with open(self.config_path, 'w') as f:
                 json.dump(self.config, f, indent=2)
             
-            self.status_label.setText(f"✓ Rest position saved: {positions}")
+            self.status_label.setText(f"✓ Home saved: {positions}")
             self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
             self.config_changed.emit()
             
@@ -887,11 +887,11 @@ class SettingsTab(QWidget):
             self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
     
     def go_home(self):
-        """Move arm to saved home/rest position (same as Dashboard Home button)"""
+        """Move arm to saved Home position (same as Dashboard Home button)"""
         try:
             from utils.motor_controller import MotorController
             
-            # Check if rest position exists
+            # Check if Home position exists
             rest_config = self.config.get("rest_position", {})
             rest_positions = rest_config.get("positions")
             

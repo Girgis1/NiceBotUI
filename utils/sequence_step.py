@@ -6,7 +6,7 @@ DESIGN:
 - ActionStep: Execute a saved recording/action
 - ModelStep: Run a trained policy model
 - DelayStep: Wait for specified duration
-- HomeStep: Return arm to rest position
+- HomeStep: Return arm Home
 
 Each step is self-contained and represents a unit of work in a sequence.
 """

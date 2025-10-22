@@ -84,7 +84,7 @@ python NiceBot.py
 ## What Can It Do?
 
 1. **START/STOP** - Run trained models
-2. **HOME** - Move to rest position
+2. **HOME** - Move Home
 3. **Live Record** - Record movements at 20Hz
 4. **Settings** - Configure robot & cameras
 5. **Status** - Real-time connection indicators
@@ -209,7 +209,7 @@ NiceBotUI/
 ├── START_HERE.md             ← You are here!
 ├── config.json               ← Same as before
 ├── robot_worker.py           ← Reused
-├── rest_pos.py               ← Reused
+├── HomePos.py                ← Reused
 ├── app.py                    ← Old UI (still works)
 └── [other existing files]
 ```

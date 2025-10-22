@@ -21,7 +21,7 @@ Production-ready kiosk application for industrial robot control, designed for 10
 
 ### Core Functionality
 - **START/STOP**: Execute trained models or live recordings
-- **HOME**: Move robot to rest position
+- **HOME**: Move robot Home
 - **Settings**: Configure robot, cameras, and episodes
 - **Live Record**: Record robot movements at 20Hz
 - **Status Indicators**: Real-time robot and camera connection status

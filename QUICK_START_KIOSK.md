@@ -79,7 +79,7 @@ If dots are red:
 
 Click the **⌂** (HOME) button.
 
-Robot should move to rest position defined in `config.json`.
+Robot should move Home as defined in `config.json`.
 
 ## Step 8: Try Live Recording
 

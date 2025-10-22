@@ -512,9 +512,9 @@ class KioskDashboard(QWidget):
         self.status_label.setText("Moving to home...")
         
         try:
-            # Call rest_pos.py in separate process
+            # Call HomePos.py in separate process
             result = subprocess.run(
-                [sys.executable, str(ROOT / "rest_pos.py"), "--go"],
+                [sys.executable, str(ROOT / "HomePos.py"), "--go"],
                 capture_output=True,
                 text=True,
                 timeout=30

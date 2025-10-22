@@ -264,7 +264,7 @@ python app.py
   - **Action Steps** - Execute saved recordings/actions
   - **Model Steps** - Run trained policy models with duration control
   - **Delay Steps** - Wait for specified time periods
-  - **Home Steps** - Return arm to rest position (NEW!)
+  - **Home Steps** - Return arm Home (NEW!)
   - **Loop Mode** - Repeat sequences indefinitely
 
 - **✅ Execution Engine**

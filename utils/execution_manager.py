@@ -810,7 +810,7 @@ class ExecutionWorker(QThread):
                 time.sleep(remaining)
     
     def _execute_home_inline(self):
-        """Return arm to home/rest position"""
+        """Return arm Home"""
         # Connect if not already connected
         if not self.motor_controller.bus:
             if not self.motor_controller.connect():

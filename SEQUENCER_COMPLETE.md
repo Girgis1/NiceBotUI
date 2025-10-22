@@ -16,7 +16,7 @@ The sequencer has been **completely rebuilt** with a robust, modular, folder-bas
 
 ### **Phase 1: Home Step Type** ✅
 - **+Home Button** added to Sequence tab UI
-- New **home step type** returns arm to configured rest position
+- New **home step type** returns arm Home
 - Visual feedback with 🏠 icon and green color
 - Integrated into ExecutionManager with `_execute_home_inline()`
 
@@ -32,7 +32,7 @@ The sequencer has been **completely rebuilt** with a robust, modular, folder-bas
   - `ActionStep` - Execute saved recordings
   - `ModelStep` - Run trained policy models
   - `DelayStep` - Wait for duration
-  - `HomeStep` - Return to rest position
+  - `HomeStep` - Return Home
   
 - `utils/composite_sequence.py` - Folder-based sequence management:
   - Manifest orchestration
@@ -70,7 +70,7 @@ The sequencer has been **completely rebuilt** with a robust, modular, folder-bas
 1. ✅ **Action Steps** - Execute saved recordings
 2. ✅ **Model Steps** - Run trained policies with duration control
 3. ✅ **Delay Steps** - Wait for specified time
-4. ✅ **Home Steps** - Return to rest position (NEW!)
+4. ✅ **Home Steps** - Return Home (NEW!)
 5. ✅ **Loop Mode** - Repeat sequence indefinitely
 6. ✅ **Stop Control** - Stop mid-execution
 
@@ -178,7 +178,7 @@ The following tests need to be performed with the actual SO-100/101 robot:
    - Home
    - Action
 2. Run sequence
-3. **Verify**: Arm returns to rest position between actions
+3. **Verify**: Arm returns Home between actions
 
 ### Test 3: Loop Mode
 1. Create simple sequence (2 steps)
@@ -212,7 +212,7 @@ The following tests need to be performed with the actual SO-100/101 robot:
 3. Click **+ Action** to add recordings
 4. Click **⏱ Delay** to add waits
 5. Click **🤖 Model** to add policy execution
-6. Click **🏠 Home** to return to rest position
+6. Click **🏠 Home** to return Home
 7. Drag steps to reorder
 8. Select step and click **🗑️ Delete** to remove
 9. Toggle **🔁 Loop** if needed
@@ -263,7 +263,7 @@ The following tests need to be performed with the actual SO-100/101 robot:
 ## 🎉 Success Criteria Met
 
 ✅ **Sequencer works** - All steps execute in order  
-✅ **Home step** - Arm returns to rest position  
+✅ **Home step** - Arm returns Home
 ✅ **Model execution** - Policies run in sequences  
 ✅ **Modular architecture** - Easy to maintain and extend  
 ✅ **Industrial robust** - Backups, error handling, clean shutdown  

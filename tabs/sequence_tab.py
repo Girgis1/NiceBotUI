@@ -455,7 +455,7 @@ class SequenceTab(QWidget):
             text = f"{number}. ⏱️ Delay: {duration:.1f}s"
             color = QColor("#FF9800")
         elif step_type == "home":
-            text = f"{number}. 🏠 Home: Return to rest position"
+            text = f"{number}. 🏠 Home: Return Home"
             color = QColor("#4CAF50")
         elif step_type == "vision":
             text = self._format_vision_step_text(step, number)
