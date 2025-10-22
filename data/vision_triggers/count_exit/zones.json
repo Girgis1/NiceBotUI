@@ -1,0 +1,29 @@
+{
+  "zones": [
+    {
+      "zone_id": "output_bin",
+      "name": "Output Bin",
+      "type": "count",
+      "polygon": [
+        [
+          50,
+          50
+        ],
+        [
+          500,
+          50
+        ],
+        [
+          500,
+          500
+        ],
+        [
+          50,
+          500
+        ]
+      ],
+      "enabled": true,
+      "notes": "Output bin for counting completed items"
+    }
+  ]
+}
