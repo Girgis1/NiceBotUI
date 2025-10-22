@@ -1,0 +1,77 @@
+# Vision Triggers System Configuration
+
+# Camera Settings
+camera:
+  index: 0                    # Camera device index
+  width: 1280                 # Capture width
+  height: 720                 # Capture height
+  fps: 30                     # Camera FPS
+  exposure_auto: false        # Lock exposure for stability
+  white_balance_auto: false   # Lock white balance for stability
+
+# Detection Settings
+detection:
+  mode: presence              # presence | count | classifier (future)
+  min_blob_area: 1200         # Minimum object area in pixels²
+  stability_check: true       # Require object to be stationary
+  stability_frames: 2         # Frames to confirm stability
+  stability_delay_ms: 250     # Delay between stability checks
+  
+  # Background subtraction
+  background:
+    learning_rate: 0.001      # How fast background adapts (lower = more stable)
+    var_threshold: 16         # Sensitivity threshold
+    detect_shadows: false     # Shadow detection (adds processing time)
+    history: 50               # Number of frames in background model
+
+# Performance Settings
+performance:
+  idle_fps: 0.2               # Frames per second when idle (1 frame every 5 sec)
+  active_fps: 2.0             # FPS after first detection
+  max_fps: 10.0               # Maximum FPS cap
+  adaptive_framerate: true    # Automatically adjust frame rate
+  slow_until_first_detection: true
+  return_to_slow_after_seconds: 30
+
+# Memory Management
+memory:
+  max_memory_mb: 512          # Hard memory limit (daemon restarts if exceeded)
+  frame_buffer_size: 3        # Max frames kept in memory
+  background_model_frames: 50 # Background model history size
+  cleanup_interval_detections: 100  # Run cleanup every N detections
+  force_gc: true              # Force garbage collection on cleanup
+  reset_background_every_hours: 4   # Periodic background reset
+
+# Watchdog Settings
+watchdog:
+  enabled: true
+  check_interval_seconds: 30
+  restart_on_hang: true
+  restart_on_memory_exceed: true
+  max_restart_attempts: 3
+  notify_on_restart: true
+  hang_timeout_seconds: 60    # Consider daemon hung if no response
+
+# State Files
+state:
+  robot_state_file: runtime/robot_state.json
+  vision_events_file: runtime/vision_events.json
+  daemon_pid_file: runtime/vision_daemon.pid
+  daemon_log_file: logs/vision_daemon.log
+
+# Logging
+logging:
+  level: INFO                 # DEBUG | INFO | WARNING | ERROR
+  rotate_daily: true
+  keep_days: 7
+  log_detections: true        # Log every detection event
+  log_frame_stats: false      # Log frame processing stats (verbose)
+
+# Debug Settings
+debug:
+  save_overlay: false         # Save annotated frames for debugging
+  overlay_path: runtime/vision_debug/
+  show_zones: true            # Draw zone overlays
+  show_detections: true       # Draw detection boxes
+  show_fps: true              # Show FPS counter
+
