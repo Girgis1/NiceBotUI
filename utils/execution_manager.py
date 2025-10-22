@@ -14,8 +14,12 @@ import threading
 import subprocess
 import random
 import string
+import math
 from pathlib import Path
 from typing import Optional, Dict, List
+
+import cv2
+import numpy as np
 from PySide6.QtCore import QThread, Signal
 
 # Add parent directory to path
@@ -34,6 +38,9 @@ class ExecutionWorker(QThread):
     log_message = Signal(str, str)        # (level, message) - 'info', 'warning', 'error'
     progress_update = Signal(int, int)    # (current_step, total_steps)
     execution_completed = Signal(bool, str)  # (success, summary_message)
+    sequence_step_started = Signal(int, int, dict)   # step_index, total_steps, step data
+    sequence_step_completed = Signal(int, int, dict) # step_index, total_steps, step data
+    vision_state_update = Signal(str, dict)          # state, payload
     
     def __init__(self, config: dict, execution_type: str, execution_name: str, execution_data: dict = None):
         """
@@ -50,6 +57,7 @@ class ExecutionWorker(QThread):
         self.execution_data = execution_data or {}
         self.options = execution_data or {}  # Alias for compatibility
         self._stop_requested = False
+        self._last_vision_state_signature = None
         
         # Managers
         self.actions_mgr = ActionsManager()
@@ -385,7 +393,7 @@ class ExecutionWorker(QThread):
             return
         
         steps = sequence.get("steps", [])
-        loop = sequence.get("loop", False)
+        loop = self.options.get("loop", sequence.get("loop", False))
         
         total_steps = len(steps)
         self.log_message.emit('info', f"Executing {total_steps} steps (loop={loop})")
@@ -418,6 +426,7 @@ class ExecutionWorker(QThread):
         
         # Execute steps
         iteration = 0
+        self._reset_vision_tracking()
         try:
             while True:
                 iteration += 1
@@ -427,25 +436,25 @@ class ExecutionWorker(QThread):
                         break
                     
                     step_type = step.get("type")
+                    step_label = self._describe_step(step_type, step)
                     
                     self.progress_update.emit(idx + 1, total_steps)
-                    self.status_update.emit(f"Step {idx+1}/{total_steps}: {step_type}")
+                    self.status_update.emit(f"Step {idx+1}/{total_steps}: {step_label}")
+                    self.log_message.emit('info', f"→ {step_label}")
+                    self.sequence_step_started.emit(idx, total_steps, step)
                     
                     if step_type == "action":
                         # Execute action/recording
                         action_name = step.get("name")
-                        self.log_message.emit('info', f"→ Executing action: {action_name}")
                         self._execute_recording_inline(action_name)
                         
                     elif step_type == "delay":
                         # Wait while holding current position
                         duration = step.get("duration", 1.0)
-                        self.log_message.emit('info', f"→ Delay: {duration}s (holding position)")
                         self._delay_with_hold(duration)
                     
                     elif step_type == "home":
                         # Return to home position
-                        self.log_message.emit('info', "→ Returning to home position")
                         self._execute_home_inline()
                         
                     elif step_type == "model":
@@ -460,13 +469,20 @@ class ExecutionWorker(QThread):
                             self._execute_model_inline(task, checkpoint, duration)
                         elif policy_server_process and policy_server_process.poll() is None:
                             # Server mode: Use pre-started server
-                            self.log_message.emit('info', f"→ Executing model: {task} for {duration}s (server mode)")
                             self._execute_model_with_server(policy_server_process, task, checkpoint, duration)
                         else:
                             self.log_message.emit('warning', f"→ Skipping model {task} - policy server not running")
                     
+                    elif step_type == "vision":
+                        if not self._execute_vision_step(step, idx, total_steps):
+                            if self._stop_requested:
+                                break
+                            self.log_message.emit('warning', "Vision step skipped due to error")
+                    
                     else:
                         self.log_message.emit('warning', f"Unknown step type: {step_type}")
+                    
+                    self.sequence_step_completed.emit(idx, total_steps, step)
                 
                 if self._stop_requested or not loop:
                     break
@@ -490,6 +506,222 @@ class ExecutionWorker(QThread):
         else:
             self.log_message.emit('warning', "Sequence stopped by user")
             self.execution_completed.emit(False, "Stopped by user")
+        self._reset_vision_tracking()
+
+    def _describe_step(self, step_type: str, step: Dict) -> str:
+        """Readable label for a sequence step."""
+        step_type = (step_type or "unknown").lower()
+        if step_type == "action":
+            return f"ACTION • {step.get('name', 'Action')}"
+        if step_type == "delay":
+            duration = step.get("duration", 0.0)
+            return f"DELAY • {duration:.1f}s"
+        if step_type == "home":
+            return "HOME • Return to rest"
+        if step_type == "model":
+            task = step.get("task", "Model")
+            duration = step.get("duration", 0.0)
+            return f"MODEL • {task} ({duration:.0f}s)"
+        if step_type == "vision":
+            trigger = step.get("trigger", {})
+            name = trigger.get("display_name") or step.get("name") or "Vision Trigger"
+            return f"VISION • {name}"
+        return f"{step_type.upper()}"
+
+    def _reset_vision_tracking(self):
+        self._last_vision_state_signature = None
+
+    def _emit_vision_state(self, state: str, payload: Dict):
+        """Emit vision state updates with simple de-duplication."""
+        message = payload.get("message", "")
+        countdown = payload.get("countdown")
+        signature = (state, message, countdown)
+        if signature != self._last_vision_state_signature:
+            self.vision_state_update.emit(state, payload)
+            self._last_vision_state_signature = signature
+
+    def _evaluate_vision_zones(self, frame: np.ndarray, trigger_cfg: Dict) -> Dict:
+        """Evaluate detection metric for configured zones."""
+        results = []
+        triggered = False
+
+        zones = trigger_cfg.get("zones", [])
+        settings = trigger_cfg.get("settings", {})
+        metric_type = settings.get("metric", "intensity")
+        invert = settings.get("invert", False)
+        threshold = float(settings.get("threshold", 0.55))
+
+        height, width = frame.shape[:2]
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        for zone in zones:
+            polygon = zone.get("polygon", [])
+            if len(polygon) < 3:
+                continue
+
+            pts = np.array([[int(min(max(x, 0.0), 1.0) * width),
+                             int(min(max(y, 0.0), 1.0) * height)] for x, y in polygon], dtype=np.int32)
+            mask = np.zeros((height, width), dtype=np.uint8)
+            cv2.fillPoly(mask, [pts], 255)
+
+            if metric_type == "intensity":
+                metric = cv2.mean(gray, mask=mask)[0] / 255.0
+            elif metric_type == "green_channel":
+                metric = cv2.mean(frame[:, :, 1], mask=mask)[0] / 255.0
+            elif metric_type == "edge_density":
+                edges = cv2.Canny(gray, 50, 150)
+                masked_edges = cv2.bitwise_and(edges, edges, mask=mask)
+                edge_pixels = np.count_nonzero(masked_edges)
+                total_pixels = np.count_nonzero(mask)
+                metric = edge_pixels / total_pixels if total_pixels else 0.0
+            else:
+                metric = cv2.mean(gray, mask=mask)[0] / 255.0
+
+            zone_triggered = metric <= threshold if invert else metric >= threshold
+            if zone_triggered:
+                triggered = True
+
+            results.append({
+                "zone_id": zone.get("zone_id"),
+                "name": zone.get("name", "Zone"),
+                "metric": metric,
+                "triggered": zone_triggered
+            })
+
+        best_metric = max((r["metric"] for r in results), default=0.0)
+        triggered_zones = [r["name"] for r in results if r["triggered"]]
+
+        return {
+            "triggered": triggered,
+            "results": results,
+            "best_metric": best_metric,
+            "triggered_zones": triggered_zones
+        }
+
+    def _execute_vision_step(self, step: Dict, step_index: int, total_steps: int) -> bool:
+        """Wait for a vision trigger before proceeding."""
+        trigger_cfg = step.get("trigger", {})
+        zones = trigger_cfg.get("zones", [])
+
+        if not zones:
+            self.log_message.emit('warning', "Vision step has no zones configured")
+            return True
+
+        camera_cfg = step.get("camera", {})
+        camera_index = int(camera_cfg.get("index", 0))
+        idle_cfg = trigger_cfg.get("idle_mode", {})
+        idle_enabled = idle_cfg.get("enabled", False)
+        interval = max(0.5, float(idle_cfg.get("interval_seconds", 2.0)))
+
+        hold_time = float(trigger_cfg.get("settings", {}).get("hold_time", 0.0))
+        zone_names = [zone.get("name", "Zone") for zone in zones]
+
+        cap = cv2.VideoCapture(camera_index)
+        if not cap or not cap.isOpened():
+            self.log_message.emit('warning', f"Vision step: camera {camera_index} unavailable, switching to demo feed")
+            self.vision_state_update.emit("error", {"message": f"Camera {camera_index} unavailable"})
+            self._reset_vision_tracking()
+            return False
+
+        resolution = camera_cfg.get("resolution")
+        if isinstance(resolution, (list, tuple)) and len(resolution) == 2:
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, resolution[0])
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, resolution[1])
+
+        self.log_message.emit('info', f"Waiting for vision trigger (camera {camera_index})")
+        self._reset_vision_tracking()
+        self._emit_vision_state("watching", {
+            "message": "Watching for triggers",
+            "zones": zone_names,
+            "step_index": step_index,
+            "total_steps": total_steps
+        })
+
+        success = False
+        confirm_start = None
+        last_check = 0.0
+
+        try:
+            while not self._stop_requested:
+                now = time.time()
+                if idle_enabled and (now - last_check) < interval:
+                    remaining = max(0.0, interval - (now - last_check))
+                    countdown = int(math.ceil(remaining))
+                    self._emit_vision_state("idle", {
+                        "message": "IDLE • waiting for next check",
+                        "countdown": countdown,
+                        "interval_seconds": interval,
+                        "zones": zone_names
+                    })
+                    time.sleep(min(0.25, remaining))
+                    continue
+
+                ret, frame = cap.read()
+                last_check = now
+
+                if not ret or frame is None:
+                    self._emit_vision_state("watching", {
+                        "message": "Camera read failed",
+                        "zones": zone_names
+                    })
+                    time.sleep(0.5)
+                    continue
+
+                evaluation = self._evaluate_vision_zones(frame, trigger_cfg)
+                triggered = evaluation["triggered"]
+                triggered_zones = evaluation["triggered_zones"]
+                best_metric = evaluation["best_metric"]
+
+                if triggered:
+                    if confirm_start is None:
+                        confirm_start = now
+                    elapsed = now - confirm_start
+                    remaining_hold = max(0.0, hold_time - elapsed)
+
+                    if hold_time <= 0 or elapsed >= hold_time:
+                        self._emit_vision_state("triggered", {
+                            "message": f"Triggered • {', '.join(triggered_zones) if triggered_zones else 'Zone detected'}",
+                            "zones": triggered_zones or zone_names,
+                            "metric": round(best_metric, 3)
+                        })
+                        self.log_message.emit('info', f"Vision trigger confirmed after {elapsed:.2f}s")
+                        success = True
+                        break
+                    else:
+                        countdown = int(math.ceil(remaining_hold))
+                        self._emit_vision_state("watching", {
+                            "message": f"Triggered • confirming ({remaining_hold:.1f}s)",
+                            "zones": triggered_zones or zone_names,
+                            "countdown": countdown,
+                            "metric": round(best_metric, 3)
+                        })
+                else:
+                    confirm_start = None
+                    state = "idle" if idle_enabled else "watching"
+                    message = "IDLE • waiting for next check" if idle_enabled else "Watching for triggers"
+                    self._emit_vision_state(state, {
+                        "message": message,
+                        "zones": zone_names,
+                        "countdown": int(interval) if idle_enabled else None
+                    })
+
+                time.sleep(0.1)
+
+        finally:
+            cap.release()
+
+        if success:
+            self._emit_vision_state("complete", {
+                "message": "Vision step completed",
+                "zones": zone_names
+            })
+        else:
+            if self._stop_requested:
+                self._emit_vision_state("clear", {"message": "Vision step cancelled"})
+            else:
+                self._emit_vision_state("error", {"message": "Vision step failed"})
+
+        return success
     
     def _execute_recording_inline(self, recording_name: str):
         """Execute a recording as part of a sequence (inline)"""
@@ -1146,8 +1378,9 @@ class ExecutionWorker(QThread):
     def stop(self):
         """Request execution to stop"""
         self._stop_requested = True
+        self._emit_vision_state("clear", {"message": "Vision cancelled"})
+        self._reset_vision_tracking()
         
         # Emergency stop motors
         if self.motor_controller.bus:
             self.motor_controller.emergency_stop()
-

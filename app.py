@@ -364,6 +364,25 @@ def exception_hook(exctype, value, traceback_obj):
         pass
 
 
+def configure_app_palette(app: QApplication):
+    """Apply consistent dark palette across entry points."""
+    palette = QPalette()
+    palette.setColor(QPalette.Window, QColor(42, 42, 42))
+    palette.setColor(QPalette.WindowText, QColor(255, 255, 255))
+    palette.setColor(QPalette.Base, QColor(64, 64, 64))
+    palette.setColor(QPalette.AlternateBase, QColor(72, 72, 72))
+    palette.setColor(QPalette.ToolTipBase, QColor(255, 255, 255))
+    palette.setColor(QPalette.ToolTipText, QColor(0, 0, 0))
+    palette.setColor(QPalette.Text, QColor(255, 255, 255))
+    palette.setColor(QPalette.Button, QColor(70, 70, 70))
+    palette.setColor(QPalette.ButtonText, QColor(255, 255, 255))
+    palette.setColor(QPalette.BrightText, QColor(255, 100, 100))
+    palette.setColor(QPalette.Link, QColor(76, 175, 80))
+    palette.setColor(QPalette.Highlight, QColor(76, 175, 80))
+    palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))
+    app.setPalette(palette)
+
+
 def main():
     """Main entry point"""
     import argparse
@@ -380,33 +399,26 @@ def main():
                        help='Disable fullscreen mode (same as --windowed)')
     parser.add_argument('--screen', type=int, default=0,
                        help='Screen number to display on (0=primary, 1=secondary, etc.)')
+    parser.add_argument('--vision', action='store_true',
+                       help='Launch only the vision designer interface')
     args = parser.parse_args()
-    
+
     # Determine fullscreen mode
     fullscreen = not (args.windowed or args.no_fullscreen)
-    
+
     try:
         app = QApplication(sys.argv)
         
-        # Set application style
+        # Set application style and palette once
         app.setStyle("Fusion")
-        
-        # Set improved contrast palette for cheap screens
-        palette = QPalette()
-        palette.setColor(QPalette.Window, QColor(42, 42, 42))          # Lighter background
-        palette.setColor(QPalette.WindowText, QColor(255, 255, 255))
-        palette.setColor(QPalette.Base, QColor(64, 64, 64))            # Lighter input bg
-        palette.setColor(QPalette.AlternateBase, QColor(72, 72, 72))
-        palette.setColor(QPalette.ToolTipBase, QColor(255, 255, 255))
-        palette.setColor(QPalette.ToolTipText, QColor(0, 0, 0))
-        palette.setColor(QPalette.Text, QColor(255, 255, 255))
-        palette.setColor(QPalette.Button, QColor(70, 70, 70))          # Lighter buttons
-        palette.setColor(QPalette.ButtonText, QColor(255, 255, 255))
-        palette.setColor(QPalette.BrightText, QColor(255, 100, 100))
-        palette.setColor(QPalette.Link, QColor(76, 175, 80))           # Green links
-        palette.setColor(QPalette.Highlight, QColor(76, 175, 80))      # Green highlight
-        palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))
-        app.setPalette(palette)
+        configure_app_palette(app)
+
+        if args.vision:
+            from vision_ui import VisionDesignerWindow, create_default_vision_config
+
+            window = VisionDesignerWindow(create_default_vision_config())
+            window.show()
+            sys.exit(app.exec())
     
         # Create and show main window
         window = MainWindow(fullscreen=fullscreen)

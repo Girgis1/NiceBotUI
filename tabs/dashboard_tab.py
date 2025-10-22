@@ -8,6 +8,7 @@ import os
 import subprocess
 from pathlib import Path
 from datetime import datetime
+from typing import Optional
 import pytz
 
 from PySide6.QtWidgets import (
@@ -144,6 +145,8 @@ class DashboardTab(QWidget):
         self.elapsed_seconds = 0
         self.is_running = False
         self.saved_runs_value = 1  # Remember runs value when toggling loop
+        self._vision_state_active = False
+        self._last_vision_signature = None
         
         # Status circle widget (will be set during init_ui)
         self.robot_status_circle = None
@@ -239,14 +242,11 @@ class DashboardTab(QWidget):
         
         # Center: Action status with subtle background
         self.action_label = QLabel("At home position")
-        self.action_label.setStyleSheet("""
-            color: #ffffff; 
-            font-size: 14px; 
-            font-weight: bold;
-            background-color: #383838;
-            border-radius: 4px;
-            padding: 8px 20px;
-        """)
+        self._action_label_style_template = (
+            "color: #ffffff; font-size: 14px; font-weight: bold; "
+            "background-color: {bg}; border-radius: 4px; padding: 8px 20px;"
+        )
+        self._set_action_label_style("#383838")
         self.action_label.setAlignment(Qt.AlignCenter)
         status_bar.addWidget(self.action_label, stretch=1)
         
@@ -744,9 +744,12 @@ class DashboardTab(QWidget):
         if self.is_running:
             self.log_text.append("[warning] Already running")
             return
-        
+
         # Get selected item
         selected = self.run_combo.currentText()
+
+        self._vision_state_active = False
+        self._last_vision_signature = None
         
         if selected.startswith("--"):
             self.log_text.append("[warning] No item selected")
@@ -803,7 +806,10 @@ class DashboardTab(QWidget):
                 self._start_model_execution(execution_name)
         else:
             # For recordings and sequences, use ExecutionWorker
-            self._start_execution_worker(execution_type, execution_name)
+            options = {}
+            if execution_type == "sequence":
+                options["loop"] = self.loop_checkbox.isChecked()
+            self._start_execution_worker(execution_type, execution_name, options)
     
     def _start_model_execution(self, model_name: str):
         """Start model execution using RobotWorker directly"""
@@ -860,6 +866,9 @@ class DashboardTab(QWidget):
         self.execution_worker.log_message.connect(self._on_log_message)
         self.execution_worker.progress_update.connect(self._on_progress_update)
         self.execution_worker.execution_completed.connect(self._on_execution_completed)
+        self.execution_worker.sequence_step_started.connect(self._on_sequence_step_started)
+        self.execution_worker.sequence_step_completed.connect(self._on_sequence_step_completed)
+        self.execution_worker.vision_state_update.connect(self._on_vision_state_update)
         
         # Start execution
         self.execution_worker.start()
@@ -876,13 +885,15 @@ class DashboardTab(QWidget):
             return
         
         self.log_text.append(f"[info] Starting sequence: {sequence_name} (loop={loop})")
-        
+
         # Update UI state
         self.is_running = True
         self.start_stop_btn.setChecked(True)
         self.start_stop_btn.setText("⏹ STOP")
         self.action_label.setText(f"Sequence: {sequence_name}")
-        
+        self._vision_state_active = False
+        self._last_vision_signature = None
+
         # Start execution worker
         self._start_execution_worker("sequence", sequence_name, {"loop": loop})
     
@@ -909,7 +920,7 @@ class DashboardTab(QWidget):
     
     def _parse_run_selection(self, selected: str) -> tuple:
         """Parse run selection into (type, name)
-        
+
         Returns:
             ("model", "GrabBlock") or ("recording", "Grab Cup v1") or ("sequence", "Production Run")
         """
@@ -922,11 +933,64 @@ class DashboardTab(QWidget):
             return ("recording", selected.replace("🎬 Action: ", ""))
         else:
             return (None, None)
-    
+
+    def _set_action_label_style(self, background: str):
+        self.action_label.setStyleSheet(self._action_label_style_template.format(bg=background))
+
+    def record_vision_status(self, state: str, detail: str, payload: Optional[dict] = None):
+        payload = payload or {}
+        countdown = payload.get("countdown")
+        metric = payload.get("metric")
+        zones_raw = payload.get("zones") or []
+        zones = [z if isinstance(z, str) else str(z) for z in zones_raw]
+
+        color_map = {
+            "triggered": "#4CAF50",
+            "idle": "#FFB300",
+            "watching": "#383838",
+            "complete": "#4CAF50",
+            "error": "#b71c1c",
+            "clear": "#383838",
+        }
+
+        bg = color_map.get(state, "#383838")
+        self._set_action_label_style(bg)
+
+        message = detail
+        if countdown is not None:
+            message = f"{detail} • {countdown}s"
+        if metric is not None and state == "triggered":
+            message = f"{detail} • metric={metric:.3f}"
+
+        if state in {"idle", "watching", "triggered"}:
+            self._vision_state_active = True
+        elif state in {"complete", "clear", "error"}:
+            self._vision_state_active = False
+
+        if not self._vision_state_active and state in {"complete", "clear"}:
+            self._set_action_label_style("#383838")
+
+        self.action_label.setText(message)
+
+        signature = (state, countdown, tuple(zones))
+        if signature != self._last_vision_signature:
+            log_message = message
+            if zones:
+                zone_list = ", ".join(zones)
+                log_message = f"{message} [{zone_list}]"
+            self.log_text.append(f"[vision] {log_message}")
+            self.log_text.verticalScrollBar().setValue(
+                self.log_text.verticalScrollBar().maximum()
+            )
+            self._last_vision_signature = signature
+
     def _on_status_update(self, status: str):
         """Handle status update from worker"""
+        if self._vision_state_active:
+            return
+        self._set_action_label_style("#383838")
         self.action_label.setText(status)
-    
+
     def _on_log_message(self, level: str, message: str):
         """Handle log message from worker"""
         self.log_text.append(f"[{level}] {message}")
@@ -940,6 +1004,19 @@ class DashboardTab(QWidget):
         if total > 0:
             progress = int((current / total) * 100)
             # Could update a progress bar here if we add one
+
+    def _on_sequence_step_started(self, index: int, total: int, step: dict):
+        seq_tab = self._get_sequence_tab()
+        if seq_tab:
+            seq_tab.highlight_running_step(index, step)
+
+    def _on_sequence_step_completed(self, index: int, total: int, step: dict):
+        # Placeholder for future use (e.g., marking completed)
+        pass
+
+    def _on_vision_state_update(self, state: str, payload: dict):
+        message = payload.get("message", state.title())
+        self.record_vision_status(state, message, payload)
     
     def _on_execution_completed(self, success: bool, summary: str):
         """Handle execution completion (for recordings/sequences)"""
@@ -949,6 +1026,9 @@ class DashboardTab(QWidget):
             self.action_label.setText("✓ Completed")
         else:
             self.action_label.setText("✗ Failed")
+        seq_tab = self._get_sequence_tab()
+        if seq_tab:
+            seq_tab.clear_running_highlight()
         
         # Reset UI
         self._reset_ui_after_run()
@@ -969,7 +1049,15 @@ class DashboardTab(QWidget):
         finally:
             # Always reset UI, even if there's an error
             self._reset_ui_after_run()
-    
+
+    def _get_sequence_tab(self):
+        parent = self.parent()
+        while parent:
+            if hasattr(parent, "sequence_tab"):
+                return getattr(parent, "sequence_tab")
+            parent = parent.parent()
+        return None
+
     def _on_worker_thread_finished(self):
         """Handle worker thread finished (cleanup)"""
         try:
@@ -987,6 +1075,12 @@ class DashboardTab(QWidget):
             self.start_stop_btn.setChecked(False)
             self.start_stop_btn.setText("START")
             self.timer.stop()
+            self._vision_state_active = False
+            self._last_vision_signature = None
+            self._set_action_label_style("#383838")
+            seq_tab = self._get_sequence_tab()
+            if seq_tab:
+                seq_tab.clear_running_highlight()
             
             # Stop throbber
             self.throbber_update_timer.stop()
@@ -1101,4 +1195,3 @@ class DashboardTab(QWidget):
             message: Log message to display
         """
         self.log_text.append(f"[info] {message}")
-

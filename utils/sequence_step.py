@@ -85,6 +85,8 @@ class SequenceStep:
                 return DelayStep.from_dict(data)
             elif step_type == "home":
                 return HomeStep.from_dict(data)
+            elif step_type == "vision":
+                return VisionStep.from_dict(data)
             else:
                 print(f"[ERROR] Unknown step type: {step_type}")
                 return None
@@ -203,6 +205,43 @@ class DelayStep(SequenceStep):
         return step
 
 
+class VisionStep(SequenceStep):
+    """Vision trigger configuration step."""
+
+    def __init__(
+        self,
+        name: str,
+        camera: Dict,
+        trigger: Dict,
+        enabled: bool = True,
+        delay_after: float = 0.0,
+    ):
+        super().__init__("vision", name, enabled, delay_after)
+        self.camera = camera or {}
+        self.trigger = trigger or {}
+        self.trigger.setdefault("idle_mode", {"enabled": False, "interval_seconds": 2.0})
+
+    def to_dict(self) -> dict:
+        data = super().to_dict()
+        data["camera"] = self.camera
+        data["trigger"] = self.trigger
+        return data
+
+    @staticmethod
+    def from_dict(data: dict) -> 'VisionStep':
+        step = VisionStep(
+            name=data.get("name", data.get("trigger", {}).get("display_name", "Vision Trigger")),
+            camera=data.get("camera", {}),
+            trigger=data.get("trigger", {}),
+            enabled=data.get("enabled", True),
+            delay_after=data.get("delay_after", 0.0),
+        )
+        metadata = data.get("metadata", {})
+        step.created_at = metadata.get("created_at", step.created_at)
+        step.modified_at = metadata.get("modified_at", step.modified_at)
+        return step
+
+
 class HomeStep(SequenceStep):
     """Home position step
     
@@ -279,4 +318,3 @@ if __name__ == "__main__":
     print(f"   Restored home: {home_step2.name}\n")
     
     print("✓ All step classes working!")
-
