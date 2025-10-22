@@ -71,6 +71,9 @@ class RobotWorker(QThread):
                 text=True,
                 bufsize=1
             )
+
+            if self.client_proc.poll() is not None:
+                raise RuntimeError("Robot client failed to start")
             
             self.connection_changed.emit(True)
             self.status_update.emit("Robot running...")
@@ -81,6 +84,12 @@ class RobotWorker(QThread):
         except FileNotFoundError as e:
             self.error_occurred.emit('lerobot_not_found', {'error': str(e)})
             self.run_completed.emit(False, "LeRobot not found")
+        except ValueError as e:
+            self.error_occurred.emit('config_error', {'error': str(e)})
+            self.run_completed.emit(False, str(e))
+        except RuntimeError as e:
+            self.error_occurred.emit('startup_failed', {'error': str(e)})
+            self.run_completed.emit(False, str(e))
         except Exception as e:
             self.error_occurred.emit('unknown', {'error': str(e)})
             self.run_completed.emit(False, f"Failed to start: {e}")
@@ -104,29 +113,47 @@ class RobotWorker(QThread):
     
     def _build_client_command(self):
         """Build robot client command from config"""
-        r = self.config["robot"]
-        p = self.config["policy"]
+        r = self.config.get("robot", {})
+        p = self.config.get("policy", {})
         cams = self.config.get("cameras", {})
         async_cfg = self.config.get("async_inference", {})
+        
+        # Validate required robot configuration
+        if not isinstance(r, dict):
+            raise ValueError("Robot configuration missing or invalid")
+
+        robot_type = r.get("type")
+        robot_port = r.get("port")
+        robot_id = r.get("id", "follower_arm")
+
+        if not robot_type:
+            raise ValueError("Robot type not configured")
+        if not robot_port:
+            raise ValueError("Robot port not configured")
 
         # Build camera dict string
         camera_dict = self._build_camera_dict(cams)
-        
+
         # Server address
         server_host = async_cfg.get("server_host", "127.0.0.1")
         server_port = async_cfg.get("server_port", 8080)
         server_address = f"{server_host}:{server_port}"
-        
+
+        # Validate policy configuration
+        pretrained_path = p.get("path") if isinstance(p, dict) else None
+        if not pretrained_path:
+            raise ValueError("Policy path not configured")
+
         args = [
             sys.executable, "-m", "lerobot.async_inference.robot_client",
             f"--server_address={server_address}",
-            "--robot.type", str(r["type"]),
-            "--robot.port", str(r["port"]),
-            "--robot.id", str(r.get("id", "follower_arm")),
+            "--robot.type", robot_type,
+            "--robot.port", robot_port,
+            "--robot.id", robot_id,
             f"--robot.cameras={camera_dict}",
-            "--policy_type", str(async_cfg.get("policy_type", "act")),
-            f"--pretrained_name_or_path={str(p['path'])}",
-            "--policy_device", str(p.get("device", "cpu")),
+            "--policy_type", async_cfg.get("policy_type", "act"),
+            f"--pretrained_name_or_path={pretrained_path}",
+            "--policy_device", p.get("device", "cpu") if isinstance(p, dict) else "cpu",
             "--actions_per_chunk", str(async_cfg.get("actions_per_chunk", 30)),
             "--chunk_size_threshold", str(async_cfg.get("chunk_size_threshold", 0.6)),
             "--debug_visualize_queue_size=False"
@@ -170,6 +197,9 @@ class RobotWorker(QThread):
         total_episodes = 1  # Async inference runs continuously
 
         try:
+            if not self.client_proc or not self.client_proc.stdout:
+                raise RuntimeError("Robot client process not started correctly")
+
             # Read client stdout line by line (stderr is merged in)
             if not self.client_proc or not self.client_proc.stdout:
                 raise RuntimeError("Robot client stdout is unavailable")
@@ -229,27 +259,36 @@ class RobotWorker(QThread):
         """Parse stderr to determine error type"""
         stderr_lower = stderr_text.lower()
         
+        robot_cfg = self.config.get("robot", {})
+        cameras_cfg = self.config.get("cameras", {})
+
         # Serial permission error
         if 'permission denied' in stderr_lower and '/dev/tty' in stderr_lower:
-            port = self.config["robot"]["port"]
+            port = robot_cfg.get("port", "unknown")
             return 'serial_permission', {'port': port, 'stderr': stderr_text}
-            
+
         # Serial not found
         if 'no such file or directory' in stderr_lower and '/dev/tty' in stderr_lower:
-            port = self.config["robot"]["port"]
+            port = robot_cfg.get("port", "unknown")
             return 'serial_not_found', {'port': port, 'stderr': stderr_text}
-            
+
         # Port busy
         if 'device or resource busy' in stderr_lower and '/dev/tty' in stderr_lower:
-            port = self.config["robot"]["port"]
+            port = robot_cfg.get("port", "unknown")
             return 'serial_busy', {'port': port, 'stderr': stderr_text}
-            
+
         # Camera error
         if 'could not open camera' in stderr_lower or 'videoio' in stderr_lower:
-            cam_cfg = self.config.get("cameras", {}).get("front", {})
-            cam_idx = cam_cfg.get("index_or_path")
-            return 'camera_not_found', {'index': cam_idx, 'stderr': stderr_text}
-            
+            cameras_cfg = self.config.get("cameras", {})
+            first_name, first_camera = next(iter(cameras_cfg.items()), ("unknown", {}))
+            cam_idx = first_camera.get("index_or_path", "unknown")
+            return 'camera_not_found', {
+                'camera': first_name,
+                'index': cam_idx,
+                'stderr': stderr_text
+            }
+
+
         # Servo timeout (specific motor)
         servo_match = re.search(r'motor[:\s]+(\d+)', stderr_lower)
         if servo_match and ('timeout' in stderr_lower or 'not respond' in stderr_lower):
@@ -262,8 +301,8 @@ class RobotWorker(QThread):
             
         # Policy not found
         if 'no such file or directory' in stderr_lower and 'checkpoint' in stderr_lower:
-            path = self.config["policy"]["path"]
-            return 'policy_not_found', {'path': path, 'stderr': stderr_text}
+            policy_path = self.config.get("policy", {}).get("path", "unknown")
+            return 'policy_not_found', {'path': policy_path, 'stderr': stderr_text}
             
         # Generic error
         return 'unknown', {'stderr': stderr_text, 'return_code': return_code}
@@ -284,7 +323,7 @@ class RobotWorker(QThread):
             except:
                 pass
             finally:
-                if self.client_proc.stdout:
+                if self.client_proc and self.client_proc.stdout:
                     try:
                         self.client_proc.stdout.close()
                     except Exception:

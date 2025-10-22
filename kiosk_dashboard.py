@@ -430,18 +430,29 @@ class KioskDashboard(QWidget):
         self.log(f"Starting: {selected}")
         
         # Create and start worker thread
+        # Prevent double-start if a worker is still active
+        if self.worker and self.worker.isRunning():
+            self.log("WARN: Worker already running")
+            return
+
         self.worker = RobotWorker(self.config)
-        
+
         # Connect signals
         self.worker.status_update.connect(self.on_status_update)
         self.worker.log_message.connect(self.on_log_message)
         self.worker.progress_update.connect(self.on_progress_update)
         self.worker.error_occurred.connect(self.on_error)
         self.worker.run_completed.connect(self.on_run_completed)
-        
+        self.worker.finished.connect(self.on_worker_finished)
+
         # Start worker (runs in separate thread - UI stays responsive)
-        self.worker.start()
-    
+        try:
+            self.worker.start()
+        except Exception as exc:
+            self.log(f"ERROR: Failed to start worker: {exc}")
+            self.status_label.setText("⚠️ Start failed")
+            self.reset_ui_after_stop()
+
     def stop_operation(self):
         """
         EMERGENCY STOP - Maximum response time: 100ms
@@ -477,20 +488,24 @@ class KioskDashboard(QWidget):
             Styles.get_giant_button(Colors.SUCCESS, Colors.SUCCESS_HOVER)
         )
         self.status_label.setText("Ready")
-        
+
         # Re-enable controls
         self.run_combo.setEnabled(True)
         self.home_btn.setEnabled(True)
         self.settings_btn.setEnabled(True)
         self.live_record_btn.setEnabled(True)
-        
+
         # Stop elapsed timer
         self.elapsed_timer.stop()
         self.time_label.setText("00:00")
-        
+
         # Resume connection checking
         self.check_connections()
-    
+
+        # Clear worker reference when stopped and thread is no longer running
+        if self.worker and not self.worker.isRunning():
+            self.worker = None
+
     def go_home(self):
         """Move robot to home position"""
         self.log("Moving to home...")
@@ -574,7 +589,11 @@ class KioskDashboard(QWidget):
     
     def on_error(self, error_key: str, context: dict):
         """Handle error from worker"""
-        self.log(f"ERROR: {error_key}")
+        error_detail = context.get('error') or context.get('stderr', '')
+        if error_detail:
+            self.log(f"ERROR: {error_key} - {error_detail}")
+        else:
+            self.log(f"ERROR: {error_key}")
         self.status_label.setText(f"⚠️ Error: {error_key}")
     
     def on_run_completed(self, success: bool, message: str):
@@ -585,10 +604,10 @@ class KioskDashboard(QWidget):
         else:
             self.log(f"✗ {message}")
             self.status_label.setText("⚠️ Stopped")
-        
+
         # Reset UI
         self.reset_ui_after_stop()
-    
+
     def update_elapsed_time(self):
         """Update elapsed time display"""
         if self.start_time:
@@ -596,5 +615,9 @@ class KioskDashboard(QWidget):
             minutes = self.elapsed_seconds // 60
             seconds = self.elapsed_seconds % 60
             self.time_label.setText(f"{minutes:02d}:{seconds:02d}")
+
+    def on_worker_finished(self):
+        """Ensure worker reference is cleared when thread finishes"""
+        self.worker = None
 
 
