@@ -5,12 +5,12 @@ Handles command building, process management, and error parsing.
 """
 
 import json
+import re
+import signal
+import socket
 import subprocess
 import sys
-import signal
-import re
 import time
-import socket
 from PySide6.QtCore import QThread, Signal
 
 
@@ -211,9 +211,11 @@ class RobotWorker(QThread):
 
                 # Save all output for error parsing
                 output_buffer.append(line)
+                # Prevent unbounded memory growth - keep latest 1000 lines
                 if len(output_buffer) > 1000:
                     output_buffer.pop(0)
                     
+
                 self.log_message.emit('info', line)
                 
                 # Parse for episode progress
@@ -254,6 +256,12 @@ class RobotWorker(QThread):
         except Exception as e:
             self.log_message.emit('error', f"Monitor error: {e}")
             self.run_completed.emit(False, str(e))
+        finally:
+            if self.client_proc and self.client_proc.stdout:
+                try:
+                    self.client_proc.stdout.close()
+                except Exception:
+                    pass
             
     def _parse_error(self, stderr_text, return_code):
         """Parse stderr to determine error type"""
