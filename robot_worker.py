@@ -4,6 +4,7 @@ QThread worker for managing LeRobot async inference (policy server + robot clien
 Handles command building, process management, and error parsing.
 """
 
+import json
 import subprocess
 import sys
 import signal
@@ -134,24 +135,29 @@ class RobotWorker(QThread):
         """Build camera dictionary string for command line"""
         if not cameras:
             return "{}"
-        
+
         # Format: { front: {type: opencv, index_or_path: "/dev/video0", ...}, wrist: {...} }
         cam_parts = []
         for name, cfg in cameras.items():
             index_or_path = cfg.get("index_or_path", 0)
-            # Quote paths, leave integers as-is
-            if isinstance(index_or_path, str) and '/' in index_or_path:
-                path_str = f'"{index_or_path}"'
+            # Quote strings so Hydra/YAML parsing is reliable, but keep numeric
+            # indices unquoted for convenience.
+            if isinstance(index_or_path, str) and index_or_path.isdigit():
+                path_str = index_or_path
+            elif isinstance(index_or_path, str):
+                path_str = json.dumps(index_or_path)
             else:
                 path_str = str(index_or_path)
-            
+
+            cam_type = cfg.get("type", "opencv")
+
             cam_str = (
-                f"{name}: {{type: opencv, index_or_path: {path_str}, "
+                f"{name}: {{type: {cam_type}, index_or_path: {path_str}, "
                 f"width: {cfg.get('width', 640)}, height: {cfg.get('height', 480)}, "
                 f"fps: {cfg.get('fps', 30)}}}"
             )
             cam_parts.append(cam_str)
-        
+
         return "{ " + ", ".join(cam_parts) + " }"
         
     def _monitor_process(self):
