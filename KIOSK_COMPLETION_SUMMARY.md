@@ -119,7 +119,7 @@ All planned features have been implemented and are ready for use.
 ### ✅ Core Functionality
 
 - [x] START/STOP robot operations
-- [x] HOME button (rest position)
+- [x] HOME button (Home)
 - [x] RUN selector (models + recordings)
 - [x] Connection monitoring (robot + cameras)
 - [x] Settings configuration
@@ -143,7 +143,7 @@ All planned features have been implemented and are ready for use.
 - [x] Uses existing RobotWorker
 - [x] Uses existing MotorController
 - [x] Uses existing ActionsManager
-- [x] Uses existing rest_pos.py
+- [x] Uses existing HomePos.py
 - [x] Works with LeRobot framework
 
 ### ✅ Deployment

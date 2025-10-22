@@ -72,7 +72,7 @@ Or directly:
 
 - **START** - Begin recording episodes with the trained policy
 - **STOP** - Interrupt the current run
-- **GO HOME** - Move robot to rest position
+- **GO HOME** - Move robot Home
 - **⚙ Settings** - Open configuration editor
 
 ### Settings Dialog
@@ -94,7 +94,7 @@ Or directly:
 
 **Advanced Tab:**
 - **SET HOME** - Capture current position as home
-- Rest position angles
+- Home position angles
 - Object presence gate
 - Safety limits
 
@@ -139,7 +139,7 @@ LerobotGUI/
 ├── app.py                  # Main application
 ├── robot_worker.py         # QThread worker for subprocess
 ├── settings_dialog.py      # Settings UI
-├── rest_pos.py             # Rest position control (stub)
+├── HomePos.py              # Home control (stub)
 ├── config.json             # Configuration
 ├── run_history.json        # Recent runs log
 ├── requirements.txt        # Python dependencies
@@ -151,11 +151,11 @@ LerobotGUI/
 
 ### Integrating Hardware
 
-The `rest_pos.py` file is currently a stub. To integrate with real hardware:
+The `HomePos.py` file is currently a stub. To integrate with real hardware:
 
-1. Uncomment the Feetech SDK code in `rest_pos.py`
+1. Uncomment the Feetech SDK code in `HomePos.py`
 2. Update `settings_dialog.py` `_set_home_position()` method
-3. Test with: `python rest_pos.py --go`
+3. Test with: `python HomePos.py --go`
 
 Example integration:
 ```python

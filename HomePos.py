@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Rest position control for SO-100/SO-101 robot.
+Home control for SO-100/SO-101 robot.
 Real Feetech motor control implementation.
 """
 
@@ -105,7 +105,7 @@ def emergency_catch_and_hold():
 
 
 def go_to_rest(disable_torque=None):
-    """Move robot to rest position
+    """Return robot Home
     
     Args:
         disable_torque: Override config setting - if None, uses config value.
@@ -121,7 +121,7 @@ def go_to_rest(disable_torque=None):
     if disable_torque is None:
         disable_torque = rest_config.get("disable_torque_on_arrival", True)
     
-    print(f"[rest_pos] Moving to rest position:")
+    print(f"[HomePos] Returning Home:")
     print(f"  Port: {port}")
     print(f"  Positions: {positions}")
     print(f"  Velocity: {velocity}")
@@ -145,7 +145,7 @@ def go_to_rest(disable_torque=None):
             bus.write("Acceleration", name, acceleration, normalize=False)
         
         # Move to each position
-        print("Moving to rest position...")
+        print("Returning Home...")
         for idx, name in enumerate(MOTOR_NAMES):
             bus.write("Goal_Position", name, positions[idx], normalize=False)
         
@@ -155,7 +155,7 @@ def go_to_rest(disable_torque=None):
         move_time = (max_move / velocity) * 2.0 if velocity > 0 else 5.0  # Rough estimate
         time.sleep(min(move_time, 10.0))  # Cap at 10 seconds
         
-        print("✓ Rest position reached")
+        print("✓ Home reached")
         
         # Disable torque if requested
         if disable_torque:
@@ -181,7 +181,7 @@ def read_current_position():
     cfg = read_config()
     port = cfg["robot"]["port"]
     
-    print(f"[rest_pos] Reading current position from {port}")
+    print(f"[HomePos] Reading current position from {port}")
     
     try:
         # Connect to motors
@@ -281,8 +281,8 @@ def check_robot_connection(port):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="SO-100/SO-101 Rest Position Control")
-    parser.add_argument('--go', action='store_true', help='Move to rest position')
+    parser = argparse.ArgumentParser(description="SO-100/SO-101 Home Control")
+    parser.add_argument('--go', action='store_true', help='Return Home')
     parser.add_argument('--read', action='store_true', help='Read current position')
     parser.add_argument('--save', action='store_true', help='Save current position as home')
     parser.add_argument('--test', action='store_true', help='Test connection')

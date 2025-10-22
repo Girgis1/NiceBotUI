@@ -1026,7 +1026,7 @@ class DashboardTab(QWidget):
         
         try:
             result = subprocess.run(
-                [sys.executable, str(ROOT / "rest_pos.py"), "--go"],
+                [sys.executable, str(ROOT / "HomePos.py"), "--go"],
                 capture_output=True,
                 text=True,
                 timeout=30

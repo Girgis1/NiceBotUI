@@ -6,11 +6,11 @@ import time
 from pathlib import Path
 import sys
 
-# Add parent directory to path to import rest_pos
+# Add parent directory to path to import HomePos
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 try:
-    from rest_pos import read_current_position, create_motor_bus, MOTOR_NAMES, read_config
+    from HomePos import read_current_position, create_motor_bus, MOTOR_NAMES, read_config
     MOTOR_CONTROL_AVAILABLE = True
 except ImportError:
     MOTOR_CONTROL_AVAILABLE = False

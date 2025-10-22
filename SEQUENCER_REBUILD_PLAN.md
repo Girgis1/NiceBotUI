@@ -13,7 +13,7 @@
 
 2. **Add +Home button** - Return arm to home position
    - New step type: "home"
-   - Uses existing rest_pos.py functionality
+   - Uses existing HomePos.py functionality
 
 3. **Make sequences modular** - Like recordings
    - Folder-based structure
@@ -171,7 +171,7 @@ def add_step_to_list(self, step: dict, number: int = None):
     # ... existing code ...
     
     elif step_type == "home":
-        text = f"{number}. 🏠 Home: Return to rest position"
+        text = f"{number}. 🏠 Home: Return Home"
         color = QColor("#4CAF50")
 ```
 
@@ -554,7 +554,7 @@ def migrate_sequence_to_composite(name: str, sequences_mgr: SequencesManager):
 ## 📝 NOTES
 
 - Keep "action" terminology throughout (not "recording")
-- Home step uses existing rest_pos.py functionality
+- Home step uses existing HomePos.py functionality
 - Sequences will mirror recordings architecture (consistency!)
 - Support both legacy flat format and new composite format during transition
 - Migration is optional (both formats work)

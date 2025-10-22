@@ -272,7 +272,7 @@ NiceBotUI/
 ├── IMPLEMENTATION_SUMMARY.md  # This file
 ├── config.json                # Configuration (existing)
 ├── robot_worker.py            # Thread worker (existing)
-├── rest_pos.py                # Home control (existing)
+├── HomePos.py                 # Home control (existing)
 ├── utils/                     # Utilities (existing)
 │   ├── motor_controller.py
 │   └── actions_manager.py
@@ -320,7 +320,7 @@ Tests verify:
 - [ ] Settings modal opens and saves
 - [ ] Live Record modal records and saves
 - [ ] RUN selector shows models and recordings
-- [ ] HOME button moves to rest position
+- [ ] HOME button moves Home
 - [ ] No virtual keyboard appears
 - [ ] Escape/Ctrl+Q exits cleanly
 

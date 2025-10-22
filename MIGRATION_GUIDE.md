@@ -55,7 +55,7 @@ This guide helps transition from the multi-tab UI (`app.py`) to the new producti
 | `tabs/sequence_tab.py` | *Merged into dashboard* | Removed |
 | `settings_dialog.py` | *Integrated* | Removed |
 | `robot_worker.py` | `robot_worker.py` | **Unchanged** ✅ |
-| `rest_pos.py` | `rest_pos.py` | **Unchanged** ✅ |
+| `rest_pos.py` | `HomePos.py` | Renamed ✅ |
 | `config.json` | `config.json` | **Compatible** ✅ |
 | `utils/*` | `utils/*` | **Unchanged** ✅ |
 | `widgets/*` | `widgets/*` | **Unchanged** ✅ |
