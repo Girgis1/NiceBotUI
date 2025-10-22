@@ -4,6 +4,7 @@ QThread worker for managing LeRobot async inference (policy server + robot clien
 Handles command building, process management, and error parsing.
 """
 
+import json
 import subprocess
 import sys
 import signal
@@ -142,9 +143,12 @@ class RobotWorker(QThread):
         cam_parts = []
         for name, cfg in cameras.items():
             index_or_path = cfg.get("index_or_path", 0)
-            if isinstance(index_or_path, str):
-                escaped = index_or_path.replace('"', '\\"')
-                path_str = f'"{escaped}"'
+            # Quote strings so Hydra/YAML parsing is reliable, but keep numeric
+            # indices unquoted for convenience.
+            if isinstance(index_or_path, str) and index_or_path.isdigit():
+                path_str = index_or_path
+            elif isinstance(index_or_path, str):
+                path_str = json.dumps(index_or_path)
             else:
                 path_str = str(index_or_path)
 

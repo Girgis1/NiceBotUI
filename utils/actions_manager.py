@@ -51,12 +51,12 @@ class ActionsManager:
     
     def list_actions(self) -> List[str]:
         """List all recording names
-        
+
         Scans recordings directory for folders containing manifest.json
         """
         try:
             recordings = []
-            
+
             # Find all subdirectories with manifest.json
             for item in self.recordings_dir.iterdir():
                 if item.is_dir():
@@ -70,12 +70,39 @@ class ActionsManager:
                         except:
                             # If manifest is corrupted, use folder name
                             recordings.append(item.name)
-            
+
             return sorted(recordings)
-            
+
         except Exception as e:
             print(f"[ERROR] Failed to list recordings: {e}")
             return []
+
+    def load_all(self) -> Dict[str, Dict]:
+        """Load all recordings that can be deserialised.
+
+        Returns:
+            Dict mapping recording name to the fully-expanded recording data.
+
+        Notes:
+            - Uses ``list_actions`` so only manifests that parse successfully
+              are considered.  Any individual load failure is logged but does
+              not abort the remaining loads so that one corrupt recording does
+              not break the dashboard selector.
+        """
+
+        loaded: Dict[str, Dict] = {}
+
+        for recording_name in self.list_actions():
+            try:
+                action = self.load_action(recording_name)
+            except Exception as exc:  # Defensive: surface unexpected loader bugs
+                print(f"[ERROR] Failed to load recording '{recording_name}': {exc}")
+                continue
+
+            if action:
+                loaded[recording_name] = action
+
+        return loaded
     
     def load_action(self, name: str) -> Optional[Dict]:
         """Load a recording and return execution-ready data
