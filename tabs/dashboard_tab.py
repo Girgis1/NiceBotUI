@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from robot_worker import RobotWorker
 from utils.execution_manager import ExecutionWorker
+from utils.hand_safety import HandSafetyMonitor, HandSafetySettings
 
 # Timezone
 TIMEZONE = pytz.timezone('Australia/Sydney')
@@ -147,7 +148,8 @@ class DashboardTab(QWidget):
         self.saved_runs_value = 1  # Remember runs value when toggling loop
         self._vision_state_active = False
         self._last_vision_signature = None
-        
+        self.hand_safety_monitor: Optional[HandSafetyMonitor] = None
+
         # Status circle widget (will be set during init_ui)
         self.robot_status_circle = None
         
@@ -775,7 +777,10 @@ class DashboardTab(QWidget):
         
         self.log_text.append(f"[info] Starting {execution_type}: {execution_name}")
         self.action_label.setText(f"Starting {execution_type}...")
-        
+
+        # Activate safety monitoring before motors start moving
+        self._start_hand_safety_monitor()
+
         # Handle models based on execution mode
         if execution_type == "model":
             local_mode = self.config.get("policy", {}).get("local_mode", True)
@@ -834,7 +839,9 @@ class DashboardTab(QWidget):
             
             # Create RobotWorker directly (not nested in another thread)
             self.worker = RobotWorker(model_config)
-            
+
+            self._connect_safety_to_worker(self.worker)
+
             # Connect signals with error handling
             self.worker.status_update.connect(self._on_status_update)
             self.worker.log_message.connect(self._on_log_message)
@@ -860,7 +867,9 @@ class DashboardTab(QWidget):
             execution_name,
             options or {}
         )
-        
+
+        self._connect_safety_to_worker(self.execution_worker)
+
         # Connect signals
         self.execution_worker.status_update.connect(self._on_status_update)
         self.execution_worker.log_message.connect(self._on_log_message)
@@ -894,6 +903,8 @@ class DashboardTab(QWidget):
         self._vision_state_active = False
         self._last_vision_signature = None
 
+        self._start_hand_safety_monitor()
+
         # Start execution worker
         self._start_execution_worker("sequence", sequence_name, {"loop": loop})
     
@@ -901,10 +912,12 @@ class DashboardTab(QWidget):
         """Stop robot run"""
         if not self.is_running:
             return
-        
+
         self.log_text.append("[info] Stopping...")
         self.action_label.setText("Stopping...")
-        
+
+        self._stop_hand_safety_monitor()
+
         # Stop execution worker (for recordings/sequences)
         if self.execution_worker and self.execution_worker.isRunning():
             self.execution_worker.stop()
@@ -1067,7 +1080,128 @@ class DashboardTab(QWidget):
                 self.worker.deleteLater()
         except Exception as e:
             self.log_text.append(f"[error] Error in thread cleanup: {e}")
-    
+
+    def _build_hand_safety_settings(self) -> Optional[HandSafetySettings]:
+        safety_cfg = self.config.get("safety", {})
+        if not safety_cfg.get("hand_detection_enabled", False):
+            return None
+
+        cameras_cfg = self.config.get("cameras", {})
+        camera_choice = safety_cfg.get("hand_detection_camera", "front")
+
+        def normalize(value):
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped.isdigit():
+                    return int(stripped)
+                return stripped
+            return value
+
+        sources: list = []
+
+        def add_source(key: str, fallback: int):
+            cam_cfg = cameras_cfg.get(key, {})
+            identifier = cam_cfg.get("index_or_path", fallback)
+            identifier = normalize(identifier)
+            if identifier in (None, ""):
+                return
+            sources.append(identifier)
+
+        if camera_choice == "both":
+            add_source("front", 0)
+            add_source("wrist", 1)
+        elif camera_choice == "wrist":
+            add_source("wrist", 1)
+        else:
+            add_source("front", 0)
+
+        if not sources:
+            return None
+
+        return HandSafetySettings(
+            sources=sources,
+            frame_width=320,
+            frame_height=240,
+            detection_confidence=0.45,
+            tracking_confidence=0.35,
+            trigger_frames=2,
+            clear_frames=6,
+            poll_interval_s=0.05,
+        )
+
+    def _start_hand_safety_monitor(self):
+        if self.hand_safety_monitor:
+            return
+
+        settings = self._build_hand_safety_settings()
+        if not settings:
+            return
+
+        self.hand_safety_monitor = HandSafetyMonitor(settings)
+        self.hand_safety_monitor.hand_detected.connect(self._handle_hand_detected)
+        self.hand_safety_monitor.hand_cleared.connect(self._handle_hand_cleared)
+        self.hand_safety_monitor.status_message.connect(self._handle_safety_status)
+        self.hand_safety_monitor.error_occurred.connect(self._handle_safety_error)
+        self.hand_safety_monitor.start()
+        self.log_text.append("[safety] Hand safety monitor started")
+
+    def _stop_hand_safety_monitor(self):
+        if not self.hand_safety_monitor:
+            return
+
+        monitor = self.hand_safety_monitor
+        self.hand_safety_monitor = None
+
+        try:
+            monitor.hand_detected.disconnect(self._handle_hand_detected)
+            monitor.hand_cleared.disconnect(self._handle_hand_cleared)
+            monitor.status_message.disconnect(self._handle_safety_status)
+            monitor.error_occurred.disconnect(self._handle_safety_error)
+        except Exception:
+            pass
+
+        try:
+            monitor.stop()
+        except Exception:
+            pass
+        monitor.deleteLater()
+
+        # Ensure workers resume before shutting down monitor
+        if self.execution_worker and hasattr(self.execution_worker, "force_release_safety_pause"):
+            self.execution_worker.force_release_safety_pause()
+        if self.worker and hasattr(self.worker, "force_release_safety_pause"):
+            self.worker.force_release_safety_pause()
+
+        self.log_text.append("[safety] Hand safety monitor stopped")
+
+    def _connect_safety_to_worker(self, worker):
+        if not self.hand_safety_monitor or not worker:
+            return
+        try:
+            self.hand_safety_monitor.hand_detected.connect(worker.handle_hand_detected)
+            self.hand_safety_monitor.hand_cleared.connect(worker.handle_hand_cleared)
+        except Exception as exc:
+            self.log_text.append(f"[safety] Failed to connect safety monitor: {exc}")
+
+    def _handle_hand_detected(self):
+        self.log_text.append("[safety] Hand detected — pausing robot")
+        self._set_action_label_style("#b71c1c")
+        self.action_label.setText("⚠️ Hand detected — paused")
+
+    def _handle_hand_cleared(self):
+        self.log_text.append("[safety] Hand cleared — waiting to resume")
+        self._set_action_label_style("#FFB300")
+        self.action_label.setText("Hand cleared — resuming shortly")
+
+    def _handle_safety_status(self, message: str):
+        self.log_text.append(f"[safety] {message}")
+
+    def _handle_safety_error(self, message: str):
+        self.log_text.append(f"[safety] ERROR: {message}")
+        self._set_action_label_style("#b71c1c")
+        self.action_label.setText(f"Safety monitor error: {message}")
+        self._stop_hand_safety_monitor()
+
     def _reset_ui_after_run(self):
         """Reset UI state after run completes or stops"""
         try:
@@ -1110,6 +1244,8 @@ class DashboardTab(QWidget):
                     self.log_text.append(f"[warning] Worker cleanup: {e}")
                 finally:
                     self.worker = None
+
+            self._stop_hand_safety_monitor()
         except Exception as e:
             self.log_text.append(f"[error] Error resetting UI: {e}")
     

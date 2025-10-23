@@ -1124,7 +1124,7 @@ class SettingsTab(QWidget):
         model_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 200px; }")
         model_row.addWidget(model_label)
 
-        self.hand_detection_model_edit = QLineEdit("nicebot/hand-detection-large")
+        self.hand_detection_model_edit = QLineEdit("mediapipe/hands")
         self.hand_detection_model_edit.setMinimumHeight(45)
         self.hand_detection_model_edit.setStyleSheet("""
             QLineEdit {
@@ -1360,7 +1360,7 @@ class SettingsTab(QWidget):
             index = 0
         self.hand_detection_camera_combo.setCurrentIndex(index)
         self.hand_detection_check.setChecked(safety_cfg.get("hand_detection_enabled", False))
-        self.hand_detection_model_edit.setText(safety_cfg.get("hand_detection_model", "nicebot/hand-detection-large"))
+        self.hand_detection_model_edit.setText(safety_cfg.get("hand_detection_model", "mediapipe/hands"))
         self.hand_resume_delay_spin.setValue(safety_cfg.get("hand_resume_delay_s", 0.5))
         self.hand_hold_position_check.setChecked(safety_cfg.get("hand_hold_position", True))
     
@@ -1480,7 +1480,7 @@ class SettingsTab(QWidget):
         self.torque_disable_check.setChecked(True)
         self.hand_detection_check.setChecked(False)
         self.hand_detection_camera_combo.setCurrentIndex(0)
-        self.hand_detection_model_edit.setText("nicebot/hand-detection-large")
+        self.hand_detection_model_edit.setText("mediapipe/hands")
         self.hand_resume_delay_spin.setValue(0.5)
         self.hand_hold_position_check.setChecked(True)
         
