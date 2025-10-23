@@ -6,6 +6,7 @@ High-precision recording at 20Hz with timestamps
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -52,7 +53,8 @@ class LiveRecordModal(QDialog):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         
         # Timer for recording
-        self.record_timer = QTimer()
+        self.record_timer = QTimer(self)
+        self.record_timer.setTimerType(Qt.PreciseTimer)
         self.record_timer.timeout.connect(self.capture_position)
         
         # Initialize UI
@@ -100,7 +102,7 @@ class LiveRecordModal(QDialog):
         
         # Status display
         self.status_label = QLabel("Ready to record\nMove the robot arm to record positions")
-        self.status_label.setStyleSheet(f"""
+        self.ready_status_style = f"""
             QLabel {{
                 color: {Colors.TEXT_SECONDARY};
                 font-size: 18px;
@@ -108,7 +110,26 @@ class LiveRecordModal(QDialog):
                 border-radius: 10px;
                 padding: 30px;
             }}
-        """)
+        """
+        self.recording_status_style = f"""
+            QLabel {{
+                color: {Colors.TEXT_PRIMARY};
+                font-size: 18px;
+                background-color: {Colors.ERROR_DARK};
+                border-radius: 10px;
+                padding: 30px;
+            }}
+        """
+        self.complete_status_style = f"""
+            QLabel {{
+                color: {Colors.TEXT_PRIMARY};
+                font-size: 18px;
+                background-color: {Colors.BG_MEDIUM};
+                border-radius: 10px;
+                padding: 30px;
+            }}
+        """
+        self.status_label.setStyleSheet(self.ready_status_style)
         self.status_label.setAlignment(Qt.AlignCenter)
         self.status_label.setWordWrap(True)
         panel_layout.addWidget(self.status_label)
@@ -173,7 +194,8 @@ class LiveRecordModal(QDialog):
         
         # Start/Stop recording button
         self.record_btn = QPushButton("🔴 START RECORDING")
-        self.record_btn.setStyleSheet(Styles.get_large_button(Colors.ERROR, Colors.ERROR_HOVER))
+        self.record_btn_default_style = Styles.get_large_button(Colors.ERROR, Colors.ERROR_HOVER)
+        self.record_btn.setStyleSheet(self.record_btn_default_style)
         self.record_btn.setMinimumHeight(100)
         self.record_btn.clicked.connect(self.toggle_recording)
         button_layout.addWidget(self.record_btn, stretch=2)
@@ -196,6 +218,16 @@ class LiveRecordModal(QDialog):
     
     def start_recording(self):
         """Start live recording"""
+        if not self.motor_controller.bus:
+            try:
+                if not self.motor_controller.connect():
+                    raise RuntimeError("Failed to connect to motor bus")
+            except Exception as exc:
+                error_text = "⚠️ Unable to connect to motors"
+                self.status_label.setText(error_text)
+                print(f"[LIVE RECORD] {error_text}: {exc}")
+                return
+
         self.is_recording = True
         self.recorded_data = []
         self.start_time = time.time()
@@ -205,15 +237,7 @@ class LiveRecordModal(QDialog):
         self.record_btn.setText("⏹ STOP RECORDING")
         self.record_btn.setStyleSheet(Styles.get_large_button(Colors.SUCCESS, Colors.SUCCESS_HOVER))
         self.status_label.setText("🔴 RECORDING\nMove the robot arm...")
-        self.status_label.setStyleSheet(f"""
-            QLabel {{
-                color: {Colors.TEXT_PRIMARY};
-                font-size: 18px;
-                background-color: {Colors.ERROR_DARK};
-                border-radius: 10px;
-                padding: 30px;
-            }}
-        """)
+        self.status_label.setStyleSheet(self.recording_status_style)
         self.cancel_btn.setEnabled(False)
         
         # Start recording at 20Hz (50ms interval)
@@ -221,30 +245,38 @@ class LiveRecordModal(QDialog):
         
         print("[LIVE RECORD] Started recording at 20Hz")
     
-    def stop_recording(self):
+    def stop_recording(self, error_message: Optional[str] = None):
         """Stop live recording"""
         self.is_recording = False
-        self.record_timer.stop()
-        
-        # Update UI
+        if self.record_timer.isActive():
+            self.record_timer.stop()
+        try:
+            self.motor_controller.disconnect()
+        except Exception:
+            pass
+
+        if error_message:
+            self.record_btn.show()
+            self.record_btn.setText("🔴 START RECORDING")
+            self.record_btn.setStyleSheet(self.record_btn_default_style)
+            self.save_btn.hide()
+            self.cancel_btn.setEnabled(True)
+            self.status_label.setText(error_message)
+            self.status_label.setStyleSheet(self.ready_status_style)
+            print(f"[LIVE RECORD] {error_message}")
+            return
+
+        # Update UI on successful stop
         self.record_btn.hide()
         self.save_btn.show()
         self.cancel_btn.setEnabled(True)
-        
+
         point_count = len(self.recorded_data)
         duration = self.recorded_data[-1]['timestamp'] if self.recorded_data else 0
-        
+
         self.status_label.setText(f"✓ Recording Complete\n{point_count} points, {duration:.1f}s")
-        self.status_label.setStyleSheet(f"""
-            QLabel {{
-                color: {Colors.TEXT_PRIMARY};
-                font-size: 18px;
-                background-color: {Colors.BG_MEDIUM};
-                border-radius: 10px;
-                padding: 30px;
-            }}
-        """)
-        
+        self.status_label.setStyleSheet(self.complete_status_style)
+
         print(f"[LIVE RECORD] Stopped: {point_count} points, {duration:.1f}s")
     
     def capture_position(self):
@@ -253,11 +285,26 @@ class LiveRecordModal(QDialog):
             return
         
         try:
-            # Read current position
-            positions = self.motor_controller.read_positions()
-            
+            if not self.motor_controller.bus:
+                if not self.motor_controller.connect():
+                    print("[LIVE RECORD] Failed to connect to motor bus")
+                    self.stop_recording("⚠️ Lost connection to motors")
+                    return
+
+            # Read current position from active bus connection
+            positions = self.motor_controller.read_positions_from_bus()
+
+            if not positions:
+                # Attempt a single reconnect before giving up
+                self.motor_controller.disconnect()
+                if not self.motor_controller.connect():
+                    print("[LIVE RECORD] Failed to reconnect to motor bus")
+                    self.stop_recording("⚠️ Lost connection to motors")
+                    return
+                positions = self.motor_controller.read_positions_from_bus()
+
             if not positions or len(positions) != 6:
-                print("[LIVE RECORD] Failed to read positions")
+                print("[LIVE RECORD] Failed to read positions from bus")
                 return
             
             # Calculate timestamp
