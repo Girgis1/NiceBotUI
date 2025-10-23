@@ -24,11 +24,18 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     np = None
 
+from utils.hand_detection import HandDetector
+
 
 class HandDetectionTestDialog(QDialog):
     """Live camera preview with lightweight hand detection overlay."""
 
-    def __init__(self, camera_sources: List[Tuple[str, Union[int, str]]], parent=None):
+    def __init__(
+        self,
+        camera_sources: List[Tuple[str, Union[int, str]]],
+        model_name: str,
+        parent=None,
+    ):
         super().__init__(parent)
         self.setWindowTitle("Hand Detection Test")
         self.setModal(True)
@@ -46,12 +53,15 @@ class HandDetectionTestDialog(QDialog):
         self.detected_any = False
         self.error_message: Optional[str] = None
         self.result_summary = "Camera preview not started."
+        self.detector = HandDetector(model_name)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
-        info_label = QLabel("Live feed with simple skin-tone heuristic. Move your hand into view to verify detection.")
+        info_label = QLabel(
+            f"Live feed processed with {self.detector.detail}. Move your hand into view to verify detection."
+        )
         info_label.setWordWrap(True)
         info_label.setStyleSheet("color: #e0e0e0; font-size: 14px;")
         layout.addWidget(info_label)
@@ -97,6 +107,12 @@ class HandDetectionTestDialog(QDialog):
             self.error_message = "OpenCV and NumPy are required for hand detection tests."
             self.status_label.setText("❌ OpenCV/NumPy not available. Install requirements first.")
             print("[SAFETY] Hand detection test unavailable — missing OpenCV/NumPy.")
+            return
+
+        if not self.detector.available:
+            self.error_message = f"Hand detector unavailable: {self.detector.detail}"
+            self.status_label.setText(f"❌ {self.error_message}")
+            print(f"[SAFETY] {self.error_message}")
             return
 
         if not camera_sources:
@@ -154,17 +170,24 @@ class HandDetectionTestDialog(QDialog):
             return
 
         ret, frame = self.cap.read()
-        if not ret:
+        if not ret or frame is None:
             self.status_label.setText("⚠️ Unable to read from camera.")
             self.result_summary = "Frame capture failed."
             return
 
-        detected, ratio, annotated = self._detect_hand(frame)
+        processed = self._prepare_frame(frame)
+        result = self.detector.detect(processed, annotate=True)
+        annotated = result.annotated_frame if result.annotated_frame is not None else processed
+        detected = result.detected
+        ratio = result.confidence
 
         if self.last_detection is None or detected != self.last_detection:
             camera_label = self.camera_sources[self.current_source_index][0] if self.current_source_index is not None else "camera"
             state = "DETECTED" if detected else "clear"
-            print(f"[SAFETY] Hand {state} on {camera_label} (ratio {ratio:.2%}).")
+            print(
+                f"[SAFETY] Hand {state} on {camera_label} "
+                f"(confidence {ratio:.2%} — {result.detail})."
+            )
 
         self.last_detection = detected
         self.last_ratio = ratio
@@ -172,7 +195,7 @@ class HandDetectionTestDialog(QDialog):
             self.detected_any = True
 
         state_text = "Hand detected ✅" if detected else "No hand detected"
-        self.status_label.setText(f"{state_text} — skin-like pixels {ratio:.1%}")
+        self.status_label.setText(f"{state_text} — confidence {ratio:.1%}")
         self.result_summary = self.status_label.text()
 
         rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
@@ -181,42 +204,15 @@ class HandDetectionTestDialog(QDialog):
         image = QImage(rgb.data, width, height, bytes_per_line, QImage.Format_RGB888)
         self.video_label.setPixmap(QPixmap.fromImage(image))
 
-    def _detect_hand(self, frame):
-        """Return (detected, ratio, annotated_frame)."""
-        if cv2 is None or np is None:  # pragma: no cover - handled earlier
-            return False, 0.0, frame
-
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        lower_a = np.array([0, 30, 60], dtype=np.uint8)
-        upper_a = np.array([20, 150, 255], dtype=np.uint8)
-        lower_b = np.array([170, 30, 60], dtype=np.uint8)
-        upper_b = np.array([180, 150, 255], dtype=np.uint8)
-
-        mask_a = cv2.inRange(hsv, lower_a, upper_a)
-        mask_b = cv2.inRange(hsv, lower_b, upper_b)
-        mask = cv2.bitwise_or(mask_a, mask_b)
-        mask = cv2.GaussianBlur(mask, (7, 7), 0)
-        mask = cv2.erode(mask, np.ones((3, 3), np.uint8), iterations=1)
-        mask = cv2.dilate(mask, np.ones((5, 5), np.uint8), iterations=1)
-
-        ratio = float(cv2.countNonZero(mask)) / float(mask.size)
-        detected = ratio >= 0.04
-
-        overlay = frame.copy()
-        overlay[mask > 0] = (0, 0, 255)
-        annotated = cv2.addWeighted(overlay, 0.4, frame, 0.6, 0)
-        cv2.putText(
-            annotated,
-            f"Hand: {'YES' if detected else 'NO'}  ({ratio*100:.1f}% skin)",
-            (10, 28),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (255, 255, 255),
-            2,
-            cv2.LINE_AA
-        )
-
-        return detected, ratio, annotated
+    def _prepare_frame(self, frame):
+        h, w = frame.shape[:2]
+        if w <= 0 or h <= 0:
+            return frame
+        target_width = 640
+        scale = target_width / float(w)
+        if scale < 1.0:
+            frame = cv2.resize(frame, (int(w * scale), int(h * scale)))
+        return frame
 
     def _release_camera(self):
         if self.cap:
@@ -229,6 +225,9 @@ class HandDetectionTestDialog(QDialog):
     def closeEvent(self, event):  # noqa: D401 - Qt override
         self.timer.stop()
         self._release_camera()
+        detector = getattr(self, "detector", None)
+        if detector:
+            detector.close()
         super().closeEvent(event)
 
 
@@ -747,7 +746,8 @@ class SettingsTab(QWidget):
         self.status_label.setText("🎥 Launching hand detection test window…")
         print(f"[SAFETY] Launching hand detection test for {len(sources)} camera(s).")
 
-        dialog = HandDetectionTestDialog(sources, parent=self)
+        model_name = self.hand_detection_model_edit.text().strip() or "mediapipe-hands"
+        dialog = HandDetectionTestDialog(sources, model_name=model_name, parent=self)
         dialog.exec()
 
         if dialog.error_message:
@@ -1124,7 +1124,7 @@ class SettingsTab(QWidget):
         model_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 200px; }")
         model_row.addWidget(model_label)
 
-        self.hand_detection_model_edit = QLineEdit("nicebot/hand-detection-large")
+        self.hand_detection_model_edit = QLineEdit("mediapipe-hands")
         self.hand_detection_model_edit.setMinimumHeight(45)
         self.hand_detection_model_edit.setStyleSheet("""
             QLineEdit {
@@ -1360,7 +1360,7 @@ class SettingsTab(QWidget):
             index = 0
         self.hand_detection_camera_combo.setCurrentIndex(index)
         self.hand_detection_check.setChecked(safety_cfg.get("hand_detection_enabled", False))
-        self.hand_detection_model_edit.setText(safety_cfg.get("hand_detection_model", "nicebot/hand-detection-large"))
+        self.hand_detection_model_edit.setText(safety_cfg.get("hand_detection_model", "mediapipe-hands"))
         self.hand_resume_delay_spin.setValue(safety_cfg.get("hand_resume_delay_s", 0.5))
         self.hand_hold_position_check.setChecked(safety_cfg.get("hand_hold_position", True))
     
@@ -1480,7 +1480,7 @@ class SettingsTab(QWidget):
         self.torque_disable_check.setChecked(True)
         self.hand_detection_check.setChecked(False)
         self.hand_detection_camera_combo.setCurrentIndex(0)
-        self.hand_detection_model_edit.setText("nicebot/hand-detection-large")
+        self.hand_detection_model_edit.setText("mediapipe-hands")
         self.hand_resume_delay_spin.setValue(0.5)
         self.hand_hold_position_check.setChecked(True)
         
