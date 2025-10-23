@@ -752,15 +752,24 @@ class ExecutionWorker(QThread):
         normalized_source = self._normalize_camera_identifier(source_id) if source_id else None
         normalized_index = str(index) if index is not None else None
 
-        for name, cfg in cameras.items():
-            identifier = cfg.get("index_or_path", 0)
-            norm_identifier = self._normalize_camera_identifier(identifier)
-            if normalized_source and norm_identifier == normalized_source:
-                return name
-            if normalized_index and norm_identifier == normalized_index:
-                return name
-            if source_id and str(identifier) == source_id:
-                return name
+        if source_id:
+            normalized_source = self._normalize_camera_identifier(source_id)
+            for name, cfg in cameras.items():
+                identifier = cfg.get("index_or_path", 0)
+                if self._normalize_camera_identifier(identifier) == normalized_source:
+                    return name
+
+        if normalized_index:
+            for name, cfg in cameras.items():
+                identifier = cfg.get("index_or_path", 0)
+                if self._normalize_camera_identifier(identifier) == normalized_index:
+                    return name
+
+        if source_id:
+            for name, cfg in cameras.items():
+                identifier = cfg.get("index_or_path", 0)
+                if str(identifier) == source_id:
+                    return name
         return None
 
     def _execute_vision_step(self, step: Dict, step_index: int, total_steps: int) -> bool:
