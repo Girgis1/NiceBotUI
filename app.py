@@ -19,6 +19,7 @@ from tabs.dashboard_tab import DashboardTab
 from tabs.record_tab import RecordTab
 from tabs.sequence_tab import SequenceTab
 from utils.device_manager import DeviceManager
+from utils.safety_controller import SafetyController
 
 
 # Paths
@@ -36,9 +37,10 @@ class MainWindow(QMainWindow):
         
         self.setWindowTitle("LeRobot Operator Console")
         self.setMinimumSize(1024, 600)
-        
+
         # Create device manager (shared across all tabs)
         self.device_manager = DeviceManager(self.config)
+        self.safety_controller = SafetyController(self.config)
         
         self.init_ui()
         
@@ -164,13 +166,14 @@ class MainWindow(QMainWindow):
         # Create tabs
         from tabs.settings_tab import SettingsTab
         
-        self.dashboard_tab = DashboardTab(self.config, self, self.device_manager)
+        self.dashboard_tab = DashboardTab(self.config, self, self.device_manager, self.safety_controller)
         self.sequence_tab = SequenceTab(self.config, self)
-        self.record_tab = RecordTab(self.config, self)
-        
+        self.record_tab = RecordTab(self.config, self, self.safety_controller)
+
         # Connect sequence execution signal
         self.sequence_tab.execute_sequence_signal.connect(self.dashboard_tab.run_sequence)
         self.settings_tab = SettingsTab(self.config, self, self.device_manager)
+        self.settings_tab.config_changed.connect(self.on_settings_config_changed)
         
         # Add tabs to stacked widget
         self.content_stack.addWidget(self.dashboard_tab)
@@ -236,7 +239,13 @@ class MainWindow(QMainWindow):
         """Save configuration to JSON"""
         with open(CONFIG_PATH, 'w') as f:
             json.dump(self.config, f, indent=2)
-    
+
+    def on_settings_config_changed(self):
+        """Handle settings updates and refresh safety controller."""
+        self.save_config()
+        if hasattr(self, "safety_controller") and self.safety_controller:
+            self.safety_controller.update_config(self.config)
+
     def create_default_config(self):
         """Create default configuration"""
         return {

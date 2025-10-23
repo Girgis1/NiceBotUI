@@ -4,6 +4,7 @@ Allows recording sequences of motor positions for playback
 """
 
 import sys
+import time
 from pathlib import Path
 from functools import partial
 
@@ -29,11 +30,12 @@ class RecordTab(QWidget):
     # Signal when playback status changes
     playback_status = Signal(str)  # "playing", "stopped", "idle"
     
-    def __init__(self, config: dict, parent=None):
+    def __init__(self, config: dict, parent=None, safety_controller=None):
         super().__init__(parent)
         self.config = config
         self.actions_manager = ActionsManager()
         self.motor_controller = MotorController(config)
+        self.safety_controller = safety_controller
         
         self.current_action_name = "NewAction01"
         self.is_playing = False
@@ -60,6 +62,8 @@ class RecordTab(QWidget):
         self.teleop_hold_timer = QTimer()
         self.teleop_hold_timer.setInterval(180)
         self.teleop_hold_timer.timeout.connect(self._apply_active_teleop_step)
+
+        self._safety_hold_active = False
 
         self.init_ui()
         self.refresh_action_list()
@@ -662,6 +666,7 @@ class RecordTab(QWidget):
 
     def ensure_teleop_connection(self) -> bool:
         """Ensure bus connection is available for teleop operations."""
+        self._safety_pause_monitor()
         try:
             if not self.motor_controller.bus:
                 if not self.motor_controller.connect():
@@ -672,6 +677,42 @@ class RecordTab(QWidget):
             self.status_label.setText("❌ Failed to connect to motors")
             return False
         return bool(self.motor_controller.bus)
+
+    def _safety_pause_monitor(self):
+        if not self.safety_controller or not self.safety_controller.is_active():
+            return
+
+        if self.safety_controller.is_paused():
+            if not self._safety_hold_active:
+                if self.safety_controller.should_hold_position():
+                    try:
+                        self.motor_controller.hold_position()
+                    except Exception as exc:
+                        print(f"[SAFETY] ⚠️ Teleop hold failed: {exc}")
+                self.status_label.setText("⛔ Hand detected - holding position")
+                self._safety_hold_active = True
+
+            waited = self.safety_controller.wait_until_clear()
+            if waited:
+                self.status_label.setText("Safety cleared - ready")
+            self._safety_hold_active = False
+        else:
+            if self._safety_hold_active:
+                self._safety_hold_active = False
+
+    def _sleep_with_safety(self, duration: float):
+        if duration <= 0:
+            return
+
+        end_time = time.time() + duration
+        while time.time() < end_time:
+            if not self.is_playing:
+                break
+            self._safety_pause_monitor()
+            remaining = end_time - time.time()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.05, remaining))
 
     def ensure_teleop_ready(self) -> bool:
         """Ensure teleop connection and torque lock are active."""
@@ -737,6 +778,8 @@ class RecordTab(QWidget):
         if self.teleop_active_joint is None or self.teleop_direction == 0:
             return
 
+        self._safety_pause_monitor()
+
         self._apply_teleop_step(
             self.teleop_active_joint,
             self.teleop_direction,
@@ -745,6 +788,7 @@ class RecordTab(QWidget):
 
     def _apply_teleop_step(self, joint_index: int, direction: int, multiplier: int = 1):
         """Apply a teleop step to the given joint."""
+        self._safety_pause_monitor()
         if not self.ensure_teleop_ready():
             return
 
@@ -1366,15 +1410,17 @@ class RecordTab(QWidget):
             speed = 100
         
         print(f"[PLAYBACK]   Single position, speed={speed}%, velocity={velocity}")
-        
+
         keep_alive = (not is_last) or self.play_loop
-        
+
         self.status_label.setText(f"▶ {action['name']} @ {speed}%")
+        self._safety_pause_monitor()
         self.motor_controller.set_positions(
             positions,
             velocity,
             wait=True,  # Wait for single positions
-            keep_connection=keep_alive
+            keep_connection=keep_alive,
+            pause_monitor=self._safety_pause_monitor,
         )
         
         print(f"[PLAYBACK]   ✓ Position reached")
@@ -1407,14 +1453,18 @@ class RecordTab(QWidget):
         for i, point in enumerate(recorded_data):
             if not self.is_playing:
                 return
-            
+
+            self._safety_pause_monitor()
+
             target_time = point['timestamp'] * (100.0 / speed)  # Scale by speed %
-            
+
             # Wait until the correct time
             while (time.time() - start_time) < target_time:
                 if not self.is_playing:
                     return
-                time.sleep(0.001)  # 1ms precision
+                self._safety_pause_monitor()
+                remaining = target_time - (time.time() - start_time)
+                time.sleep(min(0.01, max(0.001, remaining)))
             
             # Send position command
             velocity = int(point['velocity'] * (speed / 100.0))
@@ -1432,7 +1482,7 @@ class RecordTab(QWidget):
         
         # Final position - wait for arrival if last action
         if is_last and not self.play_loop:
-            time.sleep(0.5)  # Let final position settle
+            self._sleep_with_safety(0.5)
         
         print(f"[PLAYBACK]   ✓ Recording playback complete")
         
