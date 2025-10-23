@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.motor_controller import MotorController
 from utils.actions_manager import ActionsManager
 from utils.sequences_manager import SequencesManager
+from utils.camera_hub import CameraStreamHub
 from safety.hand_safety import HandSafetyMonitor, SafetyConfig, SafetyEvent, build_camera_sources_from_config
 
 
@@ -68,6 +69,10 @@ class ExecutionWorker(QThread):
         self.motor_controller = MotorController(config)
         self.speed_multiplier = config.get("control", {}).get("speed_multiplier", 1.0)
         self.motor_controller.speed_multiplier = self.speed_multiplier
+        try:
+            self.camera_hub: Optional[CameraStreamHub] = CameraStreamHub.instance(config)
+        except Exception:
+            self.camera_hub = None
         
         # Safety monitoring
         self.safety_monitor: Optional[HandSafetyMonitor] = None
@@ -720,6 +725,44 @@ class ExecutionWorker(QThread):
             "triggered_zones": triggered_zones
         }
 
+    def _normalize_camera_identifier(self, identifier) -> str:
+        if isinstance(identifier, int):
+            return str(identifier)
+        if isinstance(identifier, str):
+            stripped = identifier.strip()
+            if stripped.startswith("/dev/video") and stripped[10:].isdigit():
+                return stripped[10:]
+            if stripped.startswith("camera:"):
+                return stripped.split(":", 1)[-1]
+            if stripped.isdigit():
+                return stripped
+            return stripped
+        return str(identifier)
+
+    def _resolve_camera_name(self, camera_cfg: Dict) -> Optional[str]:
+        if not camera_cfg:
+            return None
+
+        cameras = self.config.get("cameras", {})
+        if not cameras:
+            return None
+
+        source_id = camera_cfg.get("source_id")
+        index = camera_cfg.get("index")
+        normalized_source = self._normalize_camera_identifier(source_id) if source_id else None
+        normalized_index = str(index) if index is not None else None
+
+        for name, cfg in cameras.items():
+            identifier = cfg.get("index_or_path", 0)
+            norm_identifier = self._normalize_camera_identifier(identifier)
+            if normalized_source and norm_identifier == normalized_source:
+                return name
+            if normalized_index and norm_identifier == normalized_index:
+                return name
+            if source_id and str(identifier) == source_id:
+                return name
+        return None
+
     def _execute_vision_step(self, step: Dict, step_index: int, total_steps: int) -> bool:
         """Wait for a vision trigger before proceeding."""
         trigger_cfg = step.get("trigger", {})
@@ -731,37 +774,59 @@ class ExecutionWorker(QThread):
 
         camera_cfg = step.get("camera", {})
         camera_index = int(camera_cfg.get("index", 0))
+        camera_name = self._resolve_camera_name(camera_cfg)
         idle_cfg = trigger_cfg.get("idle_mode", {})
         idle_enabled = idle_cfg.get("enabled", False)
         interval = max(0.5, float(idle_cfg.get("interval_seconds", 2.0)))
 
         hold_time = float(trigger_cfg.get("settings", {}).get("hold_time", 0.0))
         zone_names = [zone.get("name", "Zone") for zone in zones]
+        zone_payload = [dict(zone) for zone in zones]  # shallow copy for UI overlay
 
-        cap = cv2.VideoCapture(camera_index)
-        if not cap or not cap.isOpened():
-            self.log_message.emit('warning', f"Vision step: camera {camera_index} unavailable, switching to demo feed")
-            self.vision_state_update.emit("error", {"message": f"Camera {camera_index} unavailable"})
-            self._reset_vision_tracking()
-            return False
+        use_hub = self.camera_hub is not None and camera_name is not None
+        cap = None
 
-        resolution = camera_cfg.get("resolution")
-        if isinstance(resolution, (list, tuple)) and len(resolution) == 2:
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, resolution[0])
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, resolution[1])
+        if use_hub:
+            frame, _ = self.camera_hub.get_frame_with_timestamp(camera_name, preview=False)
+            if frame is None:
+                self.log_message.emit('warning', f"Vision step: camera '{camera_name}' unavailable in hub.")
+                self.vision_state_update.emit(
+                    "error",
+                    {"message": f"Camera {camera_name} unavailable", "camera_name": camera_name},
+                )
+                self._reset_vision_tracking()
+                return False
+        else:
+            cap = cv2.VideoCapture(camera_index)
+            if not cap or not cap.isOpened():
+                self.log_message.emit('warning', f"Vision step: camera {camera_index} unavailable, switching to demo feed")
+                self.vision_state_update.emit(
+                    "error", {"message": f"Camera {camera_index} unavailable", "camera_name": camera_name or str(camera_index)}
+                )
+                self._reset_vision_tracking()
+                return False
 
-        self.log_message.emit('info', f"Waiting for vision trigger (camera {camera_index})")
+            resolution = camera_cfg.get("resolution")
+            if isinstance(resolution, (list, tuple)) and len(resolution) == 2:
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, resolution[0])
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, resolution[1])
+
+        camera_label = camera_name or f"camera {camera_index}"
+        self.log_message.emit('info', f"Waiting for vision trigger ({camera_label})")
         self._reset_vision_tracking()
         self._emit_vision_state("watching", {
             "message": "Watching for triggers",
             "zones": zone_names,
             "step_index": step_index,
-            "total_steps": total_steps
+            "total_steps": total_steps,
+            "camera_name": camera_name or str(camera_index),
+            "zone_polygons": zone_payload,
         })
 
         success = False
         confirm_start = None
         last_check = 0.0
+        last_frame_ts = 0.0
 
         try:
             while not self._stop_requested:
@@ -773,21 +838,41 @@ class ExecutionWorker(QThread):
                         "message": "IDLE • waiting for next check",
                         "countdown": countdown,
                         "interval_seconds": interval,
-                        "zones": zone_names
+                        "zones": zone_names,
+                        "camera_name": camera_name or str(camera_index),
+                        "zone_polygons": zone_payload,
                     })
                     time.sleep(min(0.25, remaining))
                     continue
 
-                ret, frame = cap.read()
-                last_check = now
+                if use_hub:
+                    frame, frame_ts = self.camera_hub.get_frame_with_timestamp(camera_name, preview=False)
+                    if frame is None:
+                        self._emit_vision_state("watching", {
+                            "message": "Camera feed unavailable",
+                            "zones": zone_names,
+                            "camera_name": camera_name or str(camera_index),
+                            "zone_polygons": zone_payload,
+                        })
+                        time.sleep(0.1)
+                        continue
+                    if frame_ts <= last_frame_ts:
+                        time.sleep(0.03)
+                        continue
+                    last_frame_ts = frame_ts
+                else:
+                    ret, frame = cap.read()
+                    if not ret or frame is None:
+                        self._emit_vision_state("watching", {
+                            "message": "Camera read failed",
+                            "zones": zone_names,
+                            "camera_name": camera_name or str(camera_index),
+                            "zone_polygons": zone_payload,
+                        })
+                        time.sleep(0.5)
+                        continue
 
-                if not ret or frame is None:
-                    self._emit_vision_state("watching", {
-                        "message": "Camera read failed",
-                        "zones": zone_names
-                    })
-                    time.sleep(0.5)
-                    continue
+                last_check = now
 
                 evaluation = self._evaluate_vision_zones(frame, trigger_cfg)
                 triggered = evaluation["triggered"]
@@ -804,7 +889,9 @@ class ExecutionWorker(QThread):
                         self._emit_vision_state("triggered", {
                             "message": f"Triggered • {', '.join(triggered_zones) if triggered_zones else 'Zone detected'}",
                             "zones": triggered_zones or zone_names,
-                            "metric": round(best_metric, 3)
+                            "metric": round(best_metric, 3),
+                            "camera_name": camera_name or str(camera_index),
+                            "zone_polygons": zone_payload,
                         })
                         self.log_message.emit('info', f"Vision trigger confirmed after {elapsed:.2f}s")
                         success = True
@@ -815,7 +902,9 @@ class ExecutionWorker(QThread):
                             "message": f"Triggered • confirming ({remaining_hold:.1f}s)",
                             "zones": triggered_zones or zone_names,
                             "countdown": countdown,
-                            "metric": round(best_metric, 3)
+                            "metric": round(best_metric, 3),
+                            "camera_name": camera_name or str(camera_index),
+                            "zone_polygons": zone_payload,
                         })
                 else:
                     confirm_start = None
@@ -824,24 +913,37 @@ class ExecutionWorker(QThread):
                     self._emit_vision_state(state, {
                         "message": message,
                         "zones": zone_names,
-                        "countdown": int(interval) if idle_enabled else None
+                        "countdown": int(interval) if idle_enabled else None,
+                        "camera_name": camera_name or str(camera_index),
+                        "zone_polygons": zone_payload,
                     })
 
                 time.sleep(0.1)
 
         finally:
-            cap.release()
+            if cap is not None:
+                cap.release()
 
         if success:
             self._emit_vision_state("complete", {
                 "message": "Vision step completed",
-                "zones": zone_names
+                "zones": zone_names,
+                "camera_name": camera_name or str(camera_index),
+                "zone_polygons": zone_payload,
             })
         else:
             if self._stop_requested:
-                self._emit_vision_state("clear", {"message": "Vision step cancelled"})
+                self._emit_vision_state("clear", {
+                    "message": "Vision step cancelled",
+                    "camera_name": camera_name or str(camera_index),
+                    "zone_polygons": zone_payload,
+                })
             else:
-                self._emit_vision_state("error", {"message": "Vision step failed"})
+                self._emit_vision_state("error", {
+                    "message": "Vision step failed",
+                    "camera_name": camera_name or str(camera_index),
+                    "zone_polygons": zone_payload,
+                })
 
         return success
     

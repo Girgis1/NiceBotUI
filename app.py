@@ -19,6 +19,7 @@ from tabs.dashboard_tab import DashboardTab
 from tabs.record_tab import RecordTab
 from tabs.sequence_tab import SequenceTab
 from utils.device_manager import DeviceManager
+from utils.camera_hub import shutdown_camera_hub
 
 
 # Paths
@@ -341,6 +342,10 @@ class MainWindow(QMainWindow):
             print(f"[WARNING] Error in closeEvent: {e}")
         finally:
             # Always accept the close event
+            try:
+                shutdown_camera_hub()
+            except Exception:
+                pass
             event.accept()
 
 

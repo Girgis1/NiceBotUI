@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from robot_worker import RobotWorker
 from utils.execution_manager import ExecutionWorker
+from utils.camera_hub import CameraStreamHub
 
 # Timezone
 TIMEZONE = pytz.timezone('Australia/Sydney')
@@ -141,84 +142,97 @@ class StatusIndicator(QLabel):
             """)
 
 
-class CameraPreviewTile(QFrame):
-    """Compact preview tile used in the status bar camera overview."""
+class CameraPreviewWidget(QFrame):
+    """Single camera preview with overlay-ready QLabel."""
 
-    clicked = Signal(str)
+    clicked = Signal()
 
-    def __init__(self, camera_name: str, display_name: str, aspect_ratio: float, parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.camera_name = camera_name
-        self.display_name = display_name
-        self.aspect_ratio = aspect_ratio if aspect_ratio > 0 else 0.75
-        self.setObjectName(f"camera_tile_{camera_name}")
-        self.setCursor(Qt.PointingHandCursor)
-        # Remove fixed height constraint - let cameras scale properly
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-
+        self.setObjectName("singleCameraPreview")
+        self.setStyleSheet("""
+            #singleCameraPreview {
+                border: 1px solid #404040;
+                border-radius: 8px;
+                background-color: #151515;
+            }
+        """)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(2)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
 
-        self.preview_label = QLabel("No Feed")
+        self.header_row = QHBoxLayout()
+        self.header_row.setContentsMargins(0, 0, 0, 0)
+        self.header_row.setSpacing(8)
+
+        self.camera_label = QLabel("Camera")
+        self.camera_label.setStyleSheet("color: #ffffff; font-size: 13px; font-weight: bold;")
+        self.header_row.addWidget(self.camera_label)
+        self.header_row.addStretch()
+
+        self.status_chip = QLabel("")
+        self.status_chip.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.status_chip.setStyleSheet(
+            "color: #a0a0a0; font-size: 11px; padding: 2px 6px; border-radius: 4px; background-color: #2b2b2b;"
+        )
+        self.status_chip.hide()
+        self.header_row.addWidget(self.status_chip)
+
+        layout.addLayout(self.header_row)
+
+        self.preview_label = QLabel("Camera preview disabled")
         self.preview_label.setAlignment(Qt.AlignCenter)
-        self.preview_label.setStyleSheet("color: #9a9a9a; font-size: 10px;")
+        self.preview_label.setStyleSheet("color: #777777; font-size: 12px;")
         self.preview_label.setScaledContents(True)
-        self.preview_label.setMinimumHeight(40)
+        self.preview_label.setMinimumSize(320, 200)
         layout.addWidget(self.preview_label, stretch=1)
 
-        self.name_label = QLabel(display_name)
-        self.name_label.setAlignment(Qt.AlignCenter)
-        self.name_label.setStyleSheet("color: #ffffff; font-size: 11px; font-weight: bold;")
-        layout.addWidget(self.name_label)
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
 
-        self.set_status("offline")
+    def update_preview(
+        self, pixmap: Optional[QPixmap], message: Optional[str] = None, status: Optional[str] = None
+    ) -> None:
+        if status:
+            self.status_chip.setText(status)
+            self.status_chip.show()
+        else:
+            self.status_chip.hide()
 
-    def set_status(self, status: str):
-        colors = {
-            "triggered": "#4CAF50",
-            "idle": "#FF9800",
-            "nominal": "#4FC3F7",
-            "offline": "#F44336",
-            "no_vision": "#9E9E9E"
-        }
-        color = colors.get(status, "#9E9E9E")
-        self.setStyleSheet(f"""
-            #{self.objectName()} {{
-                border: 3px solid {color};
-                border-radius: 12px;
-                background-color: #1f1f1f;
-            }}
-        """)
-
-    def update_pixmap(self, pixmap: Optional[QPixmap]):
         if pixmap is None:
-            self.preview_label.setText("No Feed")
+            if message:
+                self.preview_label.setText(message)
+            else:
+                self.preview_label.setText("No camera feed")
             self.preview_label.setPixmap(QPixmap())
         else:
             self.preview_label.setPixmap(pixmap)
             self.preview_label.setText("")
 
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.clicked.emit(self.camera_name)
-        super().mousePressEvent(event)
-
-    def resizeEvent(self, event):
-        # Let preview scale naturally with available space
-        # Remove fixed height constraint to allow proper scaling
-        super().resizeEvent(event)
+    def set_camera_name(self, name: str) -> None:
+        self.camera_label.setText(name)
 
 
 class CameraDetailDialog(QDialog):
-    """Large detailed camera preview in a dialog."""
+    """Large detailed camera preview in a dialog powered by the camera hub."""
 
-    def __init__(self, camera_name: str, camera_config: dict, vision_zones: List[dict], render_callback, parent=None):
+    def __init__(
+        self,
+        camera_name: str,
+        camera_config: dict,
+        vision_zones: List[dict],
+        render_callback,
+        camera_hub: Optional[CameraStreamHub],
+        parent=None,
+    ):
         super().__init__(parent)
         self.camera_name = camera_name
         self.camera_config = camera_config
         self.vision_zones = vision_zones
         self.render_callback = render_callback
+        self.camera_hub = camera_hub
 
         self.setWindowTitle(f"Camera Preview - {camera_name}")
         self.setModal(True)
@@ -241,63 +255,42 @@ class CameraDetailDialog(QDialog):
         layout.addWidget(self.status_label)
 
         self.timer = QTimer(self)
+        self.timer.setInterval(70)  # ~14 FPS
         self.timer.timeout.connect(self._update_frame)
-        self.capture = None
-
-        self._open_camera()
-
-    def _open_camera(self):
-        if cv2 is None:
-            self.status_label.setText("OpenCV not available. Install opencv-python for previews.")
-            return
-
-        identifier = self.camera_config.get("index_or_path", 0)
-        self.capture = cv2.VideoCapture(identifier)
-        if self.capture and self.capture.isOpened():
-            width = self.camera_config.get("width", 640)
-            height = self.camera_config.get("height", 480)
-            fps = self.camera_config.get("fps", 30)
-            self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-            self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-            self.capture.set(cv2.CAP_PROP_FPS, fps)
-            self.status_label.setText("")
-            self.timer.start(80)
-        else:
-            self.status_label.setText("Camera unavailable.")
-            self.capture = None
+        self.timer.start()
 
     def _update_frame(self):
-        if self.capture is None:
+        if cv2 is None or np is None:
+            self.status_label.setText("OpenCV/NumPy missing. Install dependencies.")
             return
-        ret, frame = self.capture.read()
-        if not ret or frame is None:
-            self.status_label.setText("No frame data.")
+        if not self.camera_hub:
+            self.status_label.setText("Camera hub unavailable.")
+            self.preview_label.setText("No shared camera stream.")
             return
 
-        render_frame, status = self.render_callback(self.camera_name, frame, self.vision_zones)
+        frame = self.camera_hub.get_frame(self.camera_name, preview=False)
+        if frame is None:
+            self.preview_label.setPixmap(QPixmap())
+            self.preview_label.setText("Camera offline.")
+            self.status_label.setText("No frames available.")
+            return
+
+        render_frame, status = self.render_callback(self.camera_name, frame.copy(), self.vision_zones)
         rgb = cv2.cvtColor(render_frame, cv2.COLOR_BGR2RGB)
         height, width, channel = rgb.shape
         image = QImage(rgb.data, width, height, channel * width, QImage.Format_RGB888)
-        pixmap = QPixmap.fromImage(image)
-        self.preview_label.setPixmap(pixmap)
-
+        self.preview_label.setPixmap(QPixmap.fromImage(image))
         status_text = {
             "triggered": "Active detection",
             "idle": "Monitoring",
             "nominal": "Live preview",
             "offline": "Offline",
-            "no_vision": "No vision zones configured"
+            "no_vision": "No vision zones configured",
         }
         self.status_label.setText(status_text.get(status, ""))
 
     def closeEvent(self, event):
         self.timer.stop()
-        if self.capture:
-            try:
-                self.capture.release()
-            except Exception:
-                pass
-            self.capture = None
         super().closeEvent(event)
 
 
@@ -328,9 +321,7 @@ class DashboardTab(QWidget):
         self._speed_initialized = False
 
         self.camera_view_active = False
-        self.camera_tiles: Dict[str, CameraPreviewTile] = {}
         self.camera_order: List[str] = list(self.config.get("cameras", {}).keys())
-        self.preview_caps: Dict[str, Optional['cv2.VideoCapture']] = {}
         self.vision_zones = self._load_vision_zones()
         self._robot_status = "empty"
         self._robot_total = 1 if self.config.get("robot") else 0
@@ -345,6 +336,16 @@ class DashboardTab(QWidget):
         self.camera_front_circle: Optional[StatusIndicator] = None
         self.camera_wrist_circle: Optional[StatusIndicator] = None
         self.compact_throbber: Optional[CircularProgress] = None
+        self.camera_hub: Optional[CameraStreamHub] = None
+        if cv2 is not None and np is not None:
+            try:
+                self.camera_hub = CameraStreamHub.instance(self.config)
+            except Exception:
+                self.camera_hub = None
+        self.active_camera_index = 0
+        self.active_camera_name: Optional[str] = self.camera_order[0] if self.camera_order else None
+        self.active_vision_zones: Dict[str, List[dict]] = {}
+        self._last_preview_timestamp = 0.0
 
         self.camera_preview_timer = QTimer(self)
         self.camera_preview_timer.timeout.connect(self.update_camera_previews)
@@ -599,7 +600,7 @@ class DashboardTab(QWidget):
         top_container = QHBoxLayout()
         top_container.setSpacing(15)
 
-        # Camera panel on LEFT (between tabs and status bar) - Horizontal layout for side-by-side
+        # Camera panel on LEFT (between tabs and status bar)
         self.camera_panel = QFrame()
         self.camera_panel.setStyleSheet("""
             QFrame {
@@ -608,10 +609,40 @@ class DashboardTab(QWidget):
                 border-radius: 8px;
             }
         """)
-        self.camera_panel_layout = QHBoxLayout(self.camera_panel)
-        self.camera_panel_layout.setContentsMargins(8, 8, 8, 8)
-        self.camera_panel_layout.setSpacing(10)
+        self.camera_panel_layout = QVBoxLayout(self.camera_panel)
+        self.camera_panel_layout.setContentsMargins(10, 10, 10, 10)
+        self.camera_panel_layout.setSpacing(8)
         self.camera_panel.setVisible(False)
+
+        self.single_camera_preview = CameraPreviewWidget()
+        self.single_camera_preview.clicked.connect(
+            lambda: self.open_camera_detail(self.active_camera_name) if self.active_camera_name else None
+        )
+        self.camera_panel_layout.addWidget(self.single_camera_preview, stretch=1)
+
+        button_row = QHBoxLayout()
+        button_row.setSpacing(8)
+        button_row.addStretch()
+        self.camera_cycle_btn = QPushButton("⟳ Cycle")
+        self.camera_cycle_btn.setCursor(Qt.PointingHandCursor)
+        self.camera_cycle_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2f2f2f;
+                color: #ffffff;
+                border: 1px solid #505050;
+                border-radius: 6px;
+                padding: 6px 12px;
+                font-size: 13px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #3a3a3a;
+            }
+        """)
+        self.camera_cycle_btn.clicked.connect(self.cycle_active_camera)
+        button_row.addWidget(self.camera_cycle_btn)
+        self.camera_panel_layout.addLayout(button_row)
+
         top_container.addWidget(self.camera_panel, stretch=2)
 
         # Status bar and controls on RIGHT
@@ -622,7 +653,6 @@ class DashboardTab(QWidget):
         top_container.addLayout(left_column, stretch=3)
 
         layout.addLayout(top_container)
-        self._rebuild_camera_panel()
         
         # Body layout: controls on left, speed override on right
         body_layout = QHBoxLayout()
@@ -762,6 +792,7 @@ class DashboardTab(QWidget):
         body_layout.addLayout(controls_column, stretch=5)
 
         layout.addLayout(body_layout)
+        self._refresh_active_camera_label()
 
         # Welcome message
         self.log_text.append("=== NICE LABS Robotics ===")
@@ -826,13 +857,13 @@ class DashboardTab(QWidget):
         for name in self.camera_order:
             self._camera_status.setdefault(name, "empty")
 
-        self._release_preview_caps()
-        self._rebuild_camera_panel()
         self.camera_toggle_btn.setEnabled(bool(self.camera_order))
-        if not self.camera_view_active:
-            for name, tile in self.camera_tiles.items():
-                default_state = "idle" if name in self.vision_zones else "no_vision"
-                tile.set_status(default_state)
+        self._refresh_active_camera_label()
+        if self.camera_view_active:
+            self.update_camera_previews(force=True)
+        elif not self.camera_order:
+            self.single_camera_preview.update_preview(None, "No camera configured.")
+
         self._update_status_summaries()
 
     def _refresh_loop_button(self):
@@ -904,35 +935,37 @@ class DashboardTab(QWidget):
         if not self._speed_initialized:
             self._speed_initialized = True
 
-    def _rebuild_camera_panel(self):
-        while self.camera_panel_layout.count():
-            item = self.camera_panel_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+    def _camera_display_name(self, camera_name: str) -> str:
+        return camera_name.replace("_", " ").title()
 
-        self.camera_tiles = {}
-
-        if not self.camera_order:
-            placeholder = QLabel("No cameras configured")
-            placeholder.setStyleSheet("color: #909090; font-size: 13px;")
-            placeholder.setAlignment(Qt.AlignCenter)
-            self.camera_panel_layout.addWidget(placeholder)
+    def _refresh_active_camera_label(self):
+        if not self.single_camera_preview:
             return
 
-        for name in self.camera_order:
-            cfg = self.config.get("cameras", {}).get(name, {})
-            width = max(1, cfg.get("width", 640))
-            height = cfg.get("height", 480)
-            ratio = height / width if width else 0.75
-            display_name = name.replace("_", " ").title()
-            tile = CameraPreviewTile(name, display_name, ratio)
-            tile.clicked.connect(self.on_camera_tile_clicked)
-            tile.set_status("idle" if name in self.vision_zones else "no_vision")
-            self.camera_panel_layout.addWidget(tile)
-            self.camera_tiles[name] = tile
+        if not self.camera_order:
+            self.active_camera_name = None
+            self.single_camera_preview.set_camera_name("No cameras")
+            self.single_camera_preview.update_preview(None, "Configure cameras in Settings.")
+            self.camera_cycle_btn.setEnabled(False)
+            return
 
-        self.camera_panel_layout.addStretch(1)
+        if self.active_camera_name not in self.camera_order:
+            self.active_camera_index = 0
+            self.active_camera_name = self.camera_order[0]
+            self._last_preview_timestamp = 0.0
+
+        display = self._camera_display_name(self.active_camera_name)
+        self.single_camera_preview.set_camera_name(display)
+        self.camera_cycle_btn.setEnabled(len(self.camera_order) > 1)
+
+    def cycle_active_camera(self):
+        if not self.camera_order:
+            return
+        self.active_camera_index = (self.active_camera_index + 1) % len(self.camera_order)
+        self.active_camera_name = self.camera_order[self.active_camera_index]
+        self._last_preview_timestamp = 0.0
+        self._refresh_active_camera_label()
+        self.update_camera_previews(force=True)
 
     def on_camera_toggle(self, checked: bool):
         # Update button text (red with X when open)
@@ -966,15 +999,16 @@ class DashboardTab(QWidget):
         self.time_label.hide()
         self.run_label.hide()
         
-        self._rebuild_camera_panel()
+        self._refresh_active_camera_label()
         self.camera_panel.setVisible(True)
-        if not self.camera_tiles:
+        if not self.camera_order or not self.active_camera_name:
             self.camera_view_active = False
+            self.single_camera_preview.update_preview(None, "No camera configured.")
             return
 
         self.camera_view_active = True
         self.camera_preview_timer.start(300)
-        self.update_camera_previews()
+        self.update_camera_previews(force=True)
 
     def exit_camera_mode(self):
         if not self.camera_view_active:
@@ -990,12 +1024,8 @@ class DashboardTab(QWidget):
         
         self.camera_view_active = False
         self.camera_preview_timer.stop()
-        self._release_preview_caps()
         self.camera_panel.setVisible(False)
-        for name, tile in self.camera_tiles.items():
-            tile.update_pixmap(None)
-            default_state = "idle" if name in self.vision_zones else "nominal"
-            tile.set_status(default_state)
+        self.single_camera_preview.update_preview(None, "Preview closed.")
 
     def close_camera_panel(self):
         """Close camera preview if it's currently open."""
@@ -1151,88 +1181,59 @@ class DashboardTab(QWidget):
             return frame, "nominal"
         return frame, "triggered" if triggered_any else "idle"
 
-    def _ensure_preview_cap(self, camera_name: str):
-        if cv2 is None:
-            return None
-        cap = self.preview_caps.get(camera_name)
-        if cap is None or not cap or not cap.isOpened():
-            cfg = self.config.get("cameras", {}).get(camera_name, {})
-            identifier = cfg.get("index_or_path", 0)
-            cap = cv2.VideoCapture(identifier)
-            if not cap or not cap.isOpened():
-                self.preview_caps[camera_name] = None
-                return None
-            width = min(640, int(cfg.get("width", 640)))
-            height = min(480, int(cfg.get("height", 480)))
-            fps = max(5, min(15, int(cfg.get("fps", 30))))
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-            cap.set(cv2.CAP_PROP_FPS, fps)
-            self.preview_caps[camera_name] = cap
-        return cap
+    def _frame_to_pixmap(self, frame: "np.ndarray") -> QPixmap:
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        height, width, channel = rgb.shape
+        image = QImage(rgb.data, width, height, channel * width, QImage.Format_RGB888)
+        return QPixmap.fromImage(image)
 
-    def _release_preview_caps(self):
-        for cap in list(self.preview_caps.values()):
-            if cap is None:
-                continue
-            try:
-                cap.release()
-            except Exception:
-                pass
-        self.preview_caps.clear()
+    def _get_preview_zones(self, camera_name: str) -> List[dict]:
+        zones = self.active_vision_zones.get(camera_name)
+        if zones:
+            return zones
+        return self.vision_zones.get(camera_name, [])
 
-    def update_camera_previews(self):
+    def update_camera_previews(self, force: bool = False):
         if not self.camera_view_active or cv2 is None or np is None:
             return
 
-        for name in self.camera_order:
-            tile = self.camera_tiles.get(name)
-            if tile is None:
-                continue
+        if not self.active_camera_name:
+            self.single_camera_preview.update_preview(None, "No camera configured.")
+            return
 
-            cap = self._ensure_preview_cap(name)
-            if cap is None:
-                tile.update_pixmap(None)
-                tile.set_status("offline")
-                continue
+        if not self.camera_hub:
+            self.single_camera_preview.update_preview(None, "Camera hub unavailable.", status="Offline")
+            return
 
-            ret, frame = cap.read()
-            if not ret or frame is None:
-                tile.update_pixmap(None)
-                tile.set_status("offline")
-                try:
-                    cap.release()
-                except Exception:
-                    pass
-                self.preview_caps[name] = None
-                continue
+        frame, timestamp = self.camera_hub.get_frame_with_timestamp(self.active_camera_name, preview=True)
+        if frame is None:
+            self.single_camera_preview.update_preview(None, "Camera offline.", status="Offline")
+            return
 
-            ratio = tile.aspect_ratio
-            tile_width = max(200, tile.width() - 14)
-            tile_height = max(100, int(tile_width * ratio))
-            scaled_frame = cv2.resize(frame, (tile_width, tile_height))
-            render_frame, status = self._render_camera_frame(name, scaled_frame.copy())
+        if not force and timestamp <= self._last_preview_timestamp:
+            return
 
-            display_frame = cv2.resize(render_frame, (tile_width, tile_height))
-            rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
-            height, width, channel = rgb.shape
-            image = QImage(rgb.data, width, height, channel * width, QImage.Format_RGB888)
-            pixmap = QPixmap.fromImage(image)
-            tile.update_pixmap(pixmap)
-            if name not in self.vision_zones:
-                tile.set_status("no_vision")
-                continue
+        zones = self._get_preview_zones(self.active_camera_name)
+        render_frame, status = self._render_camera_frame(self.active_camera_name, frame.copy(), zones)
+        pixmap = self._frame_to_pixmap(render_frame)
+        status_text = {
+            "triggered": "Triggered",
+            "idle": "Watching",
+            "nominal": "Live",
+            "offline": "Offline",
+            "no_vision": "No vision",
+        }.get(status, "")
+        self.single_camera_preview.update_preview(pixmap, status=status_text)
+        self._last_preview_timestamp = timestamp
 
-            if status not in {"triggered", "idle"}:
-                status = "nominal" if status != "offline" else "offline"
-            tile.set_status(status)
-
-    def on_camera_tile_clicked(self, camera_name: str):
+    def open_camera_detail(self, camera_name: str):
         camera_cfg = self.config.get("cameras", {}).get(camera_name)
         if not camera_cfg:
             return
-        zones = self.vision_zones.get(camera_name, [])
-        dialog = CameraDetailDialog(camera_name, camera_cfg, zones, self._render_camera_frame, self)
+        zones = self._get_preview_zones(camera_name)
+        dialog = CameraDetailDialog(
+            camera_name, camera_cfg, zones, self._render_camera_frame, self.camera_hub, self
+        )
         dialog.exec()
     
     def on_run_selection_changed(self, text):
@@ -1625,7 +1626,18 @@ class DashboardTab(QWidget):
 
     def _on_vision_state_update(self, state: str, payload: dict):
         message = payload.get("message", state.title())
+        camera_name = payload.get("camera_name")
+        zone_payload = payload.get("zone_polygons") or []
+
+        if camera_name:
+            if state in {"idle", "watching", "triggered"} and zone_payload:
+                self.active_vision_zones[camera_name] = zone_payload
+            elif state in {"complete", "clear", "error"}:
+                self.active_vision_zones.pop(camera_name, None)
+
         self.record_vision_status(state, message, payload)
+        if camera_name and self.camera_view_active and camera_name == self.active_camera_name:
+            self.update_camera_previews(force=True)
     
     def _on_execution_completed(self, success: bool, summary: str):
         """Handle execution completion (for recordings/sequences)"""
@@ -1686,6 +1698,7 @@ class DashboardTab(QWidget):
             self.timer.stop()
             self._vision_state_active = False
             self._last_vision_signature = None
+            self.active_vision_zones.clear()
             self._set_action_label_style("#383838")
             seq_tab = self._get_sequence_tab()
             if seq_tab:
@@ -1811,18 +1824,8 @@ class DashboardTab(QWidget):
         self._camera_status[camera_name] = status
         self._update_status_summaries()
 
-        tile = self.camera_tiles.get(camera_name)
-        if tile:
-            if status == "online":
-                if not self.camera_view_active:
-                    default_state = "idle" if camera_name in self.vision_zones else "no_vision"
-                    tile.set_status(default_state)
-            elif status == "empty":
-                tile.set_status("no_vision")
-                tile.update_pixmap(None)
-            else:
-                tile.set_status("offline")
-                tile.update_pixmap(None)
+        if self.camera_view_active and camera_name == self.active_camera_name:
+            self.update_camera_previews(force=True)
 
     def _update_status_summaries(self):
         """Update compact status summary labels."""

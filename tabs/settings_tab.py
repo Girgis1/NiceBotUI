@@ -5,7 +5,7 @@ Settings Tab - Configuration Interface
 import json
 import random
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QLineEdit, QScrollArea, QFrame, QSpinBox, QDoubleSpinBox,
@@ -29,29 +29,73 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     YOLO = None
 
+from utils.camera_hub import CameraStreamHub
+
 
 class HandDetectionTestDialog(QDialog):
     """Live camera preview with YOLOv8 hand detection overlay."""
 
-    def __init__(self, camera_sources: List[Tuple[str, Union[int, str]]], parent=None):
+    def __init__(self, camera_sources: List[Tuple[str, Union[int, str]]], config: dict, parent=None):
         super().__init__(parent)
         self.setWindowTitle("YOLOv8 Hand Detection Test")
         self.setModal(True)
         self.resize(900, 600)
 
         self.camera_sources = camera_sources
+        self.app_config = config
         self.current_source_index: Optional[int] = None
+        self.current_camera_name: Optional[str] = None
         self.cap = None
         self.timer = QTimer(self)
         self.timer.setInterval(120)  # ~8 FPS keeps CPU light
         self.timer.timeout.connect(self._update_frame)
+        self.camera_hub: Optional[CameraStreamHub] = None
+        try:
+            self.camera_hub = CameraStreamHub.instance(self.app_config)
+        except Exception:
+            self.camera_hub = None
+        self.camera_name_map: Dict[int, Optional[str]] = {}
+        self._use_hub_for_current = False
 
         self.last_detection: Optional[bool] = None
         self.last_confidence: float = 0.0
         self.detected_any = False
         self.error_message: Optional[str] = None
         self.result_summary = "Camera preview not started."
-        
+
+        self._build_camera_name_map()
+
+    def _normalize_identifier(self, value: Union[int, str]) -> str:
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.startswith("/dev/video") and stripped[10:].isdigit():
+                return stripped[10:]
+            if stripped.startswith("camera:"):
+                return stripped.split(":", 1)[-1]
+            if stripped.isdigit():
+                return stripped
+            return stripped
+        return str(value)
+
+    def _resolve_camera_name(self, identifier: Union[int, str]) -> Optional[str]:
+        cameras = self.app_config.get("cameras", {}) if isinstance(self.app_config, dict) else {}
+        if not cameras:
+            return None
+
+        normalized_id = self._normalize_identifier(identifier)
+        for name, cfg in cameras.items():
+            candidate = cfg.get("index_or_path", 0)
+            if self._normalize_identifier(candidate) == normalized_id:
+                return name
+        return None
+
+    def _build_camera_name_map(self) -> None:
+        self.camera_name_map.clear()
+        for idx, (_label, identifier) in enumerate(self.camera_sources):
+            self.camera_name_map[idx] = self._resolve_camera_name(identifier)
+
         # Initialize YOLO detector
         self.yolo_model = None
         if YOLO is not None:
@@ -72,7 +116,7 @@ class HandDetectionTestDialog(QDialog):
         layout.addWidget(info_label)
 
         self.source_combo: Optional[QComboBox] = None
-        if len(camera_sources) > 1:
+        if len(self.camera_sources) > 1:
             combo_row = QHBoxLayout()
             combo_row.setSpacing(8)
             combo_label = QLabel("Camera Source:")
@@ -80,7 +124,7 @@ class HandDetectionTestDialog(QDialog):
             combo_row.addWidget(combo_label)
 
             self.source_combo = QComboBox()
-            for idx, (label, _identifier) in enumerate(camera_sources):
+            for idx, (label, _identifier) in enumerate(self.camera_sources):
                 self.source_combo.addItem(label, idx)
             self.source_combo.currentIndexChanged.connect(self._on_source_changed)
             self.source_combo.setMinimumWidth(220)
@@ -120,7 +164,7 @@ class HandDetectionTestDialog(QDialog):
             print("[SAFETY] Hand detection test unavailable — missing YOLO.")
             return
 
-        if not camera_sources:
+        if not self.camera_sources:
             self.error_message = "No camera sources available for testing."
             self.status_label.setText("❌ No cameras configured. Update camera settings first.")
             print("[SAFETY] Hand detection test aborted — no configured camera sources.")
@@ -149,15 +193,31 @@ class HandDetectionTestDialog(QDialog):
         print(f"[SAFETY] Opening camera '{label}' for hand detection test…")
         self.status_label.setText(f"Opening {label}…")
 
+        resolved_name = self.camera_name_map.get(source_index)
+        if self.camera_hub and resolved_name:
+            self._use_hub_for_current = True
+            self.current_camera_name = resolved_name
+            self.cap = None
+            self.current_source_index = source_index
+            self.error_message = None
+            self.status_label.setText(f"Camera '{label}' active. Move your hand into view.")
+            self.result_summary = f"Monitoring {label}"
+            self.timer.start()
+            return
+
+        # Fallback to direct VideoCapture when hub mapping unavailable
         cap = cv2.VideoCapture(identifier)
         if not cap or not cap.isOpened():
             self.error_message = f"Failed to open camera {label}"
             self.status_label.setText(f"❌ Could not open {label}. See terminal for details.")
             print(f"[SAFETY] Failed to open camera source '{label}' ({identifier}).")
             self.cap = None
+            self._use_hub_for_current = False
             return
 
         self.cap = cap
+        self.current_camera_name = None
+        self._use_hub_for_current = False
         self.current_source_index = source_index
         self.error_message = None
         self.status_label.setText(f"Camera '{label}' active. Move your hand into view.")
@@ -171,14 +231,28 @@ class HandDetectionTestDialog(QDialog):
         self._start_camera(source_index)
 
     def _update_frame(self):
-        if not self.cap:
-            return
+        frame = None
 
-        ret, frame = self.cap.read()
-        if not ret:
-            self.status_label.setText("⚠️ Unable to read from camera.")
-            self.result_summary = "Frame capture failed."
-            return
+        if self._use_hub_for_current:
+            if not self.camera_hub or not self.current_camera_name:
+                self.status_label.setText("⚠️ Shared camera unavailable.")
+                return
+            frame = self.camera_hub.get_frame(self.current_camera_name, preview=False)
+            if frame is None:
+                self.status_label.setText("⚠️ Waiting for shared frames…")
+                self.result_summary = "Awaiting camera hub frames."
+                self.video_label.setText("Waiting for frames…")
+                return
+            frame = frame.copy()
+        else:
+            if not self.cap:
+                return
+            ret, raw_frame = self.cap.read()
+            if not ret or raw_frame is None:
+                self.status_label.setText("⚠️ Unable to read from camera.")
+                self.result_summary = "Frame capture failed."
+                return
+            frame = raw_frame
 
         detected, confidence, annotated = self._detect_hand(frame)
 
@@ -197,6 +271,7 @@ class HandDetectionTestDialog(QDialog):
         self.status_label.setText(f"{state_text} — {conf_text}")
         self.result_summary = self.status_label.text()
 
+        self.video_label.setText("")
         rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
         height, width, channel = rgb.shape
         bytes_per_line = channel * width
@@ -270,6 +345,8 @@ class HandDetectionTestDialog(QDialog):
             except Exception:
                 pass
             self.cap = None
+        self._use_hub_for_current = False
+        self.current_camera_name = None
 
     def closeEvent(self, event):  # noqa: D401 - Qt override
         self.timer.stop()
@@ -788,7 +865,7 @@ class SettingsTab(QWidget):
             return
 
         self.status_label.setText("🎥 Launching hand safety test window…")
-        dialog = HandDetectionTestDialog(sources, parent=self)
+        dialog = HandDetectionTestDialog(sources, self.config, parent=self)
         dialog.exec()
         
         if dialog.detected_any:
@@ -855,7 +932,7 @@ class SettingsTab(QWidget):
         self.status_label.setText("🎥 Launching hand detection test window…")
         print(f"[SAFETY] Launching hand detection test for {len(sources)} camera(s).")
 
-        dialog = HandDetectionTestDialog(sources, parent=self)
+        dialog = HandDetectionTestDialog(sources, self.config, parent=self)
         dialog.exec()
 
         if dialog.error_message:
