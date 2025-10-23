@@ -7,7 +7,7 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QLineEdit, QScrollArea, QFrame, QSpinBox, QDoubleSpinBox,
-    QTabWidget, QCheckBox
+    QTabWidget, QCheckBox, QComboBox
 )
 from PySide6.QtCore import Qt, Signal
 
@@ -104,11 +104,15 @@ class SettingsTab(QWidget):
         # Policy tab
         policy_tab = self.create_policy_tab()
         self.tab_widget.addTab(policy_tab, "🧠 Policy")
-        
+
         # Control tab
         control_tab = self.create_control_tab()
         self.tab_widget.addTab(control_tab, "🎮 Control")
-        
+
+        # Safety tab
+        safety_tab = self.create_safety_tab()
+        self.tab_widget.addTab(safety_tab, "🛡️ Safety")
+
         main_layout.addWidget(self.tab_widget)
         
         # Action buttons
@@ -569,21 +573,186 @@ class SettingsTab(QWidget):
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)  # No margins
         layout.setSpacing(6)  # Compact spacing
-        
+
         self.num_episodes_spin = self.add_spinbox_row(layout, "Episodes:", 1, 100, 10)
         self.episode_time_spin = self.add_doublespinbox_row(layout, "Episode Time (s):", 1.0, 300.0, 20.0)
         self.warmup_spin = self.add_doublespinbox_row(layout, "Warmup (s):", 0.0, 60.0, 3.0)
         self.reset_time_spin = self.add_doublespinbox_row(layout, "Reset Time (s):", 0.0, 60.0, 8.0)
-        
+
         # Checkboxes
         self.display_data_check = QCheckBox("Display Data")
         self.display_data_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 8px; }")
         layout.addWidget(self.display_data_check)
-        
+
         self.object_gate_check = QCheckBox("Object Gate")
         self.object_gate_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 8px; }")
         layout.addWidget(self.object_gate_check)
-        
+
+        layout.addStretch()
+        return widget
+
+    def create_safety_tab(self) -> QWidget:
+        """Create safety systems tab"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        # ========== TEMPERATURE MONITORING ==========
+        temp_section = QLabel("🌡️ Feetech Motor Monitoring")
+        temp_section.setStyleSheet("color: #4CAF50; font-size: 14px; font-weight: bold; margin-bottom: 2px;")
+        layout.addWidget(temp_section)
+
+        temp_help = QLabel("Monitor Feetech servo temperatures and trigger proactive shutdowns before damage occurs.")
+        temp_help.setWordWrap(True)
+        temp_help.setStyleSheet("QLabel { color: #b0b0b0; font-size: 13px; padding-bottom: 4px; }")
+        layout.addWidget(temp_help)
+
+        temp_enable_row = QHBoxLayout()
+        self.safety_temp_monitor_check = QCheckBox("Enable temperature polling")
+        self.safety_temp_monitor_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px 0; }")
+        temp_enable_row.addWidget(self.safety_temp_monitor_check)
+        temp_enable_row.addStretch()
+        layout.addLayout(temp_enable_row)
+
+        self.safety_temp_warn_spin = self.add_doublespinbox_row(
+            layout,
+            "Warning Threshold (°C):",
+            30.0,
+            120.0,
+            70.0
+        )
+        self.safety_temp_warn_spin.setDecimals(1)
+        self.safety_temp_warn_spin.setSingleStep(0.5)
+
+        self.safety_temp_shutdown_spin = self.add_doublespinbox_row(
+            layout,
+            "Torque-Off Threshold (°C):",
+            40.0,
+            130.0,
+            85.0
+        )
+        self.safety_temp_shutdown_spin.setDecimals(1)
+        self.safety_temp_shutdown_spin.setSingleStep(0.5)
+
+        temp_test_row = QHBoxLayout()
+        self.safety_temp_test_btn = QPushButton("🧪 Simulate Overheat Alert")
+        self.safety_temp_test_btn.setFixedHeight(45)
+        self.safety_temp_test_btn.setStyleSheet(self.get_button_style("#FF7043", "#E64A19"))
+        self.safety_temp_test_btn.clicked.connect(self.run_temperature_self_test)
+        temp_test_row.addWidget(self.safety_temp_test_btn)
+        temp_test_row.addStretch()
+        layout.addLayout(temp_test_row)
+
+        layout.addSpacing(8)
+
+        # ========== TORQUE SAFEGUARD ==========
+        torque_section = QLabel("🛑 Torque Overload Response")
+        torque_section.setStyleSheet("color: #4CAF50; font-size: 14px; font-weight: bold; margin-bottom: 2px;")
+        layout.addWidget(torque_section)
+
+        torque_help = QLabel("Automatically halt tasks and drop torque when unexpected collisions or excessive forces occur.")
+        torque_help.setWordWrap(True)
+        torque_help.setStyleSheet("QLabel { color: #b0b0b0; font-size: 13px; padding-bottom: 4px; }")
+        layout.addWidget(torque_help)
+
+        torque_enable_row = QHBoxLayout()
+        self.safety_torque_check = QCheckBox("Enable torque spike detection")
+        self.safety_torque_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px 0; }")
+        torque_enable_row.addWidget(self.safety_torque_check)
+        torque_enable_row.addStretch()
+        layout.addLayout(torque_enable_row)
+
+        self.safety_torque_threshold_spin = self.add_spinbox_row(
+            layout,
+            "Abort Threshold (% rated torque):",
+            10,
+            200,
+            90
+        )
+
+        torque_flags_row = QHBoxLayout()
+        self.safety_torque_disable_check = QCheckBox("Disable torque after abort")
+        self.safety_torque_disable_check.setChecked(True)
+        self.safety_torque_disable_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px 0; }")
+        torque_flags_row.addWidget(self.safety_torque_disable_check)
+        torque_flags_row.addStretch()
+        layout.addLayout(torque_flags_row)
+
+        torque_test_row = QHBoxLayout()
+        self.safety_torque_test_btn = QPushButton("🧪 Simulate Collision Stop")
+        self.safety_torque_test_btn.setFixedHeight(45)
+        self.safety_torque_test_btn.setStyleSheet(self.get_button_style("#EF5350", "#C62828"))
+        self.safety_torque_test_btn.clicked.connect(self.run_torque_self_test)
+        torque_test_row.addWidget(self.safety_torque_test_btn)
+        torque_test_row.addStretch()
+        layout.addLayout(torque_test_row)
+
+        layout.addSpacing(8)
+
+        # ========== VISION-BASED SAFETY ==========
+        vision_section = QLabel("✋ Collaborative Vision Safety")
+        vision_section.setStyleSheet("color: #4CAF50; font-size: 14px; font-weight: bold; margin-bottom: 2px;")
+        layout.addWidget(vision_section)
+
+        vision_help = QLabel(
+            "Pause motion when a hand enters the workspace using a dedicated vision model, "
+            "then seamlessly resume once the area is clear."
+        )
+        vision_help.setWordWrap(True)
+        vision_help.setStyleSheet("QLabel { color: #b0b0b0; font-size: 13px; padding-bottom: 4px; }")
+        layout.addWidget(vision_help)
+
+        vision_enable_row = QHBoxLayout()
+        self.safety_hand_detect_check = QCheckBox("Enable collaborative hand detection")
+        self.safety_hand_detect_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px 0; }")
+        vision_enable_row.addWidget(self.safety_hand_detect_check)
+        vision_enable_row.addStretch()
+        layout.addLayout(vision_enable_row)
+
+        model_row = QHBoxLayout()
+        model_label = QLabel("Vision Model:")
+        model_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 160px; }")
+        model_row.addWidget(model_label)
+
+        self.safety_hand_model_combo = QComboBox()
+        self.safety_hand_model_combo.addItem("Robust HandNet (recommended)", "robust_handnet")
+        self.safety_hand_model_combo.addItem("YOLOv8 Hand (legacy)", "yolov8_hand")
+        self.safety_hand_model_combo.addItem("Custom vision pipeline", "custom")
+        self.safety_hand_model_combo.setStyleSheet(
+            "QComboBox { background-color: #505050; color: #ffffff; border: 2px solid #707070; "
+            "border-radius: 8px; padding: 10px; font-size: 15px; }"
+        )
+        model_row.addWidget(self.safety_hand_model_combo, stretch=1)
+        layout.addLayout(model_row)
+
+        self.safety_hand_resume_spin = self.add_doublespinbox_row(
+            layout,
+            "Resume delay after clear (s):",
+            0.0,
+            5.0,
+            0.5
+        )
+        self.safety_hand_resume_spin.setDecimals(2)
+        self.safety_hand_resume_spin.setSingleStep(0.1)
+
+        hold_row = QHBoxLayout()
+        self.safety_hand_hold_check = QCheckBox("Hold position with torque enabled during pause")
+        self.safety_hand_hold_check.setChecked(True)
+        self.safety_hand_hold_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px 0; }")
+        hold_row.addWidget(self.safety_hand_hold_check)
+        hold_row.addStretch()
+        layout.addLayout(hold_row)
+
+        vision_test_row = QHBoxLayout()
+        self.safety_hand_test_btn = QPushButton("🧪 Simulate Hand Pause")
+        self.safety_hand_test_btn.setFixedHeight(45)
+        self.safety_hand_test_btn.setStyleSheet(self.get_button_style("#42A5F5", "#1E88E5"))
+        self.safety_hand_test_btn.clicked.connect(self.run_hand_detection_self_test)
+        vision_test_row.addWidget(self.safety_hand_test_btn)
+        vision_test_row.addStretch()
+        layout.addLayout(vision_test_row)
+
         layout.addStretch()
         return widget
     
@@ -742,7 +911,32 @@ class SettingsTab(QWidget):
         # UI settings
         ui_cfg = self.config.get("ui", {})
         self.object_gate_check.setChecked(ui_cfg.get("object_gate", False))
-    
+
+        # Safety settings
+        safety_cfg = self.config.get("safety", {})
+
+        temp_cfg = safety_cfg.get("temperature_monitoring", {})
+        self.safety_temp_monitor_check.setChecked(temp_cfg.get("enabled", True))
+        self.safety_temp_warn_spin.setValue(temp_cfg.get("warn_c", 70.0))
+        self.safety_temp_shutdown_spin.setValue(temp_cfg.get("shutdown_c", 85.0))
+
+        torque_cfg = safety_cfg.get("torque_protection", {})
+        self.safety_torque_check.setChecked(torque_cfg.get("enabled", True))
+        self.safety_torque_threshold_spin.setValue(torque_cfg.get("threshold_percent", 90))
+        self.safety_torque_disable_check.setChecked(torque_cfg.get("auto_disable_torque", True))
+
+        vision_cfg = safety_cfg.get("collaborative_mode", {})
+        self.safety_hand_detect_check.setChecked(vision_cfg.get("enabled", False))
+        model_key = vision_cfg.get("model", "robust_handnet")
+        model_index = self.safety_hand_model_combo.findData(model_key)
+        if model_index == -1:
+            # Preserve unknown custom model identifiers
+            self.safety_hand_model_combo.addItem(f"Custom ({model_key})", model_key)
+            model_index = self.safety_hand_model_combo.count() - 1
+        self.safety_hand_model_combo.setCurrentIndex(model_index)
+        self.safety_hand_resume_spin.setValue(vision_cfg.get("resume_delay_s", 0.5))
+        self.safety_hand_hold_check.setChecked(vision_cfg.get("hold_position_with_torque", True))
+
     def save_settings(self):
         """Save settings to config file"""
         # Update config dict
@@ -795,7 +989,30 @@ class SettingsTab(QWidget):
         if "ui" not in self.config:
             self.config["ui"] = {}
         self.config["ui"]["object_gate"] = self.object_gate_check.isChecked()
-        
+
+        # Safety settings
+        if "safety" not in self.config:
+            self.config["safety"] = {}
+
+        self.config["safety"]["temperature_monitoring"] = {
+            "enabled": self.safety_temp_monitor_check.isChecked(),
+            "warn_c": self.safety_temp_warn_spin.value(),
+            "shutdown_c": self.safety_temp_shutdown_spin.value()
+        }
+
+        self.config["safety"]["torque_protection"] = {
+            "enabled": self.safety_torque_check.isChecked(),
+            "threshold_percent": self.safety_torque_threshold_spin.value(),
+            "auto_disable_torque": self.safety_torque_disable_check.isChecked()
+        }
+
+        self.config["safety"]["collaborative_mode"] = {
+            "enabled": self.safety_hand_detect_check.isChecked(),
+            "model": self.safety_hand_model_combo.currentData(),
+            "resume_delay_s": self.safety_hand_resume_spin.value(),
+            "hold_position_with_torque": self.safety_hand_hold_check.isChecked()
+        }
+
         # Write to file
         try:
             with open(self.config_path, 'w') as f:
@@ -835,10 +1052,68 @@ class SettingsTab(QWidget):
         self.reset_time_spin.setValue(8.0)
         self.display_data_check.setChecked(True)
         self.object_gate_check.setChecked(False)
-        
+
+        self.safety_temp_monitor_check.setChecked(True)
+        self.safety_temp_warn_spin.setValue(70.0)
+        self.safety_temp_shutdown_spin.setValue(85.0)
+
+        self.safety_torque_check.setChecked(True)
+        self.safety_torque_threshold_spin.setValue(90)
+        self.safety_torque_disable_check.setChecked(True)
+
+        self.safety_hand_detect_check.setChecked(False)
+        self.safety_hand_model_combo.setCurrentIndex(0)
+        self.safety_hand_resume_spin.setValue(0.5)
+        self.safety_hand_hold_check.setChecked(True)
+
         self.status_label.setText("⚠️ Defaults loaded. Click Save to apply.")
         self.status_label.setStyleSheet("QLabel { color: #FF9800; font-size: 15px; padding: 8px; }")
-    
+
+    def run_temperature_self_test(self):
+        """Simulate a temperature monitoring event"""
+        if not self.safety_temp_monitor_check.isChecked():
+            self.status_label.setText("ℹ️ Temperature monitoring is disabled. Enable it to activate this safety layer.")
+            self.status_label.setStyleSheet("QLabel { color: #FF9800; font-size: 15px; padding: 8px; }")
+            return
+
+        warn = self.safety_temp_warn_spin.value()
+        shutdown = self.safety_temp_shutdown_spin.value()
+        self.status_label.setText(
+            f"🧪 Temperature watchdog ready — warning at {warn:.1f}°C, torque cut at {shutdown:.1f}°C."
+        )
+        self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+
+    def run_torque_self_test(self):
+        """Simulate a torque overload event"""
+        if not self.safety_torque_check.isChecked():
+            self.status_label.setText("ℹ️ Torque spike detection is disabled. Enable it to protect against collisions.")
+            self.status_label.setStyleSheet("QLabel { color: #FF9800; font-size: 15px; padding: 8px; }")
+            return
+
+        threshold = self.safety_torque_threshold_spin.value()
+        auto_disable = self.safety_torque_disable_check.isChecked()
+        action = "torque will drop" if auto_disable else "task will halt"
+        self.status_label.setText(
+            f"🧪 Torque guard ready — exceeding {threshold}% triggers an abort and {action}."
+        )
+        self.status_label.setStyleSheet("QLabel { color: #EF5350; font-size: 15px; padding: 8px; }")
+
+    def run_hand_detection_self_test(self):
+        """Simulate a collaborative vision pause"""
+        if not self.safety_hand_detect_check.isChecked():
+            self.status_label.setText("ℹ️ Hand detection is disabled. Toggle it on to pause when people enter the workspace.")
+            self.status_label.setStyleSheet("QLabel { color: #FF9800; font-size: 15px; padding: 8px; }")
+            return
+
+        model_label = self.safety_hand_model_combo.currentText()
+        resume_delay = self.safety_hand_resume_spin.value()
+        hold_enabled = self.safety_hand_hold_check.isChecked()
+        hold_text = "holding torque" if hold_enabled else "torque released"
+        self.status_label.setText(
+            f"🧪 Vision safety armed — {model_label} will pause with {hold_text}, resume after {resume_delay:.2f}s clear."
+        )
+        self.status_label.setStyleSheet("QLabel { color: #42A5F5; font-size: 15px; padding: 8px; }")
+
     # ========== REST POSITION METHODS ==========
     
     def set_rest_position(self):

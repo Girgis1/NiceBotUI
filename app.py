@@ -286,7 +286,23 @@ class MainWindow(QMainWindow):
                     [-90, 90], [-60, 60], [-60, 60],
                     [-90, 90], [-180, 180], [0, 100]
                 ],
-                "max_speed_scale": 1.0
+                "max_speed_scale": 1.0,
+                "temperature_monitoring": {
+                    "enabled": True,
+                    "warn_c": 70.0,
+                    "shutdown_c": 85.0
+                },
+                "torque_protection": {
+                    "enabled": True,
+                    "threshold_percent": 90,
+                    "auto_disable_torque": True
+                },
+                "collaborative_mode": {
+                    "enabled": False,
+                    "model": "robust_handnet",
+                    "resume_delay_s": 0.5,
+                    "hold_position_with_torque": True
+                }
             }
         }
     
