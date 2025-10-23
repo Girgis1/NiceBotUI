@@ -105,6 +105,10 @@ class SettingsTab(QWidget):
         policy_tab = self.create_policy_tab()
         self.tab_widget.addTab(policy_tab, "🧠 Policy")
         
+        # Safety tab
+        safety_tab = self.create_safety_tab()
+        self.tab_widget.addTab(safety_tab, "🛡️ Safety")
+
         # Control tab
         control_tab = self.create_control_tab()
         self.tab_widget.addTab(control_tab, "🎮 Control")
@@ -562,7 +566,183 @@ class SettingsTab(QWidget):
         
         layout.addStretch()
         return widget
-    
+
+    def create_safety_tab(self) -> QWidget:
+        """Create safety systems tab"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        # ========== MOTOR TEMPERATURE SAFETY ==========
+        temp_section = QLabel("🌡️ Motor Temperature Safety")
+        temp_section.setStyleSheet("color: #4CAF50; font-size: 14px; font-weight: bold; margin-bottom: 2px;")
+        layout.addWidget(temp_section)
+
+        temp_enable_row = QHBoxLayout()
+        temp_label = QLabel("Enable Monitoring:")
+        temp_label.setStyleSheet("color: #d0d0d0; font-size: 15px; min-width: 220px;")
+        temp_enable_row.addWidget(temp_label)
+
+        self.temp_monitor_check = QCheckBox()
+        self.temp_monitor_check.setChecked(True)
+        self.temp_monitor_check.setStyleSheet("""
+            QCheckBox {
+                font-size: 15px;
+                spacing: 10px;
+            }
+            QCheckBox::indicator {
+                width: 35px;
+                height: 35px;
+                border: 2px solid #707070;
+                border-radius: 6px;
+                background-color: #505050;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #4CAF50;
+                border-color: #4CAF50;
+            }
+            QCheckBox::indicator:checked:after {
+                content: "✓";
+                color: white;
+                font-size: 24px;
+                font-weight: bold;
+            }
+        """)
+        temp_enable_row.addWidget(self.temp_monitor_check)
+        temp_enable_row.addStretch()
+        layout.addLayout(temp_enable_row)
+
+        self.temp_threshold_spin = self.add_spinbox_row(
+            layout,
+            "Overheat Threshold (°C):",
+            30,
+            120,
+            70,
+        )
+        self.temp_threshold_spin.setSuffix(" °C")
+
+        temp_help = QLabel(
+            "Automatically tracks Feetech motor temperatures and flags an overheat condition "
+            "when the configured threshold is exceeded."
+        )
+        temp_help.setStyleSheet("color: #909090; font-size: 13px; padding: 2px 25px;")
+        temp_help.setWordWrap(True)
+        layout.addWidget(temp_help)
+
+        layout.addSpacing(8)
+
+        # ========== TORQUE SAFETY ==========
+        torque_section = QLabel("🛑 Torque Collision Guard")
+        torque_section.setStyleSheet("color: #4CAF50; font-size: 14px; font-weight: bold; margin-bottom: 2px;")
+        layout.addWidget(torque_section)
+
+        torque_enable_row = QHBoxLayout()
+        torque_label = QLabel("Kill Task on Over-Torque:")
+        torque_label.setStyleSheet("color: #d0d0d0; font-size: 15px; min-width: 220px;")
+        torque_enable_row.addWidget(torque_label)
+
+        self.torque_guard_check = QCheckBox()
+        self.torque_guard_check.setChecked(True)
+        self.torque_guard_check.setStyleSheet(self.position_verification_check.styleSheet())
+        torque_enable_row.addWidget(self.torque_guard_check)
+        torque_enable_row.addStretch()
+        layout.addLayout(torque_enable_row)
+
+        self.torque_threshold_spin = self.add_doublespinbox_row(
+            layout,
+            "Torque Cutoff (N·m):",
+            0.1,
+            30.0,
+            6.0,
+        )
+        self.torque_threshold_spin.setDecimals(2)
+        self.torque_threshold_spin.setSingleStep(0.1)
+
+        self.torque_release_spin = self.add_doublespinbox_row(
+            layout,
+            "Torque Release Delay (s):",
+            0.0,
+            10.0,
+            1.0,
+        )
+        self.torque_release_spin.setDecimals(2)
+        self.torque_release_spin.setSingleStep(0.1)
+
+        torque_help = QLabel(
+            "Stops the active task, drops commanded motion, and powers down torque when "
+            "unexpected force is detected to keep people safe."
+        )
+        torque_help.setStyleSheet("color: #909090; font-size: 13px; padding: 2px 25px;")
+        torque_help.setWordWrap(True)
+        layout.addWidget(torque_help)
+
+        layout.addSpacing(8)
+
+        # ========== HAND DETECTION ==========
+        hand_section = QLabel("✋ Collaborative Hand Detection")
+        hand_section.setStyleSheet("color: #4CAF50; font-size: 14px; font-weight: bold; margin-bottom: 2px;")
+        layout.addWidget(hand_section)
+
+        hand_enable_row = QHBoxLayout()
+        hand_label = QLabel("Enable Hand Detection:")
+        hand_label.setStyleSheet("color: #d0d0d0; font-size: 15px; min-width: 220px;")
+        hand_enable_row.addWidget(hand_label)
+
+        self.hand_detection_check = QCheckBox()
+        self.hand_detection_check.setChecked(True)
+        self.hand_detection_check.setStyleSheet(self.position_verification_check.styleSheet())
+        hand_enable_row.addWidget(self.hand_detection_check)
+        hand_enable_row.addStretch()
+        layout.addLayout(hand_enable_row)
+
+        self.hand_confidence_spin = self.add_doublespinbox_row(
+            layout,
+            "Detection Confidence Threshold:",
+            0.1,
+            1.0,
+            0.6,
+        )
+        self.hand_confidence_spin.setDecimals(2)
+        self.hand_confidence_spin.setSingleStep(0.05)
+
+        self.hand_resume_delay_spin = self.add_doublespinbox_row(
+            layout,
+            "Resume Delay After Clear (s):",
+            0.0,
+            10.0,
+            0.5,
+        )
+        self.hand_resume_delay_spin.setDecimals(2)
+        self.hand_resume_delay_spin.setSingleStep(0.1)
+
+        self.hand_model_edit = self.add_setting_row(
+            layout,
+            "Vision Model Path:",
+            "models/robust_hand_detector.onnx",
+        )
+
+        self.hand_hold_position_check = QCheckBox("Hold current pose with torque while paused")
+        self.hand_hold_position_check.setChecked(True)
+        self.hand_hold_position_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px 8px; }")
+        layout.addWidget(self.hand_hold_position_check)
+
+        self.hand_auto_resume_check = QCheckBox("Auto-resume when the workspace is clear")
+        self.hand_auto_resume_check.setChecked(True)
+        self.hand_auto_resume_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px 8px; }")
+        layout.addWidget(self.hand_auto_resume_check)
+
+        hand_help = QLabel(
+            "Leverages a robust vision model to pause motion when hands enter the shared cell, "
+            "holding position with torque engaged and resuming automatically when clear."
+        )
+        hand_help.setStyleSheet("color: #909090; font-size: 13px; padding: 2px 25px;")
+        hand_help.setWordWrap(True)
+        layout.addWidget(hand_help)
+
+        layout.addStretch()
+        return widget
+
     def create_control_tab(self) -> QWidget:
         """Create control settings tab"""
         widget = QWidget()
@@ -738,11 +918,31 @@ class SettingsTab(QWidget):
         self.warmup_spin.setValue(control_cfg.get("warmup_time_s", 3.0))
         self.reset_time_spin.setValue(control_cfg.get("reset_time_s", 8.0))
         self.display_data_check.setChecked(control_cfg.get("display_data", True))
-        
+
         # UI settings
         ui_cfg = self.config.get("ui", {})
         self.object_gate_check.setChecked(ui_cfg.get("object_gate", False))
-    
+
+        # Safety settings
+        safety_cfg = self.config.get("safety", {})
+
+        temp_cfg = safety_cfg.get("temperature_monitor", {})
+        self.temp_monitor_check.setChecked(temp_cfg.get("enabled", True))
+        self.temp_threshold_spin.setValue(temp_cfg.get("max_celsius", 70))
+
+        torque_cfg = safety_cfg.get("torque_guard", {})
+        self.torque_guard_check.setChecked(torque_cfg.get("enabled", True))
+        self.torque_threshold_spin.setValue(torque_cfg.get("max_torque_nm", 6.0))
+        self.torque_release_spin.setValue(torque_cfg.get("release_delay_s", 1.0))
+
+        hand_cfg = safety_cfg.get("hand_detection", {})
+        self.hand_detection_check.setChecked(hand_cfg.get("enabled", True))
+        self.hand_confidence_spin.setValue(hand_cfg.get("confidence", 0.6))
+        self.hand_resume_delay_spin.setValue(hand_cfg.get("resume_delay_s", 0.5))
+        self.hand_model_edit.setText(hand_cfg.get("model_path", "models/robust_hand_detector.onnx"))
+        self.hand_hold_position_check.setChecked(hand_cfg.get("hold_position", True))
+        self.hand_auto_resume_check.setChecked(hand_cfg.get("auto_resume", True))
+
     def save_settings(self):
         """Save settings to config file"""
         # Update config dict
@@ -795,7 +995,31 @@ class SettingsTab(QWidget):
         if "ui" not in self.config:
             self.config["ui"] = {}
         self.config["ui"]["object_gate"] = self.object_gate_check.isChecked()
-        
+
+        # Safety settings
+        if "safety" not in self.config:
+            self.config["safety"] = {}
+
+        self.config["safety"]["temperature_monitor"] = {
+            "enabled": self.temp_monitor_check.isChecked(),
+            "max_celsius": self.temp_threshold_spin.value(),
+        }
+
+        self.config["safety"]["torque_guard"] = {
+            "enabled": self.torque_guard_check.isChecked(),
+            "max_torque_nm": self.torque_threshold_spin.value(),
+            "release_delay_s": self.torque_release_spin.value(),
+        }
+
+        self.config["safety"]["hand_detection"] = {
+            "enabled": self.hand_detection_check.isChecked(),
+            "confidence": self.hand_confidence_spin.value(),
+            "resume_delay_s": self.hand_resume_delay_spin.value(),
+            "model_path": self.hand_model_edit.text(),
+            "hold_position": self.hand_hold_position_check.isChecked(),
+            "auto_resume": self.hand_auto_resume_check.isChecked(),
+        }
+
         # Write to file
         try:
             with open(self.config_path, 'w') as f:
@@ -828,14 +1052,26 @@ class SettingsTab(QWidget):
         
         self.async_host_edit.setText("127.0.0.1")
         self.async_port_spin.setValue(8080)
-        
+
         self.num_episodes_spin.setValue(10)
         self.episode_time_spin.setValue(20.0)
         self.warmup_spin.setValue(3.0)
         self.reset_time_spin.setValue(8.0)
         self.display_data_check.setChecked(True)
         self.object_gate_check.setChecked(False)
-        
+
+        self.temp_monitor_check.setChecked(True)
+        self.temp_threshold_spin.setValue(70)
+        self.torque_guard_check.setChecked(True)
+        self.torque_threshold_spin.setValue(6.0)
+        self.torque_release_spin.setValue(1.0)
+        self.hand_detection_check.setChecked(True)
+        self.hand_confidence_spin.setValue(0.6)
+        self.hand_resume_delay_spin.setValue(0.5)
+        self.hand_model_edit.setText("models/robust_hand_detector.onnx")
+        self.hand_hold_position_check.setChecked(True)
+        self.hand_auto_resume_check.setChecked(True)
+
         self.status_label.setText("⚠️ Defaults loaded. Click Save to apply.")
         self.status_label.setStyleSheet("QLabel { color: #FF9800; font-size: 15px; padding: 8px; }")
     
