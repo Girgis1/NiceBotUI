@@ -35,6 +35,7 @@ class LiveRecordModal(QDialog):
         self.config = config
         self.motor_controller = MotorController(config)
         self.actions_manager = ActionsManager()
+        self._recording_connection_active = False
         
         # Recording state
         self.is_recording = False
@@ -52,7 +53,8 @@ class LiveRecordModal(QDialog):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         
         # Timer for recording
-        self.record_timer = QTimer()
+        self.record_timer = QTimer(self)
+        self.record_timer.setTimerType(Qt.PreciseTimer)
         self.record_timer.timeout.connect(self.capture_position)
         
         # Initialize UI
@@ -196,11 +198,27 @@ class LiveRecordModal(QDialog):
     
     def start_recording(self):
         """Start live recording"""
+        if not self.motor_controller.bus:
+            if not self.motor_controller.connect():
+                self.status_label.setText("⚠️ Failed to connect to robot")
+                self.status_label.setStyleSheet(f"""
+                    QLabel {{
+                        color: {Colors.TEXT_PRIMARY};
+                        font-size: 18px;
+                        background-color: {Colors.ERROR_DARK};
+                        border-radius: 10px;
+                        padding: 30px;
+                    }}
+                """)
+                print("[LIVE RECORD] Failed to connect to motor bus")
+                return
+            self._recording_connection_active = True
+
         self.is_recording = True
         self.recorded_data = []
         self.start_time = time.time()
         self.last_position = None
-        
+
         # Update UI
         self.record_btn.setText("⏹ STOP RECORDING")
         self.record_btn.setStyleSheet(Styles.get_large_button(Colors.SUCCESS, Colors.SUCCESS_HOVER))
@@ -244,8 +262,12 @@ class LiveRecordModal(QDialog):
                 padding: 30px;
             }}
         """)
-        
+
         print(f"[LIVE RECORD] Stopped: {point_count} points, {duration:.1f}s")
+
+        if self._recording_connection_active:
+            self.motor_controller.disconnect()
+            self._recording_connection_active = False
     
     def capture_position(self):
         """Capture current robot position (called at 20Hz)"""
@@ -254,7 +276,10 @@ class LiveRecordModal(QDialog):
         
         try:
             # Read current position
-            positions = self.motor_controller.read_positions()
+            if self.motor_controller.bus:
+                positions = self.motor_controller.read_positions_from_bus()
+            else:
+                positions = self.motor_controller.read_positions()
             
             if not positions or len(positions) != 6:
                 print("[LIVE RECORD] Failed to read positions")
@@ -323,10 +348,11 @@ class LiveRecordModal(QDialog):
         # Stop recording if active
         if self.is_recording:
             self.record_timer.stop()
-        
+
         # Disconnect motor controller
         try:
             self.motor_controller.disconnect()
+            self._recording_connection_active = False
         except:
             pass
         

@@ -281,6 +281,8 @@ class KioskDashboard(QWidget):
         self.log_display.setFixedHeight(60)
         self.log_display.setStyleSheet(Styles.get_log_display_style())
         self.log_display.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # Cap document growth so the kiosk stays memory stable over multi-day sessions
+        self.log_display.document().setMaximumBlockCount(2)
         layout.addWidget(self.log_display)
         
         # Initial log message
@@ -291,12 +293,12 @@ class KioskDashboard(QWidget):
     def setup_timers(self):
         """Setup background timers"""
         # Connection check timer (every 5 seconds)
-        self.connection_timer = QTimer()
+        self.connection_timer = QTimer(self)
         self.connection_timer.timeout.connect(self.check_connections)
         self.connection_timer.start(5000)
-        
+
         # Elapsed time timer (every second when running)
-        self.elapsed_timer = QTimer()
+        self.elapsed_timer = QTimer(self)
         self.elapsed_timer.timeout.connect(self.update_elapsed_time)
     
     def refresh_run_selector(self):
@@ -379,12 +381,14 @@ class KioskDashboard(QWidget):
                 if i < len(camera_indices):
                     try:
                         cap = cv2.VideoCapture(camera_indices[i])
-                        if cap.isOpened():
-                            dot.set_connected(True)
+                        try:
+                            if cap.isOpened():
+                                dot.set_connected(True)
+                            else:
+                                dot.set_connected(False)
+                        finally:
                             cap.release()
-                        else:
-                            dot.set_connected(False)
-                    except:
+                    except Exception:
                         dot.set_connected(False)
                 else:
                     dot.set_disabled()
@@ -558,15 +562,6 @@ class KioskDashboard(QWidget):
         """Add message to log display (keeps last 2 lines)"""
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.log_display.append(f"[{timestamp}] {message}")
-        
-        # Keep only last 2 lines
-        doc = self.log_display.document()
-        while doc.lineCount() > 2:
-            cursor = self.log_display.textCursor()
-            cursor.movePosition(cursor.Start)
-            cursor.select(cursor.LineUnderCursor)
-            cursor.removeSelectedText()
-            cursor.deleteChar()  # Remove newline
     
     # === Worker Signal Handlers ===
     
