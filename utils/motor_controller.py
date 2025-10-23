@@ -257,7 +257,38 @@ class MotorController:
     def move_to_position(self, positions: list[int], velocity: int = 600, wait: bool = True, keep_connection: bool = False):
         """Alias for set_positions (more descriptive name)"""
         self.set_positions(positions, velocity, wait, keep_connection)
-    
+
+    def hold_current_position(self) -> list[int]:
+        """Re-issue current positions to keep torque engaged during pauses."""
+
+        if not MOTOR_CONTROL_AVAILABLE:
+            raise RuntimeError("Motor control not available")
+
+        connected_locally = False
+        if not self.bus:
+            if not self.connect():
+                raise RuntimeError("Failed to connect to motors for hold")
+            connected_locally = True
+
+        try:
+            positions = self.read_positions_from_bus()
+            if not positions:
+                positions = self.read_positions()
+            if not positions:
+                raise RuntimeError("Unable to read motor positions for hold")
+
+            for name in self.motor_names:
+                self.bus.write("Torque_Enable", name, 1, normalize=False)
+
+            for idx, name in enumerate(self.motor_names):
+                self.bus.write("Goal_Position", name, positions[idx], normalize=False)
+
+            return positions
+        finally:
+            if connected_locally:
+                # Keep torque engaged but avoid holding the bus when we created it locally
+                self.disconnect()
+
     def emergency_stop(self):
         """Emergency stop - disable all motor torque"""
         if not self.bus:

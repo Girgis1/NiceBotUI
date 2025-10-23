@@ -16,7 +16,7 @@ import random
 import string
 import math
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Union, Tuple
 
 import cv2
 import numpy as np
@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.motor_controller import MotorController
 from utils.actions_manager import ActionsManager
 from utils.sequences_manager import SequencesManager
+from utils.hand_safety import HandSafetyMonitor, SafetyEvent
 
 
 class ExecutionWorker(QThread):
@@ -63,14 +64,22 @@ class ExecutionWorker(QThread):
         self.actions_mgr = ActionsManager()
         self.sequences_mgr = SequencesManager()
         self.motor_controller = MotorController(config)
-    
+        self._pause_event = threading.Event()
+        self._pause_event.set()
+        self._safety_monitor: Optional[HandSafetyMonitor] = None
+        self._safety_lock = threading.Lock()
+        self._safety_pause_active = False
+        self._resume_generation = 0
+
     def run(self):
         """Main execution thread
-        
+
         Handles: recordings, sequences, and models (in local mode)
         """
         self._stop_requested = False
-        
+
+        self._start_hand_safety()
+
         try:
             if self.execution_type == "recording":
                 self._execute_recording()
@@ -84,12 +93,175 @@ class ExecutionWorker(QThread):
         except Exception as e:
             self.log_message.emit('error', f"Execution error: {e}")
             self.execution_completed.emit(False, f"Failed: {e}")
-    
+        finally:
+            self._stop_hand_safety()
+
+    # ------------------------------------------------------------------
+    # Safety monitoring helpers
+    # ------------------------------------------------------------------
+    def _start_hand_safety(self) -> None:
+        safety_cfg = self.config.get("safety", {})
+        if not safety_cfg.get("hand_detection_enabled", False):
+            return
+
+        model_name = safety_cfg.get("hand_detection_model", "mediapipe-hands")
+        camera_choice = safety_cfg.get("hand_detection_camera", "front")
+        sources = self._resolve_hand_sources(camera_choice)
+
+        if not sources:
+            self.log_message.emit(
+                'warning',
+                "[SAFETY] Hand detection enabled but no cameras configured — safety layer disabled.",
+            )
+            return
+
+        try:
+            monitor = HandSafetyMonitor(
+                sources,
+                model_name=model_name,
+                on_hand_detected=self._handle_hand_detected,
+                on_hand_cleared=self._handle_hand_cleared,
+                frame_width=320,
+                poll_interval=0.1,
+                detection_cooldown=0.4,
+            )
+            monitor.start()
+            self._safety_monitor = monitor
+            self.log_message.emit(
+                'info',
+                f"[SAFETY] Hand monitor active ({model_name}) on {len(sources)} camera(s).",
+            )
+        except Exception as exc:
+            self.log_message.emit('error', f"[SAFETY] Failed to start hand safety monitor: {exc}")
+
+    def _stop_hand_safety(self) -> None:
+        monitor = self._safety_monitor
+        self._safety_monitor = None
+        if monitor:
+            try:
+                monitor.stop()
+            except Exception as exc:
+                self.log_message.emit('warning', f"[SAFETY] Failed to stop hand monitor cleanly: {exc}")
+
+        self._pause_event.set()
+        with self._safety_lock:
+            self._safety_pause_active = False
+
+    def _resolve_hand_sources(self, choice: str) -> List[Tuple[str, Union[int, str]]]:
+        cameras_cfg = self.config.get("cameras", {})
+        sources: List[Tuple[str, Union[int, str]]] = []
+
+        def normalize(value: Union[int, str, None]) -> Union[int, str, None]:
+            if value is None:
+                return None
+            if isinstance(value, int):
+                return value
+            stripped = value.strip()
+            if stripped.isdigit():
+                return int(stripped)
+            return stripped
+
+        def add_source(key: str, label: str) -> None:
+            cam_cfg = cameras_cfg.get(key, {})
+            identifier = normalize(cam_cfg.get("index_or_path"))
+            if identifier is None:
+                identifier = 0 if key == "front" else 1
+            identifier = normalize(identifier)
+            if identifier is None:
+                return
+            sources.append((label, identifier))
+
+        choice = (choice or "front").lower()
+        if choice == "both":
+            add_source("front", "front")
+            add_source("wrist", "wrist")
+        elif choice == "wrist":
+            add_source("wrist", "wrist")
+        else:
+            add_source("front", "front")
+
+        return sources
+
+    def _handle_hand_detected(self, event: SafetyEvent) -> None:
+        with self._safety_lock:
+            self._resume_generation += 1
+            self._safety_pause_active = True
+        self._pause_event.clear()
+        self.status_update.emit("Safety pause — hand detected")
+        self.log_message.emit(
+            'warning',
+            f"[SAFETY] Hand detected on {event.camera_label} (confidence {event.confidence:.2%}). Pausing motion.",
+        )
+
+        if self.config.get("safety", {}).get("hand_hold_position", True):
+            try:
+                self.motor_controller.hold_current_position()
+            except Exception as exc:
+                self.log_message.emit('error', f"[SAFETY] Failed to hold position: {exc}")
+        else:
+            self.log_message.emit('info', "[SAFETY] Hand detected — motion paused without torque hold (per settings).")
+
+    def _handle_hand_cleared(self, event: SafetyEvent) -> None:
+        with self._safety_lock:
+            if not self._safety_pause_active:
+                return
+            generation = self._resume_generation
+
+        delay = max(0.0, float(self.config.get("safety", {}).get("hand_resume_delay_s", 0.5)))
+        self.log_message.emit(
+            'info',
+            f"[SAFETY] Hand cleared ({event.detail}). Resuming in {delay:.1f}s if area stays clear.",
+        )
+        threading.Thread(
+            target=self._delayed_resume,
+            args=(generation, delay),
+            daemon=True,
+        ).start()
+
+    def _delayed_resume(self, generation: int, delay: float) -> None:
+        elapsed = 0.0
+        step = 0.05
+        while elapsed < delay and not self._stop_requested:
+            sleep_time = min(step, delay - elapsed)
+            time.sleep(sleep_time)
+            elapsed += sleep_time
+        with self._safety_lock:
+            if generation != self._resume_generation or not self._safety_pause_active:
+                return
+            self._safety_pause_active = False
+        self._pause_event.set()
+        self.status_update.emit("Resuming — area clear")
+        self.log_message.emit('info', "[SAFETY] Motion resumed — area clear.")
+
+    def _wait_if_paused(self) -> float:
+        if self._pause_event.is_set():
+            return 0.0
+        pause_start = time.time()
+        while not self._stop_requested and not self._pause_event.is_set():
+            self._pause_event.wait(timeout=0.1)
+        return time.time() - pause_start
+
+    def _sleep_with_pause(self, duration: float) -> float:
+        if duration <= 0:
+            return 0.0
+        deadline = time.time() + duration
+        total_pause = 0.0
+        while not self._stop_requested:
+            pause_duration = self._wait_if_paused()
+            if pause_duration > 0:
+                deadline += pause_duration
+                total_pause += pause_duration
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.05, remaining))
+        return total_pause
+
     def _execute_model(self):
         """Execute a model directly (for Dashboard model runs)"""
         self.log_message.emit('info', f"Loading model: {self.execution_name}")
         self.status_update.emit("Starting model...")
-        
+
         # Get options
         checkpoint = self.options.get("checkpoint", "last")
         duration = self.options.get("duration", 25.0)
@@ -105,7 +277,7 @@ class ExecutionWorker(QThread):
         else:
             self.log_message.emit('warning', "Model execution stopped by user")
             self.execution_completed.emit(False, "Stopped by user")
-    
+
     def _execute_recording(self):
         """Execute a single recording"""
         self.log_message.emit('info', f"Loading recording: {self.execution_name}")
@@ -167,7 +339,9 @@ class ExecutionWorker(QThread):
         for step_idx, step in enumerate(steps):
             if self._stop_requested:
                 break
-            
+
+            self._wait_if_paused()
+
             # Check if step is enabled
             if not step.get('enabled', True):
                 self.log_message.emit('info', f"[{step_idx+1}/{total_steps}] Skipping disabled step: {step['name']}")
@@ -185,8 +359,8 @@ class ExecutionWorker(QThread):
             # Delay before step
             if delay_before > 0:
                 self.log_message.emit('info', f"⏱ Waiting {delay_before}s before step...")
-                time.sleep(delay_before)
-            
+                self._sleep_with_pause(delay_before)
+
             # Get component data
             component_data = step.get('component_data', {})
             if not component_data:
@@ -209,7 +383,7 @@ class ExecutionWorker(QThread):
             # Delay after step
             if delay_after > 0:
                 self.log_message.emit('info', f"⏱ Waiting {delay_after}s after step...")
-                time.sleep(delay_after)
+                self._sleep_with_pause(delay_after)
             
             # Update overall progress
             progress_pct = int(((step_idx + 1) / total_steps) * 100)
@@ -229,21 +403,30 @@ class ExecutionWorker(QThread):
         
         # Time-based playback
         start_time = time.time()
-        
+
         for idx, point in enumerate(recorded_data):
             if self._stop_requested:
                 break
-            
+
+            pause_duration = self._wait_if_paused()
+            if pause_duration > 0:
+                start_time += pause_duration
+            if self._stop_requested:
+                break
+
             positions = point['positions']
             target_timestamp = point['timestamp'] * (100.0 / speed_override)  # Speed scaling
             velocity = int(point.get('velocity', 600) * (speed_override / 100.0))
-            
+
             # Wait until target time
             current_time = time.time() - start_time
             wait_time = target_timestamp - current_time
             if wait_time > 0:
-                time.sleep(wait_time)
-            
+                paused_extra = self._sleep_with_pause(wait_time)
+                start_time += paused_extra
+                if self._stop_requested:
+                    break
+
             # Update progress (every 10 points to avoid spam)
             if idx % 10 == 0:
                 progress = int((idx / total_points) * 100)
@@ -271,7 +454,11 @@ class ExecutionWorker(QThread):
         for idx, pos_data in enumerate(positions_list):
             if self._stop_requested:
                 break
-            
+
+            self._wait_if_paused()
+            if self._stop_requested:
+                break
+
             # Extract position data
             pos_name = pos_data.get("name", f"Position {idx + 1}")
             motor_positions = pos_data.get("motor_positions", [])
@@ -305,7 +492,11 @@ class ExecutionWorker(QThread):
         for idx, pos_data in enumerate(positions_list):
             if self._stop_requested:
                 break
-            
+
+            self._wait_if_paused()
+            if self._stop_requested:
+                break
+
             # Extract position
             if isinstance(pos_data, dict):
                 positions = pos_data.get("motor_positions", pos_data.get("positions", []))
@@ -334,7 +525,7 @@ class ExecutionWorker(QThread):
             delay = delays.get(str(idx), 0)
             if delay > 0:
                 self.log_message.emit('info', f"Delay: {delay}s")
-                time.sleep(delay)
+                self._sleep_with_pause(delay)
     
     def _playback_live_recording(self, recording: dict):
         """Play back a live recording with time-based interpolation"""
@@ -354,16 +545,25 @@ class ExecutionWorker(QThread):
         for idx, point in enumerate(recorded_data):
             if self._stop_requested:
                 break
-            
+
+            pause_duration = self._wait_if_paused()
+            if pause_duration > 0:
+                start_time += pause_duration
+            if self._stop_requested:
+                break
+
             positions = point['positions']
             target_timestamp = point['timestamp'] * (100.0 / speed)  # Speed scaling
             velocity = int(point.get('velocity', 600) * (speed / 100.0))
-            
+
             # Wait until target time
             current_time = time.time() - start_time
             wait_time = target_timestamp - current_time
             if wait_time > 0:
-                time.sleep(wait_time)
+                paused_extra = self._sleep_with_pause(wait_time)
+                start_time += paused_extra
+                if self._stop_requested:
+                    break
             
             # Update progress (every 10 points to avoid spam)
             if idx % 10 == 0:
@@ -1378,9 +1578,11 @@ class ExecutionWorker(QThread):
     def stop(self):
         """Request execution to stop"""
         self._stop_requested = True
+        self._pause_event.set()
         self._emit_vision_state("clear", {"message": "Vision cancelled"})
         self._reset_vision_tracking()
-        
+        self._stop_hand_safety()
+
         # Emergency stop motors
         if self.motor_controller.bus:
             self.motor_controller.emergency_stop()
