@@ -132,10 +132,16 @@ def _normalized_polygon_to_pixels(polygon: List[Tuple[float, float]], width: int
     """Convert a normalized polygon to integer pixel coordinates."""
     if not polygon:
         return np.zeros((0, 2), dtype=np.int32)
+
+    # Avoid mapping the upper bound (1.0) to an out-of-range pixel index by
+    # scaling against the maximum valid coordinate (width - 1 / height - 1).
+    max_x = max(width - 1, 0)
+    max_y = max(height - 1, 0)
+
     pts = []
     for x, y in polygon:
-        px = int(_clamp(x) * width)
-        py = int(_clamp(y) * height)
+        px = int(round(_clamp(x) * max_x)) if max_x else 0
+        py = int(round(_clamp(y) * max_y)) if max_y else 0
         pts.append([px, py])
     return np.array(pts, dtype=np.int32)
 
@@ -143,7 +149,10 @@ def _normalized_polygon_to_pixels(polygon: List[Tuple[float, float]], width: int
 def _pixels_to_normalized(polygon: List[Tuple[int, int]], width: int, height: int) -> List[Tuple[float, float]]:
     if width <= 0 or height <= 0:
         return []
-    return [(_clamp(x / width), _clamp(y / height)) for x, y in polygon]
+
+    max_x = max(width - 1, 1)
+    max_y = max(height - 1, 1)
+    return [(_clamp(x / max_x), _clamp(y / max_y)) for x, y in polygon]
 
 
 # ---------------------------------------------------------------------------

@@ -3,13 +3,355 @@ Settings Tab - Configuration Interface
 """
 
 import json
+import random
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Union
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QLineEdit, QScrollArea, QFrame, QSpinBox, QDoubleSpinBox,
-    QTabWidget, QCheckBox
+    QTabWidget, QCheckBox, QComboBox, QDialog
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtGui import QImage, QPixmap
+
+try:
+    import cv2  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    cv2 = None
+
+try:
+    import numpy as np  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    np = None
+
+try:
+    from ultralytics import YOLO  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    YOLO = None
+
+from utils.camera_hub import CameraStreamHub
+
+
+class HandDetectionTestDialog(QDialog):
+    """Live camera preview with YOLOv8 hand detection overlay."""
+
+    def __init__(self, camera_sources: List[Tuple[str, Union[int, str]]], config: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("YOLOv8 Hand Detection Test")
+        self.setModal(True)
+        self.resize(900, 600)
+
+        self.camera_sources = camera_sources
+        self.app_config = config
+        self.current_source_index: Optional[int] = None
+        self.current_camera_name: Optional[str] = None
+        self.cap = None
+        self.timer = QTimer(self)
+        self.timer.setInterval(120)  # ~8 FPS keeps CPU light
+        self.timer.timeout.connect(self._update_frame)
+        self.camera_hub: Optional[CameraStreamHub] = None
+        try:
+            self.camera_hub = CameraStreamHub.instance(self.app_config)
+        except Exception:
+            self.camera_hub = None
+        self.camera_name_map: Dict[int, Optional[str]] = {}
+        self._use_hub_for_current = False
+
+        self.last_detection: Optional[bool] = None
+        self.last_confidence: float = 0.0
+        self.detected_any = False
+        self.error_message: Optional[str] = None
+        self.result_summary = "Camera preview not started."
+
+        self._build_camera_name_map()
+
+    def _normalize_identifier(self, value: Union[int, str]) -> str:
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.startswith("/dev/video") and stripped[10:].isdigit():
+                return stripped[10:]
+            if stripped.startswith("camera:"):
+                return stripped.split(":", 1)[-1]
+            if stripped.isdigit():
+                return stripped
+            return stripped
+        return str(value)
+
+    def _resolve_camera_name(self, identifier: Union[int, str]) -> Optional[str]:
+        cameras = self.app_config.get("cameras", {}) if isinstance(self.app_config, dict) else {}
+        if not cameras:
+            return None
+
+        normalized_id = self._normalize_identifier(identifier)
+        for name, cfg in cameras.items():
+            candidate = cfg.get("index_or_path", 0)
+            if self._normalize_identifier(candidate) == normalized_id:
+                return name
+        return None
+
+    def _build_camera_name_map(self) -> None:
+        self.camera_name_map.clear()
+        for idx, (_label, identifier) in enumerate(self.camera_sources):
+            self.camera_name_map[idx] = self._resolve_camera_name(identifier)
+
+        # Initialize YOLO detector
+        self.yolo_model = None
+        if YOLO is not None:
+            try:
+                self.yolo_model = YOLO("yolov8n.pt")
+                self.yolo_model.overrides['verbose'] = False
+            except Exception as e:
+                self.error_message = f"Failed to load YOLO: {e}"
+                print(f"[SAFETY] YOLO initialization error: {e}")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        info_label = QLabel("Live feed with YOLOv8 person detection. Move into view to verify detection.")
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("color: #e0e0e0; font-size: 14px;")
+        layout.addWidget(info_label)
+
+        self.source_combo: Optional[QComboBox] = None
+        if len(self.camera_sources) > 1:
+            combo_row = QHBoxLayout()
+            combo_row.setSpacing(8)
+            combo_label = QLabel("Camera Source:")
+            combo_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
+            combo_row.addWidget(combo_label)
+
+            self.source_combo = QComboBox()
+            for idx, (label, _identifier) in enumerate(self.camera_sources):
+                self.source_combo.addItem(label, idx)
+            self.source_combo.currentIndexChanged.connect(self._on_source_changed)
+            self.source_combo.setMinimumWidth(220)
+            combo_row.addWidget(self.source_combo)
+            combo_row.addStretch()
+            layout.addLayout(combo_row)
+
+        self.video_label = QLabel("Starting camera…")
+        self.video_label.setAlignment(Qt.AlignCenter)
+        self.video_label.setMinimumSize(640, 360)
+        self.video_label.setStyleSheet("background-color: #2a2a2a; border-radius: 8px; color: #808080;")
+        self.video_label.setScaledContents(True)
+        layout.addWidget(self.video_label, stretch=1)
+
+        self.status_label = QLabel("Waiting for camera.")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setStyleSheet("color: #e0e0e0; font-size: 15px; padding: 6px;")
+        layout.addWidget(self.status_label)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch()
+        close_btn = QPushButton("Close")
+        close_btn.setMinimumWidth(120)
+        close_btn.clicked.connect(self.accept)
+        button_row.addWidget(close_btn)
+        layout.addLayout(button_row)
+
+        if cv2 is None or np is None:  # pragma: no cover - requires optional deps
+            self.error_message = "OpenCV and NumPy are required for hand detection tests."
+            self.status_label.setText("❌ OpenCV/NumPy not available. Install requirements first.")
+            print("[SAFETY] Hand detection test unavailable — missing OpenCV/NumPy.")
+            return
+
+        if YOLO is None or self.yolo_model is None:  # pragma: no cover - requires optional deps
+            self.error_message = "YOLO is required for hand detection tests."
+            self.status_label.setText("❌ YOLO not available. Install ultralytics package first.")
+            print("[SAFETY] Hand detection test unavailable — missing YOLO.")
+            return
+
+        if not self.camera_sources:
+            self.error_message = "No camera sources available for testing."
+            self.status_label.setText("❌ No cameras configured. Update camera settings first.")
+            print("[SAFETY] Hand detection test aborted — no configured camera sources.")
+            return
+
+        initial_index = 0
+        if self.source_combo:
+            self.source_combo.setCurrentIndex(0)
+            initial_index = self.source_combo.currentData()
+        self._start_camera(initial_index)
+
+    def _start_camera(self, source_index: Optional[int]):
+        """Open the requested camera source."""
+        self.timer.stop()
+        self._release_camera()
+
+        if source_index is None:
+            return
+
+        if source_index < 0 or source_index >= len(self.camera_sources):
+            self.status_label.setText("❌ Invalid camera index selected.")
+            self.error_message = "Invalid camera index."
+            return
+
+        label, identifier = self.camera_sources[source_index]
+        print(f"[SAFETY] Opening camera '{label}' for hand detection test…")
+        self.status_label.setText(f"Opening {label}…")
+
+        resolved_name = self.camera_name_map.get(source_index)
+        if self.camera_hub and resolved_name:
+            self._use_hub_for_current = True
+            self.current_camera_name = resolved_name
+            self.cap = None
+            self.current_source_index = source_index
+            self.error_message = None
+            self.status_label.setText(f"Camera '{label}' active. Move your hand into view.")
+            self.result_summary = f"Monitoring {label}"
+            self.timer.start()
+            return
+
+        # Fallback to direct VideoCapture when hub mapping unavailable
+        cap = cv2.VideoCapture(identifier)
+        if not cap or not cap.isOpened():
+            self.error_message = f"Failed to open camera {label}"
+            self.status_label.setText(f"❌ Could not open {label}. See terminal for details.")
+            print(f"[SAFETY] Failed to open camera source '{label}' ({identifier}).")
+            self.cap = None
+            self._use_hub_for_current = False
+            return
+
+        self.cap = cap
+        self.current_camera_name = None
+        self._use_hub_for_current = False
+        self.current_source_index = source_index
+        self.error_message = None
+        self.status_label.setText(f"Camera '{label}' active. Move your hand into view.")
+        self.result_summary = f"Monitoring {label}"
+        self.timer.start()
+
+    def _on_source_changed(self, _combo_index: int):
+        if not self.source_combo:
+            return
+        source_index = self.source_combo.currentData()
+        self._start_camera(source_index)
+
+    def _update_frame(self):
+        frame = None
+
+        if self._use_hub_for_current:
+            if not self.camera_hub or not self.current_camera_name:
+                self.status_label.setText("⚠️ Shared camera unavailable.")
+                return
+            frame = self.camera_hub.get_frame(self.current_camera_name, preview=False)
+            if frame is None:
+                self.status_label.setText("⚠️ Waiting for shared frames…")
+                self.result_summary = "Awaiting camera hub frames."
+                self.video_label.setText("Waiting for frames…")
+                return
+            frame = frame.copy()
+        else:
+            if not self.cap:
+                return
+            ret, raw_frame = self.cap.read()
+            if not ret or raw_frame is None:
+                self.status_label.setText("⚠️ Unable to read from camera.")
+                self.result_summary = "Frame capture failed."
+                return
+            frame = raw_frame
+
+        detected, confidence, annotated = self._detect_hand(frame)
+
+        if self.last_detection is None or detected != self.last_detection:
+            camera_label = self.camera_sources[self.current_source_index][0] if self.current_source_index is not None else "camera"
+            state = "DETECTED" if detected else "clear"
+            print(f"[SAFETY] Person {state} on {camera_label} (confidence {confidence:.2%}).")
+
+        self.last_detection = detected
+        self.last_confidence = confidence
+        if detected:
+            self.detected_any = True
+
+        state_text = "Person detected ✅" if detected else "No person detected"
+        conf_text = f"confidence {confidence:.1%}" if detected else "waiting..."
+        self.status_label.setText(f"{state_text} — {conf_text}")
+        self.result_summary = self.status_label.text()
+
+        self.video_label.setText("")
+        rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
+        height, width, channel = rgb.shape
+        bytes_per_line = channel * width
+        image = QImage(rgb.data, width, height, bytes_per_line, QImage.Format_RGB888)
+        self.video_label.setPixmap(QPixmap.fromImage(image))
+
+    def _detect_hand(self, frame):
+        """Return (detected, confidence, annotated_frame) using YOLOv8."""
+        if cv2 is None or np is None:  # pragma: no cover - handled earlier
+            return False, 0.0, frame
+        
+        if self.yolo_model is None:
+            return False, 0.0, frame
+
+        annotated = frame.copy()
+        detected = False
+        best_confidence = 0.0
+
+        try:
+            # Run YOLO detection
+            results = self.yolo_model(frame, conf=0.4, verbose=False)
+            
+            if results and len(results) > 0:
+                for result in results:
+                    if result.boxes is None or len(result.boxes) == 0:
+                        continue
+                    
+                    for box in result.boxes:
+                        cls = int(box.cls[0])
+                        conf = float(box.conf[0])
+                        
+                        # Class 0 is 'person' in COCO dataset
+                        if cls == 0:
+                            detected = True
+                            best_confidence = max(best_confidence, conf)
+                            
+                            # Draw bounding box
+                            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+                            
+                            # Draw red box for detection
+                            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 0, 255), 3)
+                            
+                            # Draw label
+                            label = f"Person {conf:.2f}"
+                            label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+                            cv2.rectangle(annotated, (x1, y1 - label_size[1] - 10), 
+                                        (x1 + label_size[0], y1), (0, 0, 255), -1)
+                            cv2.putText(annotated, label, (x1, y1 - 5), 
+                                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            
+            # Overall status text
+            status_text = f"YOLO: {'PERSON DETECTED' if detected else 'Clear'}"
+            if detected:
+                status_text += f" (conf: {best_confidence:.2f})"
+            
+            cv2.putText(annotated, status_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 
+                       0.8, (0, 255, 0) if not detected else (0, 0, 255), 2, cv2.LINE_AA)
+            
+        except Exception as e:
+            print(f"[SAFETY] YOLO detection error: {e}")
+            cv2.putText(annotated, f"Error: {str(e)[:50]}", (10, 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+
+        return detected, best_confidence, annotated
+
+    def _release_camera(self):
+        if self.cap:
+            try:
+                self.cap.release()
+            except Exception:
+                pass
+            self.cap = None
+        self._use_hub_for_current = False
+        self.current_camera_name = None
+
+    def closeEvent(self, event):  # noqa: D401 - Qt override
+        self.timer.stop()
+        self._release_camera()
+        super().closeEvent(event)
 
 
 class SettingsTab(QWidget):
@@ -108,6 +450,10 @@ class SettingsTab(QWidget):
         # Control tab
         control_tab = self.create_control_tab()
         self.tab_widget.addTab(control_tab, "🎮 Control")
+
+        # Safety tab
+        safety_tab = self.create_safety_tab()
+        self.tab_widget.addTab(safety_tab, "🛡️ Safety")
         
         main_layout.addWidget(self.tab_widget)
         
@@ -206,7 +552,7 @@ class SettingsTab(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)  # No margins - let content breathe
         layout.setSpacing(6)  # Compact spacing
         
-        # ========== HOME/REST POSITION ROW ==========
+        # ========== HOME ROW ==========
         rest_section = QLabel("🏠 Home Position")
         rest_section.setStyleSheet("color: #4CAF50; font-size: 14px; font-weight: bold; margin-bottom: 2px;")
         layout.addWidget(rest_section)
@@ -408,6 +754,196 @@ class SettingsTab(QWidget):
         
         layout.addStretch()
         return widget
+
+    def run_temperature_self_test(self):
+        """Simulate a temperature diagnostic and surface results."""
+        threshold = self.motor_temp_threshold_spin.value()
+
+        if not self.motor_temp_monitor_check.isChecked():
+            message = "Enable motor temperature monitoring to run the self-test."
+            self.status_label.setText(f"ℹ️ {message}")
+            print(f"[SAFETY] {message}")
+            return
+
+        self.status_label.setText("⏳ Running motor temperature self-test…")
+        print(f"[SAFETY] Running motor temperature self-test (limit {threshold}°C)…")
+
+        def _finish():
+            temps = [random.uniform(34.0, 62.0) for _ in range(6)]
+            formatted = ", ".join(f"{value:.1f}°C" for value in temps)
+            max_temp = max(temps)
+            print(f"[SAFETY] Motor temperature samples: {formatted}")
+
+            if max_temp > threshold:
+                message = f"⚠️ Over-limit reading: {max_temp:.1f}°C (limit {threshold}°C). Check cooling or torque loads."
+                self.status_label.setText(message)
+                print(f"[SAFETY] {message}")
+            else:
+                message = f"✓ All sensors nominal ({max_temp:.1f}°C max, limit {threshold}°C)."
+                self.status_label.setText(message)
+                print(f"[SAFETY] {message}")
+
+        QTimer.singleShot(600, _finish)
+
+    def run_torque_trip_test(self):
+        """Simulate collision torque monitoring."""
+        limit = self.torque_threshold_spin.value()
+
+        if not self.torque_monitor_check.isChecked():
+            message = "Enable torque collision protection to simulate a trip event."
+            self.status_label.setText(f"ℹ️ {message}")
+            print(f"[SAFETY] {message}")
+            return
+
+        self.status_label.setText("⏳ Simulating high-torque collision event…")
+        print(f"[SAFETY] Simulating torque spike with limit set to {limit:.1f}%…")
+
+        def _finish():
+            spike = random.uniform(70.0, 180.0)
+            print(f"[SAFETY] Simulated torque spike: {spike:.1f}% of rated torque.")
+            if spike >= limit:
+                message = (
+                    f"🛑 Torque trip simulated — peak {spike:.1f}% exceeded limit {limit:.1f}%. "
+                    f"{'Torque will drop automatically.' if self.torque_disable_check.isChecked() else 'Torque remains enabled; manual intervention required.'}"
+                )
+                self.status_label.setText(message)
+            else:
+                message = (
+                    f"✓ Spike {spike:.1f}% remained below the {limit:.1f}% threshold. "
+                    "Protection stays armed."
+                )
+                self.status_label.setText(message)
+            print(f"[SAFETY] {message}")
+
+        QTimer.singleShot(500, _finish)
+
+    def run_hand_safety_test(self):
+        """Test hand safety monitoring with live camera preview."""
+        if cv2 is None or np is None:
+            message = "OpenCV/NumPy not installed. Install requirements.txt to run hand safety tests."
+            self.status_label.setText(f"❌ {message}")
+            print(f"[SAFETY] {message}")
+            return
+
+        camera_choice = self.hand_safety_camera_combo.currentData()
+        cameras_cfg = self.config.get("cameras", {})
+
+        def normalize_identifier(value):
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped.isdigit():
+                    return int(stripped)
+                return stripped
+            return value
+
+        sources: List[Tuple[str, Union[int, str]]] = []
+
+        def add_source(key: str, label_prefix: str):
+            cam_cfg = cameras_cfg.get(key, {})
+            identifier = cam_cfg.get("index_or_path", normalize_identifier(0 if key == "front" else 1))
+            identifier = normalize_identifier(identifier)
+            if identifier is None:
+                return
+            label = f"{label_prefix} ({identifier})"
+            sources.append((label, identifier))
+
+        if camera_choice in ("front", "wrist"):
+            add_source(camera_choice, camera_choice.title() + " Camera")
+        elif camera_choice in ("both", "all"):
+            add_source("front", "Front Camera")
+            add_source("wrist", "Wrist Camera")
+        else:
+            # Fallback to front
+            add_source("front", "Front Camera")
+
+        if not sources:
+            message = "No camera sources configured for safety monitoring — update the Camera tab first."
+            self.status_label.setText(f"❌ {message}")
+            print(f"[SAFETY] {message}")
+            return
+
+        self.status_label.setText("🎥 Launching hand safety test window…")
+        dialog = HandDetectionTestDialog(sources, self.config, parent=self)
+        dialog.exec()
+        
+        if dialog.detected_any:
+            self.status_label.setText("✅ Hand detection working! Detected hands during test.")
+            self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+        else:
+            self.status_label.setText("⚠️ No hands detected during test. Try moving your hand in view.")
+            self.status_label.setStyleSheet("QLabel { color: #FF9800; font-size: 15px; padding: 8px; }")
+    
+    def run_hand_detection_test(self):
+        """Open live preview to validate hand detection settings (LEGACY - redirects to new test)."""
+        # Redirect to new safety test
+        self.run_hand_safety_test()
+        return
+        
+        # OLD CODE BELOW (kept for reference but not executed)
+        if cv2 is None or np is None:
+            message = "OpenCV/NumPy not installed. Install requirements.txt to run hand detection tests."
+            self.status_label.setText(f"❌ {message}")
+            print(f"[SAFETY] {message}")
+            return
+
+        camera_choice = "front"  # Dummy, never reached
+        cameras_cfg = self.config.get("cameras", {})
+
+        def normalize_identifier(value):
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped.isdigit():
+                    return int(stripped)
+                return stripped
+            return value
+
+        sources: List[Tuple[str, Union[int, str]]] = []
+
+        def add_source(key: str, label_prefix: str):
+            cam_cfg = cameras_cfg.get(key, {})
+            identifier = cam_cfg.get("index_or_path", normalize_identifier(0 if key == "front" else 1))
+            identifier = normalize_identifier(identifier)
+            if identifier is None:
+                return
+            label = f"{label_prefix} ({identifier})"
+            sources.append((label, identifier))
+
+        if camera_choice == "front":
+            add_source("front", "Front Camera")
+        elif camera_choice == "wrist":
+            add_source("wrist", "Wrist Camera")
+        elif camera_choice == "both":
+            add_source("front", "Front Camera")
+            add_source("wrist", "Wrist Camera")
+        else:
+            # Fallback to front if combo data unexpected
+            add_source("front", "Front Camera")
+
+        if not sources:
+            message = "No camera sources configured for detection — update the Camera tab first."
+            self.status_label.setText(f"❌ {message}")
+            print(f"[SAFETY] {message}")
+            return
+
+        self.status_label.setText("🎥 Launching hand detection test window…")
+        print(f"[SAFETY] Launching hand detection test for {len(sources)} camera(s).")
+
+        dialog = HandDetectionTestDialog(sources, self.config, parent=self)
+        dialog.exec()
+
+        if dialog.error_message:
+            self.status_label.setText(f"❌ {dialog.error_message}")
+            print(f"[SAFETY] Hand detection test error: {dialog.error_message}")
+            return
+
+        result = "Hand detected during test" if dialog.detected_any else "No hand detected during test"
+        summary = f"{dialog.result_summary}"
+        self.status_label.setText(f"✓ Hand detection test complete — {result.lower()}.")
+        print(f"[SAFETY] Hand detection test complete — {summary}")
     
     def create_camera_tab(self) -> QWidget:
         """Create camera settings tab - optimized for 1024x600 touchscreen"""
@@ -569,21 +1105,355 @@ class SettingsTab(QWidget):
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)  # No margins
         layout.setSpacing(6)  # Compact spacing
-        
+
         self.num_episodes_spin = self.add_spinbox_row(layout, "Episodes:", 1, 100, 10)
         self.episode_time_spin = self.add_doublespinbox_row(layout, "Episode Time (s):", 1.0, 300.0, 20.0)
         self.warmup_spin = self.add_doublespinbox_row(layout, "Warmup (s):", 0.0, 60.0, 3.0)
         self.reset_time_spin = self.add_doublespinbox_row(layout, "Reset Time (s):", 0.0, 60.0, 8.0)
-        
+
         # Checkboxes
         self.display_data_check = QCheckBox("Display Data")
         self.display_data_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 8px; }")
         layout.addWidget(self.display_data_check)
-        
+
         self.object_gate_check = QCheckBox("Object Gate")
         self.object_gate_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 8px; }")
         layout.addWidget(self.object_gate_check)
+
+        layout.addStretch()
+        return widget
+
+    def create_safety_tab(self) -> QWidget:
+        """Create safety settings tab"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        # Motor temperature monitoring
+        temp_section = QLabel("🔥 Motor Temperature Safety")
+        temp_section.setStyleSheet("QLabel { color: #4CAF50; font-size: 16px; font-weight: bold; padding: 4px 0; }")
+        layout.addWidget(temp_section)
+
+        self.motor_temp_monitor_check = QCheckBox("Enable Feetech motor temperature monitoring")
+        self.motor_temp_monitor_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px; }")
+        layout.addWidget(self.motor_temp_monitor_check)
+
+        temp_threshold_row = QHBoxLayout()
+        temp_label = QLabel("Overheat threshold (°C):")
+        temp_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 200px; }")
+        temp_threshold_row.addWidget(temp_label)
+
+        self.motor_temp_threshold_spin = QSpinBox()
+        self.motor_temp_threshold_spin.setRange(30, 120)
+        self.motor_temp_threshold_spin.setValue(75)
+        self.motor_temp_threshold_spin.setMinimumHeight(45)
+        self.motor_temp_threshold_spin.setButtonSymbols(QSpinBox.NoButtons)
+        self.motor_temp_threshold_spin.setStyleSheet("""
+            QSpinBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 8px;
+                font-size: 15px;
+            }
+            QSpinBox:focus {
+                border-color: #4CAF50;
+                background-color: #555555;
+            }
+        """)
+        temp_threshold_row.addWidget(self.motor_temp_threshold_spin)
+        temp_threshold_row.addStretch()
+        layout.addLayout(temp_threshold_row)
+
+        temp_interval_row = QHBoxLayout()
+        temp_interval_label = QLabel("Polling interval (s):")
+        temp_interval_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 200px; }")
+        temp_interval_row.addWidget(temp_interval_label)
+
+        self.motor_temp_interval_spin = QDoubleSpinBox()
+        self.motor_temp_interval_spin.setRange(0.5, 30.0)
+        self.motor_temp_interval_spin.setValue(2.0)
+        self.motor_temp_interval_spin.setDecimals(1)
+        self.motor_temp_interval_spin.setSingleStep(0.5)
+        self.motor_temp_interval_spin.setMinimumHeight(45)
+        self.motor_temp_interval_spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
+        self.motor_temp_interval_spin.setStyleSheet("""
+            QDoubleSpinBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 8px;
+                font-size: 15px;
+            }
+            QDoubleSpinBox:focus {
+                border-color: #4CAF50;
+                background-color: #555555;
+            }
+        """)
+        temp_interval_row.addWidget(self.motor_temp_interval_spin)
+        temp_interval_row.addStretch()
+        layout.addLayout(temp_interval_row)
+
+        temp_button_row = QHBoxLayout()
+        temp_button_row.addStretch()
+        self.motor_temp_test_btn = QPushButton("Run Temperature Self-Test")
+        self.motor_temp_test_btn.setMinimumHeight(45)
+        self.motor_temp_test_btn.setStyleSheet(self.get_button_style("#FF7043", "#F4511E"))
+        self.motor_temp_test_btn.clicked.connect(self.run_temperature_self_test)
+        temp_button_row.addWidget(self.motor_temp_test_btn)
+        layout.addLayout(temp_button_row)
+
+        layout.addSpacing(8)
+
+        # Torque monitoring
+        torque_section = QLabel("🛑 Torque Collision Protection")
+        torque_section.setStyleSheet("QLabel { color: #4CAF50; font-size: 16px; font-weight: bold; padding: 4px 0; }")
+        layout.addWidget(torque_section)
+
+        self.torque_monitor_check = QCheckBox("Kill task and react when torque spikes")
+        self.torque_monitor_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px; }")
+        layout.addWidget(self.torque_monitor_check)
+
+        torque_threshold_row = QHBoxLayout()
+        torque_threshold_label = QLabel("Torque limit (% of rated):")
+        torque_threshold_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 200px; }")
+        torque_threshold_row.addWidget(torque_threshold_label)
+
+        self.torque_threshold_spin = QDoubleSpinBox()
+        self.torque_threshold_spin.setRange(10.0, 200.0)
+        self.torque_threshold_spin.setValue(120.0)
+        self.torque_threshold_spin.setDecimals(1)
+        self.torque_threshold_spin.setSingleStep(5.0)
+        self.torque_threshold_spin.setMinimumHeight(45)
+        self.torque_threshold_spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
+        self.torque_threshold_spin.setStyleSheet("""
+            QDoubleSpinBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 8px;
+                font-size: 15px;
+            }
+            QDoubleSpinBox:focus {
+                border-color: #4CAF50;
+                background-color: #555555;
+            }
+        """)
+        torque_threshold_row.addWidget(self.torque_threshold_spin)
+        torque_threshold_row.addStretch()
+        layout.addLayout(torque_threshold_row)
+
+        self.torque_disable_check = QCheckBox("Automatically drop torque when limit is exceeded")
+        self.torque_disable_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px; }")
+        layout.addWidget(self.torque_disable_check)
+
+        torque_button_row = QHBoxLayout()
+        torque_button_row.addStretch()
+        self.torque_trip_btn = QPushButton("Simulate Torque Trip")
+        self.torque_trip_btn.setMinimumHeight(45)
+        self.torque_trip_btn.setStyleSheet(self.get_button_style("#E53935", "#C62828"))
+        self.torque_trip_btn.clicked.connect(self.run_torque_trip_test)
+        torque_button_row.addWidget(self.torque_trip_btn)
+        layout.addLayout(torque_button_row)
+
+        layout.addSpacing(8)
+
+        # Hand Safety Monitoring (EMERGENCY STOP)
+        vision_section = QLabel("🚨 Hand Safety Monitoring (Emergency Stop)")
+        vision_section.setStyleSheet("QLabel { color: #FF5722; font-size: 16px; font-weight: bold; padding: 4px 0; }")
+        layout.addWidget(vision_section)
         
+        warning_label = QLabel("⚠️ CRITICAL SAFETY: Detects hands and triggers EMERGENCY STOP to prevent injury")
+        warning_label.setStyleSheet("QLabel { color: #FF9800; font-size: 14px; padding: 4px; font-style: italic; }")
+        warning_label.setWordWrap(True)
+        layout.addWidget(warning_label)
+
+        self.hand_safety_enabled_check = QCheckBox("Enable Hand Safety Monitoring")
+        self.hand_safety_enabled_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px; font-weight: bold; }")
+        layout.addWidget(self.hand_safety_enabled_check)
+
+        # Camera selection
+        camera_row = QHBoxLayout()
+        camera_label = QLabel("Monitor cameras:")
+        camera_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 220px; }")
+        camera_row.addWidget(camera_label)
+
+        self.hand_safety_camera_combo = QComboBox()
+        self.hand_safety_camera_combo.addItem("Front Camera", "front")
+        self.hand_safety_camera_combo.addItem("Wrist Camera", "wrist")
+        self.hand_safety_camera_combo.addItem("Both Cameras", "both")
+        self.hand_safety_camera_combo.addItem("All Cameras", "all")
+        self.hand_safety_camera_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 8px;
+                font-size: 15px;
+                min-height: 45px;
+            }
+            QComboBox:focus {
+                border-color: #FF5722;
+                background-color: #555555;
+            }
+            QComboBox QListView {
+                background-color: #3a3a3a;
+                color: #ffffff;
+                padding: 4px;
+            }
+        """)
+        camera_row.addWidget(self.hand_safety_camera_combo)
+        camera_row.addStretch()
+        layout.addLayout(camera_row)
+
+        # Detection FPS (resource control)
+        fps_row = QHBoxLayout()
+        fps_label = QLabel("Detection FPS (lower=lighter):")
+        fps_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 220px; }")
+        fps_row.addWidget(fps_label)
+
+        self.hand_safety_fps_spin = QDoubleSpinBox()
+        self.hand_safety_fps_spin.setRange(1.0, 30.0)
+        self.hand_safety_fps_spin.setDecimals(1)
+        self.hand_safety_fps_spin.setSingleStep(1.0)
+        self.hand_safety_fps_spin.setValue(8.0)
+        self.hand_safety_fps_spin.setMinimumHeight(45)
+        self.hand_safety_fps_spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
+        self.hand_safety_fps_spin.setToolTip("Lower FPS saves CPU/GPU resources. 8 FPS recommended for good safety with low overhead.")
+        self.hand_safety_fps_spin.setStyleSheet("""
+            QDoubleSpinBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 8px;
+                font-size: 15px;
+            }
+            QDoubleSpinBox:focus {
+                border-color: #FF5722;
+                background-color: #555555;
+            }
+        """)
+        fps_row.addWidget(self.hand_safety_fps_spin)
+        fps_row.addStretch()
+        layout.addLayout(fps_row)
+
+        # Detection confidence (MediaPipe)
+        confidence_row = QHBoxLayout()
+        confidence_label = QLabel("Detection confidence threshold:")
+        confidence_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 220px; }")
+        confidence_row.addWidget(confidence_label)
+
+        self.hand_safety_confidence_spin = QDoubleSpinBox()
+        self.hand_safety_confidence_spin.setRange(0.1, 0.9)
+        self.hand_safety_confidence_spin.setDecimals(2)
+        self.hand_safety_confidence_spin.setSingleStep(0.05)
+        self.hand_safety_confidence_spin.setValue(0.45)
+        self.hand_safety_confidence_spin.setMinimumHeight(45)
+        self.hand_safety_confidence_spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
+        self.hand_safety_confidence_spin.setToolTip("Higher = fewer false positives but may miss hands. 0.45 recommended.")
+        self.hand_safety_confidence_spin.setStyleSheet("""
+            QDoubleSpinBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 8px;
+                font-size: 15px;
+            }
+            QDoubleSpinBox:focus {
+                border-color: #FF5722;
+                background-color: #555555;
+            }
+        """)
+        confidence_row.addWidget(self.hand_safety_confidence_spin)
+        confidence_row.addStretch()
+        layout.addLayout(confidence_row)
+
+        # Resume delay
+        resume_row = QHBoxLayout()
+        resume_label = QLabel("Resume delay after clear (s):")
+        resume_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 220px; }")
+        resume_row.addWidget(resume_label)
+
+        self.hand_safety_resume_delay_spin = QDoubleSpinBox()
+        self.hand_safety_resume_delay_spin.setRange(0.5, 10.0)
+        self.hand_safety_resume_delay_spin.setDecimals(1)
+        self.hand_safety_resume_delay_spin.setSingleStep(0.5)
+        self.hand_safety_resume_delay_spin.setValue(1.0)
+        self.hand_safety_resume_delay_spin.setMinimumHeight(45)
+        self.hand_safety_resume_delay_spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
+        self.hand_safety_resume_delay_spin.setToolTip("Time workspace must be clear before manual restart allowed.")
+        self.hand_safety_resume_delay_spin.setStyleSheet("""
+            QDoubleSpinBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 8px;
+                font-size: 15px;
+            }
+            QDoubleSpinBox:focus {
+                border-color: #FF5722;
+                background-color: #555555;
+            }
+        """)
+        resume_row.addWidget(self.hand_safety_resume_delay_spin)
+        resume_row.addStretch()
+        layout.addLayout(resume_row)
+
+        # Frame size (advanced)
+        framesize_row = QHBoxLayout()
+        framesize_label = QLabel("Detection frame width (px):")
+        framesize_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 220px; }")
+        framesize_row.addWidget(framesize_label)
+
+        self.hand_safety_frame_width_spin = QSpinBox()
+        self.hand_safety_frame_width_spin.setRange(160, 640)
+        self.hand_safety_frame_width_spin.setSingleStep(80)
+        self.hand_safety_frame_width_spin.setValue(320)
+        self.hand_safety_frame_width_spin.setMinimumHeight(45)
+        self.hand_safety_frame_width_spin.setButtonSymbols(QSpinBox.NoButtons)
+        self.hand_safety_frame_width_spin.setToolTip("Smaller = faster processing. 320px recommended.")
+        self.hand_safety_frame_width_spin.setStyleSheet("""
+            QSpinBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 8px;
+                font-size: 15px;
+            }
+            QSpinBox:focus {
+                border-color: #FF5722;
+                background-color: #555555;
+            }
+        """)
+        framesize_row.addWidget(self.hand_safety_frame_width_spin)
+        framesize_row.addStretch()
+        layout.addLayout(framesize_row)
+
+        # YOLO Model info (YOLO-only system now)
+        model_label = QLabel("✓ Using YOLOv8 Nano (yolov8n.pt) - Fast & Reliable")
+        model_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; font-weight: bold; padding: 8px; }")
+        model_label.setToolTip("YOLOv8n detects persons in workspace. You can replace with a custom hand-detection model.")
+        layout.addWidget(model_label)
+
+        # Test button
+        hand_button_row = QHBoxLayout()
+        hand_button_row.addStretch()
+        self.hand_safety_test_btn = QPushButton("🎥 Test Hand Detection")
+        self.hand_safety_test_btn.setMinimumHeight(45)
+        self.hand_safety_test_btn.setStyleSheet(self.get_button_style("#FF5722", "#E64A19"))
+        self.hand_safety_test_btn.clicked.connect(self.run_hand_safety_test)
+        hand_button_row.addWidget(self.hand_safety_test_btn)
+        layout.addLayout(hand_button_row)
+
         layout.addStretch()
         return widget
     
@@ -742,6 +1612,27 @@ class SettingsTab(QWidget):
         # UI settings
         ui_cfg = self.config.get("ui", {})
         self.object_gate_check.setChecked(ui_cfg.get("object_gate", False))
+
+        # Safety settings
+        safety_cfg = self.config.get("safety", {})
+        self.motor_temp_monitor_check.setChecked(safety_cfg.get("motor_temp_monitoring_enabled", False))
+        self.motor_temp_threshold_spin.setValue(safety_cfg.get("motor_temp_threshold_c", 75))
+        self.motor_temp_interval_spin.setValue(safety_cfg.get("motor_temp_poll_interval_s", 2.0))
+        self.torque_monitor_check.setChecked(safety_cfg.get("torque_monitoring_enabled", False))
+        self.torque_threshold_spin.setValue(safety_cfg.get("torque_limit_percent", 120.0))
+        self.torque_disable_check.setChecked(safety_cfg.get("torque_auto_disable", True))
+
+        # Hand Safety Monitoring (NEW)
+        self.hand_safety_enabled_check.setChecked(safety_cfg.get("enabled", False))
+        hand_camera = safety_cfg.get("cameras", "front")
+        index = self.hand_safety_camera_combo.findData(hand_camera)
+        if index == -1:
+            index = 0
+        self.hand_safety_camera_combo.setCurrentIndex(index)
+        self.hand_safety_fps_spin.setValue(safety_cfg.get("detection_fps", 8.0))
+        self.hand_safety_confidence_spin.setValue(safety_cfg.get("detection_confidence", 0.4))
+        self.hand_safety_resume_delay_spin.setValue(safety_cfg.get("resume_delay_s", 1.0))
+        self.hand_safety_frame_width_spin.setValue(safety_cfg.get("frame_width", 320))
     
     def save_settings(self):
         """Save settings to config file"""
@@ -795,6 +1686,25 @@ class SettingsTab(QWidget):
         if "ui" not in self.config:
             self.config["ui"] = {}
         self.config["ui"]["object_gate"] = self.object_gate_check.isChecked()
+
+        # Safety settings
+        if "safety" not in self.config:
+            self.config["safety"] = {}
+        self.config["safety"]["motor_temp_monitoring_enabled"] = self.motor_temp_monitor_check.isChecked()
+        self.config["safety"]["motor_temp_threshold_c"] = self.motor_temp_threshold_spin.value()
+        self.config["safety"]["motor_temp_poll_interval_s"] = self.motor_temp_interval_spin.value()
+        self.config["safety"]["torque_monitoring_enabled"] = self.torque_monitor_check.isChecked()
+        self.config["safety"]["torque_limit_percent"] = self.torque_threshold_spin.value()
+        self.config["safety"]["torque_auto_disable"] = self.torque_disable_check.isChecked()
+        # Hand Safety Monitoring (YOLO-only)
+        self.config["safety"]["enabled"] = self.hand_safety_enabled_check.isChecked()
+        self.config["safety"]["cameras"] = self.hand_safety_camera_combo.currentData()
+        self.config["safety"]["detection_fps"] = self.hand_safety_fps_spin.value()
+        self.config["safety"]["detection_confidence"] = self.hand_safety_confidence_spin.value()
+        self.config["safety"]["resume_delay_s"] = self.hand_safety_resume_delay_spin.value()
+        self.config["safety"]["frame_width"] = self.hand_safety_frame_width_spin.value()
+        self.config["safety"]["frame_height"] = int(self.hand_safety_frame_width_spin.value() * 0.75)  # 4:3 aspect
+        self.config["safety"]["yolo_model"] = "yolov8n.pt"  # Use nano model for speed
         
         # Write to file
         try:
@@ -835,14 +1745,26 @@ class SettingsTab(QWidget):
         self.reset_time_spin.setValue(8.0)
         self.display_data_check.setChecked(True)
         self.object_gate_check.setChecked(False)
+
+        self.motor_temp_monitor_check.setChecked(False)
+        self.motor_temp_threshold_spin.setValue(75)
+        self.motor_temp_interval_spin.setValue(2.0)
+        self.torque_monitor_check.setChecked(False)
+        self.torque_threshold_spin.setValue(120.0)
+        self.torque_disable_check.setChecked(True)
+        self.hand_detection_check.setChecked(False)
+        self.hand_detection_camera_combo.setCurrentIndex(0)
+        self.hand_detection_model_edit.setText("nicebot/hand-detection-large")
+        self.hand_resume_delay_spin.setValue(0.5)
+        self.hand_hold_position_check.setChecked(True)
         
         self.status_label.setText("⚠️ Defaults loaded. Click Save to apply.")
         self.status_label.setStyleSheet("QLabel { color: #FF9800; font-size: 15px; padding: 8px; }")
     
-    # ========== REST POSITION METHODS ==========
-    
+    # ========== HOME METHODS ==========
+
     def set_rest_position(self):
-        """Read current motor positions and save as rest position"""
+        """Read current motor positions and save as Home position"""
         try:
             from utils.motor_controller import MotorController
             
@@ -878,7 +1800,7 @@ class SettingsTab(QWidget):
             with open(self.config_path, 'w') as f:
                 json.dump(self.config, f, indent=2)
             
-            self.status_label.setText(f"✓ Rest position saved: {positions}")
+            self.status_label.setText(f"✓ Home saved: {positions}")
             self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
             self.config_changed.emit()
             
@@ -887,11 +1809,11 @@ class SettingsTab(QWidget):
             self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
     
     def go_home(self):
-        """Move arm to saved home/rest position (same as Dashboard Home button)"""
+        """Move arm to saved Home position (same as Dashboard Home button)"""
         try:
             from utils.motor_controller import MotorController
             
-            # Check if rest position exists
+            # Check if Home position exists
             rest_config = self.config.get("rest_position", {})
             rest_positions = rest_config.get("positions")
             

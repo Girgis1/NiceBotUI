@@ -5,24 +5,34 @@ This is the existing UI refactored as a tab
 
 import sys
 import os
+import json
 import subprocess
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict, List, Tuple
 import pytz
+
+try:
+    import cv2  # type: ignore
+    import numpy as np  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    cv2 = None
+    np = None
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QListWidget, QFrame, QTextEdit, QComboBox, QSizePolicy, QSpinBox, QCheckBox
+    QFrame, QTextEdit, QComboBox, QSizePolicy, QSpinBox, QSlider,
+    QStackedWidget, QDialog
 )
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QFont, QColor, QPainter, QPen
+from PySide6.QtGui import QFont, QColor, QPainter, QPen, QImage, QPixmap
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from robot_worker import RobotWorker
 from utils.execution_manager import ExecutionWorker
+from utils.camera_hub import CameraStreamHub
 
 # Timezone
 TIMEZONE = pytz.timezone('Australia/Sydney')
@@ -132,6 +142,158 @@ class StatusIndicator(QLabel):
             """)
 
 
+class CameraPreviewWidget(QFrame):
+    """Single camera preview with overlay-ready QLabel."""
+
+    clicked = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("singleCameraPreview")
+        self.setStyleSheet("""
+            #singleCameraPreview {
+                border: 1px solid #404040;
+                border-radius: 8px;
+                background-color: #151515;
+            }
+        """)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        self.header_row = QHBoxLayout()
+        self.header_row.setContentsMargins(0, 0, 0, 0)
+        self.header_row.setSpacing(8)
+
+        self.camera_label = QLabel("Camera")
+        self.camera_label.setStyleSheet("color: #ffffff; font-size: 13px; font-weight: bold;")
+        self.header_row.addWidget(self.camera_label)
+        self.header_row.addStretch()
+
+        self.status_chip = QLabel("")
+        self.status_chip.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.status_chip.setStyleSheet(
+            "color: #a0a0a0; font-size: 11px; padding: 2px 6px; border-radius: 4px; background-color: #2b2b2b;"
+        )
+        self.status_chip.hide()
+        self.header_row.addWidget(self.status_chip)
+
+        layout.addLayout(self.header_row)
+
+        self.preview_label = QLabel("Camera preview disabled")
+        self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setStyleSheet("color: #777777; font-size: 12px;")
+        self.preview_label.setScaledContents(True)
+        self.preview_label.setMinimumSize(320, 200)
+        layout.addWidget(self.preview_label, stretch=1)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+    def update_preview(
+        self, pixmap: Optional[QPixmap], message: Optional[str] = None, status: Optional[str] = None
+    ) -> None:
+        if status:
+            self.status_chip.setText(status)
+            self.status_chip.show()
+        else:
+            self.status_chip.hide()
+
+        if pixmap is None:
+            if message:
+                self.preview_label.setText(message)
+            else:
+                self.preview_label.setText("No camera feed")
+            self.preview_label.setPixmap(QPixmap())
+        else:
+            self.preview_label.setPixmap(pixmap)
+            self.preview_label.setText("")
+
+    def set_camera_name(self, name: str) -> None:
+        self.camera_label.setText(name)
+
+
+class CameraDetailDialog(QDialog):
+    """Large detailed camera preview in a dialog powered by the camera hub."""
+
+    def __init__(
+        self,
+        camera_name: str,
+        camera_config: dict,
+        vision_zones: List[dict],
+        render_callback,
+        camera_hub: Optional[CameraStreamHub],
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.camera_name = camera_name
+        self.camera_config = camera_config
+        self.vision_zones = vision_zones
+        self.render_callback = render_callback
+        self.camera_hub = camera_hub
+
+        self.setWindowTitle(f"Camera Preview - {camera_name}")
+        self.setModal(True)
+        self.resize(900, 560)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(6)
+
+        self.preview_label = QLabel("Initializing camera…")
+        self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setStyleSheet("color: #f0f0f0; font-size: 14px;")
+        self.preview_label.setMinimumSize(640, 360)
+        self.preview_label.setScaledContents(True)
+        layout.addWidget(self.preview_label, stretch=1)
+
+        self.status_label = QLabel("")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setStyleSheet("color: #f0f0f0; font-size: 12px;")
+        layout.addWidget(self.status_label)
+
+        self.timer = QTimer(self)
+        self.timer.setInterval(70)  # ~14 FPS
+        self.timer.timeout.connect(self._update_frame)
+        self.timer.start()
+
+    def _update_frame(self):
+        if cv2 is None or np is None:
+            self.status_label.setText("OpenCV/NumPy missing. Install dependencies.")
+            return
+        if not self.camera_hub:
+            self.status_label.setText("Camera hub unavailable.")
+            self.preview_label.setText("No shared camera stream.")
+            return
+
+        frame = self.camera_hub.get_frame(self.camera_name, preview=False)
+        if frame is None:
+            self.preview_label.setPixmap(QPixmap())
+            self.preview_label.setText("Camera offline.")
+            self.status_label.setText("No frames available.")
+            return
+
+        render_frame, status = self.render_callback(self.camera_name, frame.copy(), self.vision_zones)
+        rgb = cv2.cvtColor(render_frame, cv2.COLOR_BGR2RGB)
+        height, width, channel = rgb.shape
+        image = QImage(rgb.data, width, height, channel * width, QImage.Format_RGB888)
+        self.preview_label.setPixmap(QPixmap.fromImage(image))
+        status_text = {
+            "triggered": "Active detection",
+            "idle": "Monitoring",
+            "nominal": "Live preview",
+            "offline": "Offline",
+            "no_vision": "No vision zones configured",
+        }
+        self.status_label.setText(status_text.get(status, ""))
+
+    def closeEvent(self, event):
+        self.timer.stop()
+        super().closeEvent(event)
+
+
 class DashboardTab(QWidget):
     """Main dashboard for robot control (existing UI)"""
     
@@ -144,14 +306,52 @@ class DashboardTab(QWidget):
         self.start_time = None
         self.elapsed_seconds = 0
         self.is_running = False
-        self.saved_runs_value = 1  # Remember runs value when toggling loop
         self._vision_state_active = False
         self._last_vision_signature = None
-        
-        # Status circle widget (will be set during init_ui)
-        self.robot_status_circle = None
+
+        control_cfg = self.config.setdefault("control", {})
+        self.master_speed = float(control_cfg.get("speed_multiplier", 1.0))
+        if not 0.1 <= self.master_speed <= 1.2:
+            self.master_speed = 1.0
+        control_cfg["speed_multiplier"] = self.master_speed
+
+        self.loop_enabled = control_cfg.get("loop_enabled", True)
+        control_cfg["loop_enabled"] = self.loop_enabled
+
+        self._speed_initialized = False
+
+        self.camera_view_active = False
+        self.camera_order: List[str] = list(self.config.get("cameras", {}).keys())
+        self.vision_zones = self._load_vision_zones()
+        self._robot_status = "empty"
+        self._robot_total = 1 if self.config.get("robot") else 0
+        self._camera_status: Dict[str, str] = {
+            name: "empty" for name in self.camera_order
+        }
+        self.robot_indicator1: Optional[StatusIndicator] = None
+        self.robot_indicator2: Optional[StatusIndicator] = None
+        self.camera_indicator1: Optional[StatusIndicator] = None
+        self.camera_indicator2: Optional[StatusIndicator] = None
+        self.camera_indicator3: Optional[StatusIndicator] = None
+        self.camera_front_circle: Optional[StatusIndicator] = None
+        self.camera_wrist_circle: Optional[StatusIndicator] = None
+        self.compact_throbber: Optional[CircularProgress] = None
+        self.camera_hub: Optional[CameraStreamHub] = None
+        if cv2 is not None and np is not None:
+            try:
+                self.camera_hub = CameraStreamHub.instance(self.config)
+            except Exception:
+                self.camera_hub = None
+        self.active_camera_index = 0
+        self.active_camera_name: Optional[str] = self.camera_order[0] if self.camera_order else None
+        self.active_vision_zones: Dict[str, List[dict]] = {}
+        self._last_preview_timestamp = 0.0
+
+        self.camera_preview_timer = QTimer(self)
+        self.camera_preview_timer.timeout.connect(self.update_camera_previews)
         
         self.init_ui()
+        self._update_status_summaries()
         self.validate_config()
         
         # Connect device manager signals if available
@@ -172,93 +372,97 @@ class DashboardTab(QWidget):
         self.throbber_progress = 0
         self.throbber_update_timer = QTimer()
         self.throbber_update_timer.timeout.connect(self.update_throbber_progress)
-        # Don't start throbber timer until we actually need it
+        self.throbber_update_timer.start(100)
     
     def init_ui(self):
         """Initialize UI - same as original app.py"""
         layout = QVBoxLayout(self)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
         layout.setContentsMargins(15, 15, 15, 15)
         
         # Compact single-line status bar
         status_bar = QHBoxLayout()
-        status_bar.setSpacing(20)
-        
-        # Left section: Status indicators
-        status_left = QHBoxLayout()
-        status_left.setSpacing(15)
-        
-        # Throbber
+        status_bar.setSpacing(18)
+
+        self.normal_status_container = QWidget()
+        normal_status_layout = QHBoxLayout(self.normal_status_container)
+        normal_status_layout.setSpacing(18)
+        normal_status_layout.setContentsMargins(0, 0, 0, 0)
+
         self.throbber = CircularProgress()
-        status_left.addWidget(self.throbber)
-        
-        # Robot (synced with device_manager)
+        normal_status_layout.addWidget(self.throbber)
+
         robot_group = QHBoxLayout()
         robot_group.setSpacing(6)
-        robot_lbl = QLabel("Robot")
-        robot_lbl.setStyleSheet("color: #a0a0a0; font-size: 11px;")
-        robot_group.addWidget(robot_lbl)
+        self.robot_lbl = QLabel("Robot")
+        self.robot_lbl.setStyleSheet("color: #a0a0a0; font-size: 11px;")
+        robot_group.addWidget(self.robot_lbl)
         self.robot_indicator1 = StatusIndicator()
-        self.robot_indicator1.set_null()  # Start as empty until discovery
+        self.robot_indicator1.set_null()
         robot_group.addWidget(self.robot_indicator1)
         self.robot_indicator2 = StatusIndicator()
         self.robot_indicator2.set_null()
         robot_group.addWidget(self.robot_indicator2)
-        status_left.addLayout(robot_group)
-        
-        # Store reference for device_manager updates
+        normal_status_layout.addLayout(robot_group)
+
         self.robot_status_circle = self.robot_indicator1
-        
-        # Cameras (synced with device_manager)
+
         camera_group = QHBoxLayout()
         camera_group.setSpacing(6)
-        camera_lbl = QLabel("Cameras")
-        camera_lbl.setStyleSheet("color: #a0a0a0; font-size: 11px;")
-        camera_group.addWidget(camera_lbl)
+        self.camera_lbl = QLabel("Cameras")
+        self.camera_lbl.setStyleSheet("color: #a0a0a0; font-size: 11px;")
+        camera_group.addWidget(self.camera_lbl)
         self.camera_indicator1 = StatusIndicator()
-        self.camera_indicator1.set_null()  # Front camera - start as empty until discovery
+        self.camera_indicator1.set_null()
         camera_group.addWidget(self.camera_indicator1)
         self.camera_indicator2 = StatusIndicator()
-        self.camera_indicator2.set_null()  # Wrist camera - start as empty until discovery
+        self.camera_indicator2.set_null()
         camera_group.addWidget(self.camera_indicator2)
         self.camera_indicator3 = StatusIndicator()
-        self.camera_indicator3.set_null()  # Extra indicator (unused)
+        self.camera_indicator3.set_null()
         camera_group.addWidget(self.camera_indicator3)
-        status_left.addLayout(camera_group)
-        
-        # Store references for device_manager updates
+        normal_status_layout.addLayout(camera_group)
+
         self.camera_front_circle = self.camera_indicator1
         self.camera_wrist_circle = self.camera_indicator2
-        
-        # Time
-        time_group = QHBoxLayout()
-        time_group.setSpacing(6)
+
+        status_bar.addWidget(self.normal_status_container, stretch=0)
+
+        self.status_summary_container = QWidget()
+        summary_layout = QVBoxLayout(self.status_summary_container)
+        summary_layout.setSpacing(2)
+        summary_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.compact_throbber = CircularProgress()
+        summary_layout.addWidget(self.compact_throbber, alignment=Qt.AlignHCenter)
+
+        self.robot_summary_label = QLabel("R:0/1")
+        self.robot_summary_label.setAlignment(Qt.AlignCenter)
+        self.robot_summary_label.setStyleSheet("color: #a0a0a0; font-size: 11px; font-weight: bold;")
+        summary_layout.addWidget(self.robot_summary_label)
+
+        self.camera_summary_label = QLabel("C:0/0")
+        self.camera_summary_label.setAlignment(Qt.AlignCenter)
+        self.camera_summary_label.setStyleSheet("color: #a0a0a0; font-size: 11px; font-weight: bold;")
+        summary_layout.addWidget(self.camera_summary_label)
+
+        self.status_summary_container.hide()
+        status_bar.addWidget(self.status_summary_container, stretch=0)
+
         self.time_label = QLabel("00:00")
         self.time_label.setStyleSheet("color: #4CAF50; font-size: 12px; font-weight: bold; font-family: monospace;")
-        time_group.addWidget(self.time_label)
-        status_left.addLayout(time_group)
-        
-        status_bar.addLayout(status_left)
-        
-        # Center: Action status with subtle background
+        status_bar.addWidget(self.time_label)
+
         self.action_label = QLabel("At home position")
         self._action_label_style_template = (
             "color: #ffffff; font-size: 14px; font-weight: bold; "
             "background-color: {bg}; border-radius: 4px; padding: 8px 20px;"
         )
         self._set_action_label_style("#383838")
-        self.action_label.setAlignment(Qt.AlignCenter)
+        self.action_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         status_bar.addWidget(self.action_label, stretch=1)
-        
-        # Right: Branding
-        branding = QLabel("NICE LABS Robotics")
-        branding.setStyleSheet("color: #707070; font-size: 11px; font-weight: bold;")
-        branding.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        status_bar.addWidget(branding)
-        
-        layout.addLayout(status_bar)
-        
-        # Unified RUN selector (Models, Sequences, Actions)
+
+        # Unified RUN selector with camera toggle button
         run_frame = QFrame()
         run_frame.setFixedHeight(95)
         run_frame.setStyleSheet("""
@@ -271,10 +475,44 @@ class DashboardTab(QWidget):
         run_layout = QHBoxLayout(run_frame)
         run_layout.setSpacing(10)
         run_layout.setContentsMargins(10, 6, 10, 6)
-        
-        run_label = QLabel("RUN:")
-        run_label.setStyleSheet("color: #ffffff; font-size: 19px; font-weight: bold;")
-        run_layout.addWidget(run_label)
+
+        self.camera_toggle_btn = QPushButton("Cameras")
+        self.camera_toggle_btn.setCheckable(True)
+        self.camera_toggle_btn.setMinimumHeight(85)
+        self.camera_toggle_btn.setMaximumHeight(85)
+        self.camera_toggle_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #404040;
+                color: #ffffff;
+                border: 2px solid #505050;
+                border-radius: 6px;
+                font-size: 18px;
+                font-weight: bold;
+                padding: 0 12px;
+            }
+            QPushButton:hover {
+                background-color: #4a4a4a;
+            }
+            QPushButton:checked {
+                background-color: #c62828;
+                border-color: #c62828;
+                color: white;
+            }
+            QPushButton:checked:hover {
+                background-color: #b71c1c;
+            }
+        """)
+        self.camera_toggle_btn.toggled.connect(self.on_camera_toggle)
+        self._camera_toggle_default_width = 150
+        self.camera_toggle_btn.setMinimumWidth(self._camera_toggle_default_width)
+        self.camera_toggle_btn.setMaximumWidth(self._camera_toggle_default_width)
+        run_layout.addWidget(self.camera_toggle_btn)
+        self.camera_toggle_btn.setEnabled(bool(self.camera_order))
+
+        # RUN label - hidden when cameras open
+        self.run_label = QLabel("RUN:")
+        self.run_label.setStyleSheet("color: #ffffff; font-size: 19px; font-weight: bold;")
+        run_layout.addWidget(self.run_label)
         
         # Main selector (Models, Sequences, Actions)
         self.run_combo = QComboBox()
@@ -358,151 +596,88 @@ class DashboardTab(QWidget):
         run_layout.addWidget(self.checkpoint_combo, stretch=1)
         self.checkpoint_combo.hide()  # Hidden by default
         
-        layout.addWidget(run_frame)
+        # Assemble top container with optional camera panel
+        top_container = QHBoxLayout()
+        top_container.setSpacing(15)
+
+        # Camera panel on LEFT (between tabs and status bar)
+        self.camera_panel = QFrame()
+        self.camera_panel.setStyleSheet("""
+            QFrame {
+                background-color: #1f1f1f;
+                border: 1px solid #404040;
+                border-radius: 8px;
+            }
+        """)
+        self.camera_panel_layout = QVBoxLayout(self.camera_panel)
+        self.camera_panel_layout.setContentsMargins(10, 10, 10, 10)
+        self.camera_panel_layout.setSpacing(8)
+        self.camera_panel.setVisible(False)
+
+        self.single_camera_preview = CameraPreviewWidget()
+        self.single_camera_preview.clicked.connect(
+            lambda: self.open_camera_detail(self.active_camera_name) if self.active_camera_name else None
+        )
+        self.camera_panel_layout.addWidget(self.single_camera_preview, stretch=1)
+
+        button_row = QHBoxLayout()
+        button_row.setSpacing(8)
+        button_row.addStretch()
+        self.camera_cycle_btn = QPushButton("⟳ Cycle")
+        self.camera_cycle_btn.setCursor(Qt.PointingHandCursor)
+        self.camera_cycle_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2f2f2f;
+                color: #ffffff;
+                border: 1px solid #505050;
+                border-radius: 6px;
+                padding: 6px 12px;
+                font-size: 13px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #3a3a3a;
+            }
+        """)
+        self.camera_cycle_btn.clicked.connect(self.cycle_active_camera)
+        button_row.addWidget(self.camera_cycle_btn)
+        self.camera_panel_layout.addLayout(button_row)
+
+        top_container.addWidget(self.camera_panel, stretch=2)
+
+        # Status bar and controls on RIGHT
+        left_column = QVBoxLayout()
+        left_column.setSpacing(12)
+        left_column.addLayout(status_bar)
+        left_column.addWidget(run_frame)
+        top_container.addLayout(left_column, stretch=3)
+
+        layout.addLayout(top_container)
         
-        # Populate run dropdown
-        self.refresh_run_selector()
-        
-        # Main controls - Clean single row
+        # Body layout: controls on left, speed override on right
+        body_layout = QHBoxLayout()
+        body_layout.setSpacing(15)
+
+        controls_column = QVBoxLayout()
+        controls_column.setSpacing(15)
+
         controls_row = QHBoxLayout()
-        controls_row.setSpacing(15)
-        
-        # Episodes - Simple labeled spinbox
-        episodes_frame = QFrame()
-        episodes_frame.setStyleSheet("""
-            QFrame {
-                background-color: #2d2d2d;
-                border: 1px solid #404040;
-                border-radius: 6px;
-                padding: 8px;
-            }
-        """)
-        episodes_layout = QVBoxLayout(episodes_frame)
-        episodes_layout.setSpacing(5)
-        episodes_layout.setContentsMargins(10, 10, 10, 10)
-        
-        # Header with Loop and Episodes labels
-        header_layout = QHBoxLayout()
-        header_layout.setSpacing(10)
-        
-        loop_label = QLabel("Loop")
-        loop_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
-        loop_label.setAlignment(Qt.AlignCenter)
-        header_layout.addWidget(loop_label)
-        
-        runs_label = QLabel("Runs")
-        runs_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
-        runs_label.setAlignment(Qt.AlignCenter)
-        header_layout.addWidget(runs_label, stretch=1)
-        
-        episodes_layout.addLayout(header_layout)
-        
-        # Loop checkbox and episodes spinner in same row
-        episodes_controls = QHBoxLayout()
-        episodes_controls.setSpacing(10)
-        episodes_controls.setAlignment(Qt.AlignTop)  # Align all controls to top
-        
-        # Small loop checkbox (40x40) aligned to top
-        self.loop_checkbox = QCheckBox("✓")
-        self.loop_checkbox.setFixedSize(40, 40)
-        self.loop_checkbox.setStyleSheet("""
-            QCheckBox {
-                background-color: #404040;
-                border: 2px solid #505050;
-                border-radius: 4px;
-                color: transparent;
-                font-size: 22px;
-                font-weight: bold;
-                text-align: center;
-                padding: 0px;
-            }
-            QCheckBox:hover {
-                border-color: #4CAF50;
-                background-color: #4a4a4a;
-            }
-            QCheckBox:checked {
-                background-color: #4CAF50;
-                border-color: #4CAF50;
-                color: white;
-            }
-            QCheckBox::indicator {
-                width: 0px;
-                height: 0px;
-            }
-        """)
-        self.loop_checkbox.stateChanged.connect(self.on_loop_toggled)
-        episodes_controls.addWidget(self.loop_checkbox)
-        
-        self.episodes_spin = QSpinBox()
-        self.episodes_spin.setRange(1, 999)
-        self.episodes_spin.setValue(self.config.get("num_episodes", 1))  # Default to 1 episode
-        self.episodes_spin.setMinimumHeight(80)
-        self.episodes_spin.setButtonSymbols(QSpinBox.NoButtons)
-        self.episodes_spin.setAlignment(Qt.AlignCenter)
-        self.episodes_spin.setStyleSheet("""
-            QSpinBox {
-                background-color: #404040;
-                color: #ffffff;
-                border: 2px solid #505050;
-                border-radius: 6px;
-                padding: 8px;
-                font-size: 32px;
-                font-weight: bold;
-            }
-            QSpinBox:focus {
-                border-color: #4CAF50;
-            }
-        """)
-        episodes_controls.addWidget(self.episodes_spin, stretch=1)
-        
-        episodes_layout.addLayout(episodes_controls)
-        controls_row.addWidget(episodes_frame)
-        
+        controls_row.setSpacing(20)
+
+        self.loop_button = QPushButton()
+        self.loop_button.setCheckable(True)
+        self.loop_button.setMinimumSize(160, 150)
+        self.loop_button.toggled.connect(self.on_loop_button_toggled)
+        controls_row.addWidget(self.loop_button)
+        self.loop_button.blockSignals(True)
+        self.loop_button.setChecked(self.loop_enabled)
+        self.loop_button.blockSignals(False)
+        self._refresh_loop_button()
+
         # Time - Simple labeled spinbox
-        time_frame = QFrame()
-        time_frame.setStyleSheet("""
-            QFrame {
-                background-color: #2d2d2d;
-                border: 1px solid #404040;
-                border-radius: 6px;
-                padding: 8px;
-            }
-        """)
-        time_layout = QVBoxLayout(time_frame)
-        time_layout.setSpacing(5)
-        time_layout.setContentsMargins(10, 10, 10, 10)
-        
-        time_label = QLabel("Time/Episode (s)")
-        time_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
-        time_label.setAlignment(Qt.AlignCenter)
-        time_layout.addWidget(time_label)
-        
-        self.episode_time_spin = QSpinBox()
-        self.episode_time_spin.setRange(1, 3600)
-        self.episode_time_spin.setValue(self.config.get("episode_time_s", 30))
-        self.episode_time_spin.setMinimumHeight(80)
-        self.episode_time_spin.setButtonSymbols(QSpinBox.NoButtons)
-        self.episode_time_spin.setAlignment(Qt.AlignCenter)
-        self.episode_time_spin.setStyleSheet("""
-            QSpinBox {
-                background-color: #404040;
-                color: #ffffff;
-                border: 2px solid #505050;
-                border-radius: 6px;
-                padding: 8px;
-                font-size: 32px;
-                font-weight: bold;
-            }
-            QSpinBox:focus {
-                border-color: #4CAF50;
-            }
-        """)
-        time_layout.addWidget(self.episode_time_spin)
-        controls_row.addWidget(time_frame)
-        
         # START/STOP button
         self.start_stop_btn = QPushButton("START")
-        self.start_stop_btn.setMinimumHeight(128)
+        self.start_stop_btn.setMinimumHeight(150)
         self.start_stop_btn.setCheckable(True)
         self.start_stop_btn.setStyleSheet("""
             QPushButton {
@@ -526,9 +701,10 @@ class DashboardTab(QWidget):
         self.start_stop_btn.clicked.connect(self.toggle_start_stop)
         controls_row.addWidget(self.start_stop_btn, stretch=2)
         
-        # HOME button - always square (width = height)
+        # HOME button - matches START button height
         self.home_btn = QPushButton("⌂")
-        self.home_btn.setFixedSize(128, 128)
+        self.home_btn.setMinimumSize(150, 150)
+        self.home_btn.setMaximumWidth(150)
         self.home_btn.setStyleSheet("""
             QPushButton {
                 background-color: #2196F3;
@@ -543,13 +719,15 @@ class DashboardTab(QWidget):
         """)
         self.home_btn.clicked.connect(self.go_home)
         controls_row.addWidget(self.home_btn)
-        
-        layout.addLayout(controls_row)
-        
-        # Log text area (compact)
+        controls_column.addLayout(controls_row)
+
+        # Log and speed slider row
+        log_speed_row = QHBoxLayout()
+        log_speed_row.setSpacing(15)
+
+        # Log text area (expand to fill height)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(120)
         self.log_text.setStyleSheet("""
             QTextEdit {
                 background-color: #2d2d2d;
@@ -560,16 +738,74 @@ class DashboardTab(QWidget):
                 border-radius: 4px;
             }
         """)
-        layout.addWidget(self.log_text)
-        
+        log_speed_row.addWidget(self.log_text, stretch=4)
+
+        # Speed slider column - fill maximum height
+        speed_column = QVBoxLayout()
+        speed_column.setSpacing(10)
+        speed_column.setContentsMargins(0, 0, 0, 0)
+
+        self.speed_slider = QSlider(Qt.Vertical)
+        self.speed_slider.setRange(10, 120)
+        self.speed_slider.setSingleStep(5)
+        self.speed_slider.setPageStep(5)
+        self.speed_slider.setTickPosition(QSlider.TicksBothSides)
+        self.speed_slider.setTickInterval(10)
+        self.speed_slider.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        self.speed_slider.setFixedWidth(40)
+        self.speed_slider.setStyleSheet("""
+            QSlider::groove:vertical {
+                border: 2px solid #4CAF50;
+                width: 16px;
+                background: #2e2e2e;
+                border-radius: 10px;
+            }
+            QSlider::sub-page:vertical {
+                background: #1f1f1f;
+                border-radius: 10px;
+            }
+            QSlider::add-page:vertical {
+                background: #4CAF50;
+                border-radius: 10px;
+            }
+            QSlider::handle:vertical {
+                background: #ffffff;
+                border: 3px solid #4CAF50;
+                height: 36px;
+                width: 36px;
+                margin: 0 -12px;
+                border-radius: 18px;
+            }
+        """)
+        speed_column.addWidget(self.speed_slider, alignment=Qt.AlignHCenter)
+        self.speed_slider.valueChanged.connect(self.on_speed_slider_changed)
+
+        self.speed_value_label = QLabel("")
+        self.speed_value_label.setStyleSheet("color: #4CAF50; font-size: 28px; font-weight: bold; padding: 12px;")
+        self.speed_value_label.setAlignment(Qt.AlignCenter)
+        speed_column.addWidget(self.speed_value_label)
+
+        log_speed_row.addLayout(speed_column, stretch=0)
+
+        controls_column.addLayout(log_speed_row)
+
+        body_layout.addLayout(controls_column, stretch=5)
+
+        layout.addLayout(body_layout)
+        self._refresh_active_camera_label()
+
         # Welcome message
         self.log_text.append("=== NICE LABS Robotics ===")
         self.log_text.append("Dashboard ready. Select Record or Sequence tabs to get started.")
-        
-        # Config values already set in spinbox initialization above
-        
+
         # Populate run selector
         self.refresh_run_selector()
+
+        initial_speed = int(round(self.master_speed * 100))
+        self.speed_slider.blockSignals(True)
+        self.speed_slider.setValue(initial_speed)
+        self.speed_slider.blockSignals(False)
+        self.on_speed_slider_changed(initial_speed)
     
     def refresh_run_selector(self):
         """Populate RUN dropdown with Models, Sequences, and Actions"""
@@ -609,8 +845,396 @@ class DashboardTab(QWidget):
         if actions:
             for action in actions:
                 self.run_combo.addItem(f"🎬 Action: {action}")
-        
+
         self.run_combo.blockSignals(False)
+        self.camera_order = list(self.config.get("cameras", {}).keys())
+        self.vision_zones = self._load_vision_zones()
+        self._robot_total = 1 if self.config.get("robot") else 0
+        # Sync tracked camera statuses with current configuration
+        for name in list(self._camera_status.keys()):
+            if name not in self.camera_order:
+                self._camera_status.pop(name)
+        for name in self.camera_order:
+            self._camera_status.setdefault(name, "empty")
+
+        self.camera_toggle_btn.setEnabled(bool(self.camera_order))
+        self._refresh_active_camera_label()
+        if self.camera_view_active:
+            self.update_camera_previews(force=True)
+        elif not self.camera_order:
+            self.single_camera_preview.update_preview(None, "No camera configured.")
+
+        self._update_status_summaries()
+
+    def _refresh_loop_button(self):
+        if self.loop_enabled:
+            text = "Loop\nON"
+            style = """
+                QPushButton {
+                    background-color: #4CAF50;
+                    color: #ffffff;
+                    border: 2px solid #43A047;
+                    border-radius: 10px;
+                    font-size: 26px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #43A047;
+                }
+            """
+        else:
+            text = "Loop\nOFF"
+            style = """
+                QPushButton {
+                    background-color: #424242;
+                    color: #ffffff;
+                    border: 2px solid #515151;
+                    border-radius: 10px;
+                    font-size: 26px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #4a4a4a;
+                }
+            """
+        self.loop_button.setText(text)
+        self.loop_button.setStyleSheet(style)
+
+    def on_loop_button_toggled(self, checked: bool):
+        self.loop_enabled = checked
+        self._refresh_loop_button()
+        control_cfg = self.config.setdefault("control", {})
+        control_cfg["loop_enabled"] = checked
+        state_text = "Loop enabled" if checked else "Loop disabled"
+        self.log_text.append(f"[info] {state_text}")
+
+    def on_speed_slider_changed(self, value: int):
+        aligned = max(10, min(120, 5 * round(value / 5)))
+        if aligned != value:
+            self.speed_slider.blockSignals(True)
+            self.speed_slider.setValue(aligned)
+            self.speed_slider.blockSignals(False)
+
+        self.master_speed = aligned / 100.0
+        self.speed_value_label.setText(f"{aligned}%")
+
+        control_cfg = self.config.setdefault("control", {})
+        control_cfg["speed_multiplier"] = self.master_speed
+
+        if self.execution_worker and self.execution_worker.isRunning():
+            try:
+                self.execution_worker.set_speed_multiplier(self.master_speed)
+            except Exception:
+                pass
+        if self.worker and hasattr(self.worker, "set_speed_multiplier"):
+            try:
+                self.worker.set_speed_multiplier(self.master_speed)
+            except Exception:
+                pass
+
+        if not self._speed_initialized:
+            self._speed_initialized = True
+
+    def _camera_display_name(self, camera_name: str) -> str:
+        return camera_name.replace("_", " ").title()
+
+    def _refresh_active_camera_label(self):
+        if not self.single_camera_preview:
+            return
+
+        if not self.camera_order:
+            self.active_camera_name = None
+            self.single_camera_preview.set_camera_name("No cameras")
+            self.single_camera_preview.update_preview(None, "Configure cameras in Settings.")
+            self.camera_cycle_btn.setEnabled(False)
+            return
+
+        if self.active_camera_name not in self.camera_order:
+            self.active_camera_index = 0
+            self.active_camera_name = self.camera_order[0]
+            self._last_preview_timestamp = 0.0
+
+        display = self._camera_display_name(self.active_camera_name)
+        self.single_camera_preview.set_camera_name(display)
+        self.camera_cycle_btn.setEnabled(len(self.camera_order) > 1)
+
+    def cycle_active_camera(self):
+        if not self.camera_order:
+            return
+        self.active_camera_index = (self.active_camera_index + 1) % len(self.camera_order)
+        self.active_camera_name = self.camera_order[self.active_camera_index]
+        self._last_preview_timestamp = 0.0
+        self._refresh_active_camera_label()
+        self.update_camera_previews(force=True)
+
+    def on_camera_toggle(self, checked: bool):
+        # Update button text (red with X when open)
+        self.camera_toggle_btn.setText("✕" if checked else "Cameras")
+        if checked:
+            self.camera_toggle_btn.setMinimumWidth(85)
+            self.camera_toggle_btn.setMaximumWidth(85)
+        else:
+            self.camera_toggle_btn.setMinimumWidth(self._camera_toggle_default_width)
+            self.camera_toggle_btn.setMaximumWidth(self._camera_toggle_default_width)
+        if checked:
+            self.enter_camera_mode()
+        else:
+            self.exit_camera_mode()
+
+    def enter_camera_mode(self):
+        if self.camera_view_active:
+            return
+        if cv2 is None:
+            self.log_text.append("[warning] Camera preview unavailable (OpenCV missing)")
+            self.camera_toggle_btn.blockSignals(True)
+            self.camera_toggle_btn.setChecked(False)
+            self.camera_toggle_btn.blockSignals(False)
+            self.camera_toggle_btn.setMinimumWidth(self._camera_toggle_default_width)
+            self.camera_toggle_btn.setMaximumWidth(self._camera_toggle_default_width)
+            return
+        
+        # Hide status bar text labels and timer when cameras open
+        self.normal_status_container.hide()
+        self.status_summary_container.show()
+        self.time_label.hide()
+        self.run_label.hide()
+        
+        self._refresh_active_camera_label()
+        self.camera_panel.setVisible(True)
+        if not self.camera_order or not self.active_camera_name:
+            self.camera_view_active = False
+            self.single_camera_preview.update_preview(None, "No camera configured.")
+            return
+
+        self.camera_view_active = True
+        self.camera_preview_timer.start(300)
+        self.update_camera_previews(force=True)
+
+    def exit_camera_mode(self):
+        if not self.camera_view_active:
+            return
+        
+        # Restore status bar text labels and timer
+        self.status_summary_container.hide()
+        self.normal_status_container.show()
+        self.time_label.show()
+        self.run_label.show()
+        self.camera_toggle_btn.setMinimumWidth(self._camera_toggle_default_width)
+        self.camera_toggle_btn.setMaximumWidth(self._camera_toggle_default_width)
+        
+        self.camera_view_active = False
+        self.camera_preview_timer.stop()
+        self.camera_panel.setVisible(False)
+        self.single_camera_preview.update_preview(None, "Preview closed.")
+
+    def close_camera_panel(self):
+        """Close camera preview if it's currently open."""
+        if self.camera_toggle_btn.isChecked():
+            self.camera_toggle_btn.setChecked(False)
+        elif self.camera_view_active:
+            self.exit_camera_mode()
+
+    def _load_vision_zones(self) -> Dict[str, List[dict]]:
+        zones_map: Dict[str, List[dict]] = {}
+        sequences_dir = ROOT / "data" / "sequences"
+        if not sequences_dir.exists():
+            return zones_map
+
+        for manifest_path in sequences_dir.glob("*/manifest.json"):
+            try:
+                with open(manifest_path, "r") as handle:
+                    manifest = json.load(handle)
+            except Exception:
+                continue
+
+            for step in manifest.get("steps", []):
+                if step.get("step_type") != "vision":
+                    continue
+
+                camera_name = self._match_camera_name(step.get("camera", {}))
+                if not camera_name:
+                    continue
+
+                trigger = step.get("trigger", {})
+                settings = trigger.get("settings", {})
+                threshold = float(settings.get("threshold", 0.55))
+                invert = bool(settings.get("invert", False))
+                metric = settings.get("metric", "intensity")
+
+                for zone in trigger.get("zones", []):
+                    polygon = zone.get("polygon", [])
+                    if not polygon:
+                        continue
+                    zones_map.setdefault(camera_name, []).append({
+                        "polygon": polygon,
+                        "threshold": threshold,
+                        "invert": invert,
+                        "metric": metric
+                    })
+
+        return zones_map
+
+    def _normalize_camera_identifier(self, identifier) -> str:
+        if isinstance(identifier, int):
+            return str(identifier)
+        if isinstance(identifier, str):
+            stripped = identifier.strip()
+            if stripped.startswith("/dev/video") and stripped[10:].isdigit():
+                return stripped[10:]
+            if stripped.startswith("camera:"):
+                return stripped.split(":", 1)[-1]
+            if stripped.isdigit():
+                return stripped
+            return stripped
+        return str(identifier)
+
+    def _match_camera_name(self, camera_info: dict) -> Optional[str]:
+        if not camera_info:
+            return None
+
+        source_id = str(camera_info.get("source_id", ""))
+        index = camera_info.get("index")
+        normalized_source = self._normalize_camera_identifier(source_id) if source_id else None
+        normalized_index = str(index) if index is not None else None
+
+        for name, cfg in self.config.get("cameras", {}).items():
+            identifier = cfg.get("index_or_path", 0)
+            norm_identifier = self._normalize_camera_identifier(identifier)
+            if normalized_source and norm_identifier == normalized_source:
+                return name
+            if normalized_index and norm_identifier == normalized_index:
+                return name
+            if source_id and str(identifier) == source_id:
+                return name
+        return None
+
+    def _polygon_to_pixels(self, polygon: List[List[float]], width: int, height: int) -> "np.ndarray":
+        if np is None:
+            return np.zeros((0, 2), dtype=np.int32)
+
+        pts = []
+        for point in polygon:
+            if len(point) != 2:
+                continue
+            x, y = point
+            if isinstance(x, float) and isinstance(y, float) and 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
+                px = int(round(x * (width - 1)))
+                py = int(round(y * (height - 1)))
+            else:
+                px = int(round(float(x)))
+                py = int(round(float(y)))
+            pts.append([px, py])
+        return np.array(pts, dtype=np.int32)
+
+    def _evaluate_metric(self, frame, gray, mask, metric_type: str) -> float:
+        if cv2 is None or np is None:
+            return 0.0
+        metric_type = (metric_type or "intensity").lower()
+        if metric_type == "green_channel":
+            return cv2.mean(frame[:, :, 1], mask=mask)[0] / 255.0
+        if metric_type == "edge_density":
+            edges = cv2.Canny(gray, 50, 150)
+            masked_edges = cv2.bitwise_and(edges, edges, mask=mask)
+            edge_pixels = np.count_nonzero(masked_edges)
+            total_pixels = np.count_nonzero(mask)
+            return edge_pixels / total_pixels if total_pixels else 0.0
+        return cv2.mean(gray, mask=mask)[0] / 255.0
+
+    def _render_camera_frame(self, camera_name: str, frame, zones: Optional[List[dict]] = None):
+        if cv2 is None or np is None:
+            return frame, "nominal"
+
+        zones = zones if zones is not None else self.vision_zones.get(camera_name, [])
+        if not zones:
+            return frame, "nominal"
+
+        height, width = frame.shape[:2]
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        triggered_any = False
+        valid_zone = False
+
+        for zone in zones:
+            polygon = zone.get("polygon", [])
+            pts = self._polygon_to_pixels(polygon, width, height)
+            if pts.size == 0:
+                continue
+            valid_zone = True
+
+            mask = np.zeros((height, width), dtype=np.uint8)
+            cv2.fillPoly(mask, [pts], 255)
+
+            metric = self._evaluate_metric(frame, gray, mask, zone.get("metric", "intensity"))
+            threshold = float(zone.get("threshold", 0.5))
+            invert = bool(zone.get("invert", False))
+            triggered = metric <= threshold if invert else metric >= threshold
+            if triggered:
+                triggered_any = True
+
+            color = (76, 175, 80) if triggered else (244, 67, 54)
+            overlay = np.zeros_like(frame)
+            cv2.fillPoly(overlay, [pts], color)
+            frame = cv2.addWeighted(frame, 1.0, overlay, 0.28, 0)
+            cv2.polylines(frame, [pts], True, color, 2, cv2.LINE_AA)
+
+        if not valid_zone:
+            return frame, "nominal"
+        return frame, "triggered" if triggered_any else "idle"
+
+    def _frame_to_pixmap(self, frame: "np.ndarray") -> QPixmap:
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        height, width, channel = rgb.shape
+        image = QImage(rgb.data, width, height, channel * width, QImage.Format_RGB888)
+        return QPixmap.fromImage(image)
+
+    def _get_preview_zones(self, camera_name: str) -> List[dict]:
+        zones = self.active_vision_zones.get(camera_name)
+        if zones:
+            return zones
+        return self.vision_zones.get(camera_name, [])
+
+    def update_camera_previews(self, force: bool = False):
+        if not self.camera_view_active or cv2 is None or np is None:
+            return
+
+        if not self.active_camera_name:
+            self.single_camera_preview.update_preview(None, "No camera configured.")
+            return
+
+        if not self.camera_hub:
+            self.single_camera_preview.update_preview(None, "Camera hub unavailable.", status="Offline")
+            return
+
+        frame, timestamp = self.camera_hub.get_frame_with_timestamp(self.active_camera_name, preview=True)
+        if frame is None:
+            self.single_camera_preview.update_preview(None, "Camera offline.", status="Offline")
+            return
+
+        if not force and timestamp <= self._last_preview_timestamp:
+            return
+
+        zones = self._get_preview_zones(self.active_camera_name)
+        render_frame, status = self._render_camera_frame(self.active_camera_name, frame.copy(), zones)
+        pixmap = self._frame_to_pixmap(render_frame)
+        status_text = {
+            "triggered": "Triggered",
+            "idle": "Watching",
+            "nominal": "Live",
+            "offline": "Offline",
+            "no_vision": "No vision",
+        }.get(status, "")
+        self.single_camera_preview.update_preview(pixmap, status=status_text)
+        self._last_preview_timestamp = timestamp
+
+    def open_camera_detail(self, camera_name: str):
+        camera_cfg = self.config.get("cameras", {}).get(camera_name)
+        if not camera_cfg:
+            return
+        zones = self._get_preview_zones(camera_name)
+        dialog = CameraDetailDialog(
+            camera_name, camera_cfg, zones, self._render_camera_frame, self.camera_hub, self
+        )
+        dialog.exec()
     
     def on_run_selection_changed(self, text):
         """Handle RUN selector change - show/hide checkpoint dropdown"""
@@ -695,20 +1319,6 @@ class DashboardTab(QWidget):
         """Legacy method - now uses refresh_run_selector"""
         self.refresh_run_selector()
     
-    def on_loop_toggled(self, state):
-        """Handle loop checkbox toggle"""
-        if state == Qt.Checked:
-            # Loop mode ON - save current value and show infinity
-            self.saved_runs_value = self.episodes_spin.value()
-            self.episodes_spin.setEnabled(False)
-            self.episodes_spin.setSpecialValueText("∞")
-            self.episodes_spin.setValue(self.episodes_spin.minimum())  # Set to min to show special text
-        else:
-            # Loop mode OFF - restore previous value
-            self.episodes_spin.setEnabled(True)
-            self.episodes_spin.setSpecialValueText("")
-            self.episodes_spin.setValue(self.saved_runs_value)  # Restore saved value
-    
     def validate_config(self):
         """Validate configuration
         
@@ -725,6 +1335,8 @@ class DashboardTab(QWidget):
         if self.throbber_progress > 100:
             self.throbber_progress = 0
         self.throbber.set_progress(self.throbber_progress)
+        if self.compact_throbber:
+            self.compact_throbber.set_progress(self.throbber_progress)
     
     def check_connections_background(self):
         """Check connections - now handled by device_manager"""
@@ -770,10 +1382,8 @@ class DashboardTab(QWidget):
         self.start_time = datetime.now()
         self.timer.start(1000)  # Update elapsed time every second
         
-        # Start throbber
-        self.throbber_update_timer.start(100)
-        
         self.log_text.append(f"[info] Starting {execution_type}: {execution_name}")
+        self.log_text.append(f"[info] Speed override {int(self.master_speed * 100)}%")
         self.action_label.setText(f"Starting {execution_type}...")
         
         # Handle models based on execution mode
@@ -786,18 +1396,15 @@ class DashboardTab(QWidget):
                 # Get checkpoint and episode settings from UI
                 checkpoint_name = self.checkpoint_combo.currentData() if self.checkpoint_combo.isVisible() else "last"
                 
-                # Check if loop mode is enabled
-                if self.loop_checkbox.isChecked():
+                if self.loop_enabled:
                     num_episodes = -1  # Infinite loop
                     self.log_text.append("[info] Loop mode enabled (∞ episodes)")
                 else:
-                    num_episodes = self.episodes_spin.value()
-                
-                episode_time = self.episode_time_spin.value()
-                
+                    num_episodes = 1
+
                 self._start_execution_worker(execution_type, execution_name, {
                     "checkpoint": checkpoint_name,
-                    "duration": episode_time,
+                    "duration": self.config.get("control", {}).get("episode_time_s", 30),
                     "num_episodes": num_episodes
                 })
             else:
@@ -806,9 +1413,7 @@ class DashboardTab(QWidget):
                 self._start_model_execution(execution_name)
         else:
             # For recordings and sequences, use ExecutionWorker
-            options = {}
-            if execution_type == "sequence":
-                options["loop"] = self.loop_checkbox.isChecked()
+            options = {"loop": self.loop_enabled} if execution_type == "sequence" else {}
             self._start_execution_worker(execution_type, execution_name, options)
     
     def _start_model_execution(self, model_name: str):
@@ -822,6 +1427,7 @@ class DashboardTab(QWidget):
             
             # Update config for this run
             model_config = self.config.copy()
+            model_config.setdefault("control", {})["speed_multiplier"] = self.master_speed
             model_config["policy"]["path"] = str(checkpoint_path)
             
             self.log_text.append(f"[info] Loading model: {checkpoint_path}")
@@ -853,12 +1459,15 @@ class DashboardTab(QWidget):
     
     def _start_execution_worker(self, execution_type: str, execution_name: str, options: dict = None):
         """Start ExecutionWorker for recordings and sequences"""
+        merged_options = dict(options or {})
+        merged_options["speed_multiplier"] = self.master_speed
+
         # Create and start execution worker
         self.execution_worker = ExecutionWorker(
             self.config,
             execution_type,
             execution_name,
-            options or {}
+            merged_options
         )
         
         # Connect signals
@@ -869,8 +1478,9 @@ class DashboardTab(QWidget):
         self.execution_worker.sequence_step_started.connect(self._on_sequence_step_started)
         self.execution_worker.sequence_step_completed.connect(self._on_sequence_step_completed)
         self.execution_worker.vision_state_update.connect(self._on_vision_state_update)
-        
+
         # Start execution
+        self.execution_worker.set_speed_multiplier(self.master_speed)
         self.execution_worker.start()
     
     def run_sequence(self, sequence_name: str, loop: bool = False):
@@ -1016,7 +1626,18 @@ class DashboardTab(QWidget):
 
     def _on_vision_state_update(self, state: str, payload: dict):
         message = payload.get("message", state.title())
+        camera_name = payload.get("camera_name")
+        zone_payload = payload.get("zone_polygons") or []
+
+        if camera_name:
+            if state in {"idle", "watching", "triggered"} and zone_payload:
+                self.active_vision_zones[camera_name] = zone_payload
+            elif state in {"complete", "clear", "error"}:
+                self.active_vision_zones.pop(camera_name, None)
+
         self.record_vision_status(state, message, payload)
+        if camera_name and self.camera_view_active and camera_name == self.active_camera_name:
+            self.update_camera_previews(force=True)
     
     def _on_execution_completed(self, success: bool, summary: str):
         """Handle execution completion (for recordings/sequences)"""
@@ -1077,15 +1698,11 @@ class DashboardTab(QWidget):
             self.timer.stop()
             self._vision_state_active = False
             self._last_vision_signature = None
+            self.active_vision_zones.clear()
             self._set_action_label_style("#383838")
             seq_tab = self._get_sequence_tab()
             if seq_tab:
                 seq_tab.clear_running_highlight()
-            
-            # Stop throbber
-            self.throbber_update_timer.stop()
-            self.throbber_progress = 0
-            self.throbber.set_progress(0)
             
             # Clean up execution worker (recordings/sequences)
             if self.execution_worker:
@@ -1117,13 +1734,17 @@ class DashboardTab(QWidget):
         """Go to home position"""
         self.action_label.setText("Moving to home...")
         self.log_text.append("[info] Moving to home position...")
-        
+        self.log_text.append(f"[info] Speed override {int(self.master_speed * 100)}%")
+
         try:
+            env = os.environ.copy()
+            env["LEROBOT_SPEED_MULTIPLIER"] = f"{self.master_speed:.2f}"
             result = subprocess.run(
-                [sys.executable, str(ROOT / "rest_pos.py"), "--go"],
+                [sys.executable, str(ROOT / "HomePos.py"), "--go"],
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=30,
+                env=env
             )
             
             if result.returncode == 0:
@@ -1159,12 +1780,17 @@ class DashboardTab(QWidget):
         Args:
             status: "empty", "online", or "offline"
         """
-        if status == "empty":
-            self.robot_status_circle.set_null()
-        elif status == "online":
-            self.robot_status_circle.set_connected(True)
-        else:  # offline
-            self.robot_status_circle.set_connected(False)
+        if self.robot_indicator1:
+            if status == "empty":
+                self.robot_indicator1.set_null()
+                if self.robot_indicator2:
+                    self.robot_indicator2.set_null()
+            elif status == "online":
+                self.robot_indicator1.set_connected(True)
+            else:
+                self.robot_indicator1.set_connected(False)
+        self._robot_status = status
+        self._update_status_summaries()
     
     def on_camera_status_changed(self, camera_name: str, status: str):
         """Handle camera status change from device manager
@@ -1173,20 +1799,45 @@ class DashboardTab(QWidget):
             camera_name: "front" or "wrist"
             status: "empty", "online", or "offline"
         """
-        if camera_name == "front":
+        if camera_name == "front" and self.camera_front_circle:
             if status == "empty":
                 self.camera_front_circle.set_null()
             elif status == "online":
                 self.camera_front_circle.set_connected(True)
-            else:  # offline
+            else:
                 self.camera_front_circle.set_connected(False)
-        elif camera_name == "wrist":
+        elif camera_name == "wrist" and self.camera_wrist_circle:
             if status == "empty":
                 self.camera_wrist_circle.set_null()
             elif status == "online":
                 self.camera_wrist_circle.set_connected(True)
-            else:  # offline
+            else:
                 self.camera_wrist_circle.set_connected(False)
+        elif self.camera_indicator3 and camera_name not in {"front", "wrist"}:
+            if status == "empty":
+                self.camera_indicator3.set_null()
+            elif status == "online":
+                self.camera_indicator3.set_connected(True)
+            else:
+                self.camera_indicator3.set_connected(False)
+
+        self._camera_status[camera_name] = status
+        self._update_status_summaries()
+
+        if self.camera_view_active and camera_name == self.active_camera_name:
+            self.update_camera_previews(force=True)
+
+    def _update_status_summaries(self):
+        """Update compact status summary labels."""
+        if not hasattr(self, "robot_summary_label") or not hasattr(self, "camera_summary_label"):
+            return
+
+        robot_online = 1 if self._robot_status == "online" else 0
+        self.robot_summary_label.setText(f"R:{robot_online}/{self._robot_total}")
+
+        camera_total = len(self._camera_status)
+        camera_online = sum(1 for state in self._camera_status.values() if state == "online")
+        self.camera_summary_label.setText(f"C:{camera_online}/{camera_total}")
     
     def on_discovery_log(self, message: str):
         """Handle discovery log messages from device manager

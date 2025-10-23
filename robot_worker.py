@@ -229,7 +229,7 @@ class RobotWorker(QThread):
                 if 'warmup' in line.lower():
                     self.status_update.emit("Warming up...")
                 elif 'reset' in line.lower() or 'rest' in line.lower():
-                    self.status_update.emit("Moving to rest position...")
+                    self.status_update.emit("Returning Home...")
                 elif 'recording' in line.lower():
                     self.status_update.emit(f"Recording Episode {current_episode}/{total_episodes}")
                 

@@ -28,6 +28,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.motor_controller import MotorController
 from utils.actions_manager import ActionsManager
 from utils.sequences_manager import SequencesManager
+from utils.camera_hub import CameraStreamHub
+from safety.hand_safety import HandSafetyMonitor, SafetyConfig, SafetyEvent, build_camera_sources_from_config
 
 
 class ExecutionWorker(QThread):
@@ -41,6 +43,7 @@ class ExecutionWorker(QThread):
     sequence_step_started = Signal(int, int, dict)   # step_index, total_steps, step data
     sequence_step_completed = Signal(int, int, dict) # step_index, total_steps, step data
     vision_state_update = Signal(str, dict)          # state, payload
+    safety_alert = Signal(str, dict)                 # (alert_type, event_data) - EMERGENCY STOP signals
     
     def __init__(self, config: dict, execution_type: str, execution_name: str, execution_data: dict = None):
         """
@@ -57,19 +60,34 @@ class ExecutionWorker(QThread):
         self.execution_data = execution_data or {}
         self.options = execution_data or {}  # Alias for compatibility
         self._stop_requested = False
+        self._emergency_stop = False  # CRITICAL: Set by safety monitor
         self._last_vision_state_signature = None
         
         # Managers
         self.actions_mgr = ActionsManager()
         self.sequences_mgr = SequencesManager()
         self.motor_controller = MotorController(config)
-    
+        self.speed_multiplier = config.get("control", {}).get("speed_multiplier", 1.0)
+        self.motor_controller.speed_multiplier = self.speed_multiplier
+        try:
+            self.camera_hub: Optional[CameraStreamHub] = CameraStreamHub.instance(config)
+        except Exception:
+            self.camera_hub = None
+        
+        # Safety monitoring
+        self.safety_monitor: Optional[HandSafetyMonitor] = None
+        self._init_safety_monitor()
+
     def run(self):
         """Main execution thread
         
         Handles: recordings, sequences, and models (in local mode)
         """
         self._stop_requested = False
+        self._emergency_stop = False
+        
+        # Start safety monitoring
+        self.start_safety_monitoring()
         
         try:
             if self.execution_type == "recording":
@@ -84,6 +102,110 @@ class ExecutionWorker(QThread):
         except Exception as e:
             self.log_message.emit('error', f"Execution error: {e}")
             self.execution_completed.emit(False, f"Failed: {e}")
+        finally:
+            # Always stop safety monitoring when execution ends
+            self.stop_safety_monitoring()
+
+    def set_speed_multiplier(self, multiplier: float):
+        self.speed_multiplier = multiplier
+        self.motor_controller.speed_multiplier = multiplier
+        self.options["speed_multiplier"] = multiplier
+    
+    def _init_safety_monitor(self):
+        """Initialize safety monitoring system."""
+        try:
+            safety_config = self.config.get("safety", {})
+            if not safety_config.get("enabled", False):
+                self.log_message.emit('info', "[SAFETY] Safety monitoring disabled in config")
+                return
+            
+            # Build camera sources from config
+            camera_selection = safety_config.get("cameras", "front")
+            camera_sources = build_camera_sources_from_config(self.config, camera_selection)
+            
+            if not camera_sources:
+                self.log_message.emit('warning', "[SAFETY] No cameras configured for safety monitoring")
+                return
+            
+            # Create safety configuration (YOLO-only)
+            config_obj = SafetyConfig(
+                enabled=True,
+                cameras=camera_sources,
+                detection_fps=safety_config.get("detection_fps", 8.0),
+                frame_width=safety_config.get("frame_width", 320),
+                frame_height=safety_config.get("frame_height", 240),
+                detection_confidence=safety_config.get("detection_confidence", 0.4),
+                resume_delay_s=safety_config.get("resume_delay_s", 1.0),
+                yolo_model=safety_config.get("yolo_model", "yolov8n.pt"),
+            )
+            
+            # Create safety monitor
+            self.safety_monitor = HandSafetyMonitor(
+                config=config_obj,
+                on_hand_detected=self._on_hand_detected,
+                on_hand_cleared=self._on_hand_cleared,
+                log_callback=self._safety_log
+            )
+            
+            self.log_message.emit('info', "[SAFETY] Safety monitor initialized")
+            
+        except Exception as e:
+            self.log_message.emit('error', f"[SAFETY] Failed to initialize safety monitor: {e}")
+            self.safety_monitor = None
+    
+    def _on_hand_detected(self, event: SafetyEvent):
+        """
+        CRITICAL SAFETY CALLBACK: Hand detected in workspace.
+        Triggers EMERGENCY STOP immediately.
+        """
+        self._emergency_stop = True
+        self._stop_requested = True  # Also set regular stop
+        
+        # Emergency stop motors immediately
+        try:
+            if self.motor_controller and self.motor_controller.motors:
+                self.motor_controller.motors.write("Torque_Enable", [0] * 6)
+                self.log_message.emit('critical', "[SAFETY] 🚨 EMERGENCY STOP - Motors disabled!")
+        except Exception as e:
+            self.log_message.emit('error', f"[SAFETY] Emergency motor stop failed: {e}")
+        
+        # Emit safety alert to UI
+        self.safety_alert.emit("hand_detected", {
+            "camera": event.camera_label,
+            "confidence": event.confidence,
+            "method": event.detection_method,
+            "timestamp": event.timestamp
+        })
+        
+        self.status_update.emit("🚨 EMERGENCY STOP - HAND DETECTED!")
+    
+    def _on_hand_cleared(self, event: SafetyEvent):
+        """Hand cleared from workspace - ready to resume."""
+        # Note: Don't automatically resume - user must manually restart
+        self.safety_alert.emit("hand_cleared", {
+            "timestamp": event.timestamp
+        })
+        self.log_message.emit('info', "[SAFETY] Workspace clear - Manual restart required")
+    
+    def _safety_log(self, level: str, message: str):
+        """Forward safety logs to UI."""
+        self.log_message.emit(level, message)
+    
+    def start_safety_monitoring(self):
+        """Start safety monitoring (called when execution begins)."""
+        if self.safety_monitor:
+            try:
+                self.safety_monitor.start()
+            except Exception as e:
+                self.log_message.emit('error', f"[SAFETY] Failed to start monitor: {e}")
+    
+    def stop_safety_monitoring(self):
+        """Stop safety monitoring (called when execution ends)."""
+        if self.safety_monitor:
+            try:
+                self.safety_monitor.stop()
+            except Exception as e:
+                self.log_message.emit('error', f"[SAFETY] Failed to stop monitor: {e}")
     
     def _execute_model(self):
         """Execute a model directly (for Dashboard model runs)"""
@@ -118,6 +240,9 @@ class ExecutionWorker(QThread):
             self.execution_completed.emit(False, "Recording not found")
             return
         
+        # Apply latest speed override and connect to motors
+        self.motor_controller.speed_multiplier = self.speed_multiplier
+
         # Connect to motors
         self.log_message.emit('info', "Connecting to motors...")
         self.status_update.emit("Connecting to motors...")
@@ -391,6 +516,8 @@ class ExecutionWorker(QThread):
             self.log_message.emit('error', f"Sequence not found: {self.execution_name}")
             self.execution_completed.emit(False, "Sequence not found")
             return
+
+        self.motor_controller.speed_multiplier = self.speed_multiplier
         
         steps = sequence.get("steps", [])
         loop = self.options.get("loop", sequence.get("loop", False))
@@ -598,6 +725,44 @@ class ExecutionWorker(QThread):
             "triggered_zones": triggered_zones
         }
 
+    def _normalize_camera_identifier(self, identifier) -> str:
+        if isinstance(identifier, int):
+            return str(identifier)
+        if isinstance(identifier, str):
+            stripped = identifier.strip()
+            if stripped.startswith("/dev/video") and stripped[10:].isdigit():
+                return stripped[10:]
+            if stripped.startswith("camera:"):
+                return stripped.split(":", 1)[-1]
+            if stripped.isdigit():
+                return stripped
+            return stripped
+        return str(identifier)
+
+    def _resolve_camera_name(self, camera_cfg: Dict) -> Optional[str]:
+        if not camera_cfg:
+            return None
+
+        cameras = self.config.get("cameras", {})
+        if not cameras:
+            return None
+
+        source_id = camera_cfg.get("source_id")
+        index = camera_cfg.get("index")
+        normalized_source = self._normalize_camera_identifier(source_id) if source_id else None
+        normalized_index = str(index) if index is not None else None
+
+        for name, cfg in cameras.items():
+            identifier = cfg.get("index_or_path", 0)
+            norm_identifier = self._normalize_camera_identifier(identifier)
+            if normalized_source and norm_identifier == normalized_source:
+                return name
+            if normalized_index and norm_identifier == normalized_index:
+                return name
+            if source_id and str(identifier) == source_id:
+                return name
+        return None
+
     def _execute_vision_step(self, step: Dict, step_index: int, total_steps: int) -> bool:
         """Wait for a vision trigger before proceeding."""
         trigger_cfg = step.get("trigger", {})
@@ -609,37 +774,59 @@ class ExecutionWorker(QThread):
 
         camera_cfg = step.get("camera", {})
         camera_index = int(camera_cfg.get("index", 0))
+        camera_name = self._resolve_camera_name(camera_cfg)
         idle_cfg = trigger_cfg.get("idle_mode", {})
         idle_enabled = idle_cfg.get("enabled", False)
         interval = max(0.5, float(idle_cfg.get("interval_seconds", 2.0)))
 
         hold_time = float(trigger_cfg.get("settings", {}).get("hold_time", 0.0))
         zone_names = [zone.get("name", "Zone") for zone in zones]
+        zone_payload = [dict(zone) for zone in zones]  # shallow copy for UI overlay
 
-        cap = cv2.VideoCapture(camera_index)
-        if not cap or not cap.isOpened():
-            self.log_message.emit('warning', f"Vision step: camera {camera_index} unavailable, switching to demo feed")
-            self.vision_state_update.emit("error", {"message": f"Camera {camera_index} unavailable"})
-            self._reset_vision_tracking()
-            return False
+        use_hub = self.camera_hub is not None and camera_name is not None
+        cap = None
 
-        resolution = camera_cfg.get("resolution")
-        if isinstance(resolution, (list, tuple)) and len(resolution) == 2:
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, resolution[0])
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, resolution[1])
+        if use_hub:
+            frame, _ = self.camera_hub.get_frame_with_timestamp(camera_name, preview=False)
+            if frame is None:
+                self.log_message.emit('warning', f"Vision step: camera '{camera_name}' unavailable in hub.")
+                self.vision_state_update.emit(
+                    "error",
+                    {"message": f"Camera {camera_name} unavailable", "camera_name": camera_name},
+                )
+                self._reset_vision_tracking()
+                return False
+        else:
+            cap = cv2.VideoCapture(camera_index)
+            if not cap or not cap.isOpened():
+                self.log_message.emit('warning', f"Vision step: camera {camera_index} unavailable, switching to demo feed")
+                self.vision_state_update.emit(
+                    "error", {"message": f"Camera {camera_index} unavailable", "camera_name": camera_name or str(camera_index)}
+                )
+                self._reset_vision_tracking()
+                return False
 
-        self.log_message.emit('info', f"Waiting for vision trigger (camera {camera_index})")
+            resolution = camera_cfg.get("resolution")
+            if isinstance(resolution, (list, tuple)) and len(resolution) == 2:
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, resolution[0])
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, resolution[1])
+
+        camera_label = camera_name or f"camera {camera_index}"
+        self.log_message.emit('info', f"Waiting for vision trigger ({camera_label})")
         self._reset_vision_tracking()
         self._emit_vision_state("watching", {
             "message": "Watching for triggers",
             "zones": zone_names,
             "step_index": step_index,
-            "total_steps": total_steps
+            "total_steps": total_steps,
+            "camera_name": camera_name or str(camera_index),
+            "zone_polygons": zone_payload,
         })
 
         success = False
         confirm_start = None
         last_check = 0.0
+        last_frame_ts = 0.0
 
         try:
             while not self._stop_requested:
@@ -651,21 +838,41 @@ class ExecutionWorker(QThread):
                         "message": "IDLE • waiting for next check",
                         "countdown": countdown,
                         "interval_seconds": interval,
-                        "zones": zone_names
+                        "zones": zone_names,
+                        "camera_name": camera_name or str(camera_index),
+                        "zone_polygons": zone_payload,
                     })
                     time.sleep(min(0.25, remaining))
                     continue
 
-                ret, frame = cap.read()
-                last_check = now
+                if use_hub:
+                    frame, frame_ts = self.camera_hub.get_frame_with_timestamp(camera_name, preview=False)
+                    if frame is None:
+                        self._emit_vision_state("watching", {
+                            "message": "Camera feed unavailable",
+                            "zones": zone_names,
+                            "camera_name": camera_name or str(camera_index),
+                            "zone_polygons": zone_payload,
+                        })
+                        time.sleep(0.1)
+                        continue
+                    if frame_ts <= last_frame_ts:
+                        time.sleep(0.03)
+                        continue
+                    last_frame_ts = frame_ts
+                else:
+                    ret, frame = cap.read()
+                    if not ret or frame is None:
+                        self._emit_vision_state("watching", {
+                            "message": "Camera read failed",
+                            "zones": zone_names,
+                            "camera_name": camera_name or str(camera_index),
+                            "zone_polygons": zone_payload,
+                        })
+                        time.sleep(0.5)
+                        continue
 
-                if not ret or frame is None:
-                    self._emit_vision_state("watching", {
-                        "message": "Camera read failed",
-                        "zones": zone_names
-                    })
-                    time.sleep(0.5)
-                    continue
+                last_check = now
 
                 evaluation = self._evaluate_vision_zones(frame, trigger_cfg)
                 triggered = evaluation["triggered"]
@@ -682,7 +889,9 @@ class ExecutionWorker(QThread):
                         self._emit_vision_state("triggered", {
                             "message": f"Triggered • {', '.join(triggered_zones) if triggered_zones else 'Zone detected'}",
                             "zones": triggered_zones or zone_names,
-                            "metric": round(best_metric, 3)
+                            "metric": round(best_metric, 3),
+                            "camera_name": camera_name or str(camera_index),
+                            "zone_polygons": zone_payload,
                         })
                         self.log_message.emit('info', f"Vision trigger confirmed after {elapsed:.2f}s")
                         success = True
@@ -693,7 +902,9 @@ class ExecutionWorker(QThread):
                             "message": f"Triggered • confirming ({remaining_hold:.1f}s)",
                             "zones": triggered_zones or zone_names,
                             "countdown": countdown,
-                            "metric": round(best_metric, 3)
+                            "metric": round(best_metric, 3),
+                            "camera_name": camera_name or str(camera_index),
+                            "zone_polygons": zone_payload,
                         })
                 else:
                     confirm_start = None
@@ -702,24 +913,37 @@ class ExecutionWorker(QThread):
                     self._emit_vision_state(state, {
                         "message": message,
                         "zones": zone_names,
-                        "countdown": int(interval) if idle_enabled else None
+                        "countdown": int(interval) if idle_enabled else None,
+                        "camera_name": camera_name or str(camera_index),
+                        "zone_polygons": zone_payload,
                     })
 
                 time.sleep(0.1)
 
         finally:
-            cap.release()
+            if cap is not None:
+                cap.release()
 
         if success:
             self._emit_vision_state("complete", {
                 "message": "Vision step completed",
-                "zones": zone_names
+                "zones": zone_names,
+                "camera_name": camera_name or str(camera_index),
+                "zone_polygons": zone_payload,
             })
         else:
             if self._stop_requested:
-                self._emit_vision_state("clear", {"message": "Vision step cancelled"})
+                self._emit_vision_state("clear", {
+                    "message": "Vision step cancelled",
+                    "camera_name": camera_name or str(camera_index),
+                    "zone_polygons": zone_payload,
+                })
             else:
-                self._emit_vision_state("error", {"message": "Vision step failed"})
+                self._emit_vision_state("error", {
+                    "message": "Vision step failed",
+                    "camera_name": camera_name or str(camera_index),
+                    "zone_polygons": zone_payload,
+                })
 
         return success
     
@@ -729,7 +953,9 @@ class ExecutionWorker(QThread):
         if not recording:
             self.log_message.emit('error', f"Recording not found: {recording_name}")
             return
-        
+
+        self.motor_controller.speed_multiplier = self.speed_multiplier
+
         # Connect if not already connected
         if not self.motor_controller.bus:
             if not self.motor_controller.connect():
@@ -810,7 +1036,7 @@ class ExecutionWorker(QThread):
                 time.sleep(remaining)
     
     def _execute_home_inline(self):
-        """Return arm to home/rest position"""
+        """Return arm Home"""
         # Connect if not already connected
         if not self.motor_controller.bus:
             if not self.motor_controller.connect():
@@ -1379,6 +1605,7 @@ class ExecutionWorker(QThread):
         """Request execution to stop"""
         self._stop_requested = True
         self._emit_vision_state("clear", {"message": "Vision cancelled"})
+        self.stop_safety_monitoring()
         self._reset_vision_tracking()
         
         # Emergency stop motors
