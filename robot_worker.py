@@ -11,7 +11,12 @@ import socket
 import subprocess
 import sys
 import time
-from PySide6.QtCore import QThread, Signal
+import threading
+from typing import List, Optional
+
+from PySide6.QtCore import QThread, Signal, Slot
+
+from utils.motor_controller import MotorController
 
 
 class RobotWorker(QThread):
@@ -31,11 +36,30 @@ class RobotWorker(QThread):
         self.server_proc = None  # Policy server process
         self.client_proc = None  # Robot client process
         self._stop_requested = False
+        self.motor_controller: Optional[MotorController] = None
+        try:
+            self.motor_controller = MotorController(config)
+        except Exception as exc:  # pragma: no cover - hardware dependent
+            print(f"[ROBOT_WORKER] Motor controller unavailable: {exc}")
+
+        safety_cfg = self.config.get("safety", {})
+        self._hold_enabled = bool(safety_cfg.get("hand_hold_position", True))
+        self._resume_delay = float(safety_cfg.get("hand_resume_delay_s", 0.5))
+        self._safety_paused = False
+        self._resume_cancel_event = threading.Event()
+        self._hold_loop_event: Optional[threading.Event] = None
+        self._hold_thread: Optional[threading.Thread] = None
+        self._hold_positions: Optional[List[int]] = None
+        self._hold_lock = threading.Lock()
+        self._hold_error_reported = False
         
     def run(self):
         """Main worker thread execution - async inference (server + client)"""
         self._stop_requested = False
-        
+        self._safety_paused = False
+        self._resume_cancel_event = threading.Event()
+        self._stop_hold_loop()
+
         try:
             # Step 1: Start policy server
             self.log_message.emit('info', "Starting policy server...")
@@ -94,9 +118,149 @@ class RobotWorker(QThread):
             self.error_occurred.emit('unknown', {'error': str(e)})
             self.run_completed.emit(False, f"Failed to start: {e}")
         finally:
+            self._stop_hold_loop()
             self._cleanup_processes()
             self.connection_changed.emit(False)
-            
+
+    def _capture_hold_positions(self):  # pragma: no cover - hardware dependent
+        if not (self.motor_controller and self._hold_enabled):
+            return
+
+        try:
+            if not self.motor_controller.bus:
+                if not self.motor_controller.connect():
+                    self.log_message.emit('warning', "[SAFETY] Could not connect to motors for hold")
+                    return
+
+            positions = self.motor_controller.read_positions_from_bus()
+            if not positions:
+                self.log_message.emit('warning', "[SAFETY] Failed to read positions for hold")
+                return
+
+            with self._hold_lock:
+                self._hold_positions = list(positions)
+                self._hold_error_reported = False
+
+            for name in self.motor_controller.motor_names:
+                self.motor_controller.bus.write("Torque_Enable", name, 1, normalize=False)
+
+        except Exception as exc:
+            self.log_message.emit('warning', f"[SAFETY] Hold capture error: {exc}")
+
+    def _start_hold_loop(self):  # pragma: no cover - hardware dependent
+        if not (self.motor_controller and self._hold_enabled):
+            return
+        if self._hold_thread and self._hold_thread.is_alive():
+            return
+
+        self._hold_loop_event = threading.Event()
+        self._hold_loop_event.set()
+
+        def _loop():
+            while (
+                self._hold_loop_event
+                and self._hold_loop_event.is_set()
+                and not self._stop_requested
+            ):
+                self._reapply_hold_positions()
+                time.sleep(0.1)
+
+        self._hold_thread = threading.Thread(target=_loop, daemon=True)
+        self._hold_thread.start()
+
+    def _reapply_hold_positions(self):  # pragma: no cover - hardware dependent
+        if not self.motor_controller or not self.motor_controller.bus:
+            return
+
+        with self._hold_lock:
+            positions = list(self._hold_positions) if self._hold_positions else None
+
+        if not positions:
+            return
+
+        try:
+            for idx, name in enumerate(self.motor_controller.motor_names):
+                self.motor_controller.bus.write("Goal_Position", name, positions[idx], normalize=False)
+        except Exception as exc:
+            if not self._hold_error_reported:
+                self.log_message.emit('warning', f"[SAFETY] Hold maintain error: {exc}")
+                self._hold_error_reported = True
+
+    def _stop_hold_loop(self):  # pragma: no cover - hardware dependent
+        if self._hold_loop_event:
+            self._hold_loop_event.clear()
+        if self._hold_thread and self._hold_thread.is_alive():
+            self._hold_thread.join(timeout=0.5)
+        self._hold_thread = None
+        self._hold_loop_event = None
+        with self._hold_lock:
+            self._hold_positions = None
+        self._hold_error_reported = False
+
+    @Slot()
+    def handle_hand_detected(self):
+        if self._stop_requested or self._safety_paused:
+            return
+
+        self._resume_cancel_event.set()
+        self._safety_paused = True
+        self.log_message.emit('warning', "[SAFETY] Hand detected — pausing async inference")
+        self.status_update.emit("⚠️ Hand detected — pausing")
+
+        if self.client_proc and self.client_proc.poll() is None:
+            try:
+                self.client_proc.send_signal(signal.SIGSTOP)
+            except Exception as exc:  # pragma: no cover - process control
+                self.log_message.emit('warning', f"[SAFETY] Failed to pause client: {exc}")
+
+        self._capture_hold_positions()
+        self._start_hold_loop()
+
+    @Slot()
+    def handle_hand_cleared(self):
+        if not self._safety_paused:
+            return
+
+        self._resume_cancel_event.set()
+        resume_event = threading.Event()
+        self._resume_cancel_event = resume_event
+
+        self.log_message.emit('info', "[SAFETY] Hand cleared — resuming soon")
+        self.status_update.emit("Hand cleared — resuming")
+
+        def _resume_after_delay():
+            waited = 0.0
+            step = 0.05
+            target = max(0.0, self._resume_delay)
+            while waited < target and not resume_event.is_set() and not self._stop_requested:
+                time.sleep(step)
+                waited += step
+
+            if resume_event.is_set() or self._stop_requested:
+                return
+
+            self._stop_hold_loop()
+            if self.client_proc and self.client_proc.poll() is None:
+                try:
+                    self.client_proc.send_signal(signal.SIGCONT)
+                except Exception as exc:  # pragma: no cover - process control
+                    self.log_message.emit('warning', f"[SAFETY] Failed to resume client: {exc}")
+
+            self._safety_paused = False
+            self.status_update.emit("Resumed")
+            self.log_message.emit('info', "[SAFETY] Safety pause cleared")
+
+        threading.Thread(target=_resume_after_delay, daemon=True).start()
+
+    def force_release_safety_pause(self):
+        self._resume_cancel_event.set()
+        self._stop_hold_loop()
+        if self._safety_paused and self.client_proc and self.client_proc.poll() is None:
+            try:
+                self.client_proc.send_signal(signal.SIGCONT)
+            except Exception:
+                pass
+        self._safety_paused = False
     def _build_server_command(self):
         """Build policy server command"""
         # Server just needs host and port
@@ -357,6 +521,7 @@ class RobotWorker(QThread):
     def stop(self):
         """Request worker to stop - stop both server and client"""
         self._stop_requested = True
+        self.force_release_safety_pause()
         self._cleanup_processes()
 
     def _wait_for_server_ready(self, host, port, timeout=5.0):

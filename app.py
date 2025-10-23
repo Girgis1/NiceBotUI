@@ -286,7 +286,12 @@ class MainWindow(QMainWindow):
                     [-90, 90], [-60, 60], [-60, 60],
                     [-90, 90], [-180, 180], [0, 100]
                 ],
-                "max_speed_scale": 1.0
+                "max_speed_scale": 1.0,
+                "hand_detection_enabled": True,
+                "hand_detection_camera": "front",
+                "hand_detection_model": "mediapipe/hands",
+                "hand_resume_delay_s": 0.5,
+                "hand_hold_position": True
             }
         }
     
