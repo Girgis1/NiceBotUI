@@ -146,10 +146,11 @@ class CameraPreviewTile(QFrame):
 
     clicked = Signal(str)
 
-    def __init__(self, camera_name: str, display_name: str, parent=None):
+    def __init__(self, camera_name: str, display_name: str, aspect_ratio: float, parent=None):
         super().__init__(parent)
         self.camera_name = camera_name
         self.display_name = display_name
+        self.aspect_ratio = aspect_ratio if aspect_ratio > 0 else 0.75
         self.setObjectName(f"camera_tile_{camera_name}")
         self.setCursor(Qt.PointingHandCursor)
         self.setFixedHeight(68)
@@ -163,7 +164,7 @@ class CameraPreviewTile(QFrame):
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setStyleSheet("color: #9a9a9a; font-size: 10px;")
         self.preview_label.setScaledContents(True)
-        self.preview_label.setFixedHeight(40)
+        self.preview_label.setMinimumHeight(40)
         layout.addWidget(self.preview_label, stretch=1)
 
         self.name_label = QLabel(display_name)
@@ -202,6 +203,12 @@ class CameraPreviewTile(QFrame):
         if event.button() == Qt.LeftButton:
             self.clicked.emit(self.camera_name)
         super().mousePressEvent(event)
+
+    def resizeEvent(self, event):
+        width = max(20, self.width() - 12)
+        height = int(width * self.aspect_ratio)
+        self.preview_label.setFixedHeight(max(40, height))
+        super().resizeEvent(event)
 
 
 class CameraDetailDialog(QDialog):
@@ -366,13 +373,8 @@ class DashboardTab(QWidget):
         status_bar = QHBoxLayout()
         status_bar.setSpacing(18)
 
-        indicators_widget = QWidget()
-        indicators_layout = QHBoxLayout(indicators_widget)
-        indicators_layout.setSpacing(18)
-        indicators_layout.setContentsMargins(0, 0, 0, 0)
-
         self.throbber = CircularProgress()
-        indicators_layout.addWidget(self.throbber)
+        status_bar.addWidget(self.throbber)
 
         robot_group = QHBoxLayout()
         robot_group.setSpacing(6)
@@ -385,7 +387,7 @@ class DashboardTab(QWidget):
         self.robot_indicator2 = StatusIndicator()
         self.robot_indicator2.set_null()
         robot_group.addWidget(self.robot_indicator2)
-        indicators_layout.addLayout(robot_group)
+        status_bar.addLayout(robot_group)
         self.robot_status_circle = self.robot_indicator1
 
         camera_group = QHBoxLayout()
@@ -402,48 +404,13 @@ class DashboardTab(QWidget):
         self.camera_indicator3 = StatusIndicator()
         self.camera_indicator3.set_null()
         camera_group.addWidget(self.camera_indicator3)
-        indicators_layout.addLayout(camera_group)
+        status_bar.addLayout(camera_group)
         self.camera_front_circle = self.camera_indicator1
         self.camera_wrist_circle = self.camera_indicator2
 
         self.time_label = QLabel("00:00")
         self.time_label.setStyleSheet("color: #4CAF50; font-size: 12px; font-weight: bold; font-family: monospace;")
-        indicators_layout.addWidget(self.time_label)
-
-        self.camera_preview_widget = self.create_camera_preview_widget()
-        self.status_stack = QStackedWidget()
-        self.status_stack.addWidget(indicators_widget)
-        self.status_stack.addWidget(self.camera_preview_widget)
-        self.status_stack.setCurrentIndex(0)
-
-        status_bar.addWidget(self.status_stack, stretch=4)
-
-        self.camera_toggle_btn = QPushButton("📷 Cameras")
-        self.camera_toggle_btn.setCheckable(True)
-        self.camera_toggle_btn.setMinimumHeight(52)
-        self.camera_toggle_btn.setStyleSheet(
-            """
-            QPushButton {
-                background-color: #404040;
-                color: #ffffff;
-                border: 2px solid #505050;
-                border-radius: 8px;
-                font-size: 16px;
-                font-weight: bold;
-                padding: 6px 16px;
-            }
-            QPushButton:checked {
-                background-color: #4CAF50;
-                border-color: #4CAF50;
-            }
-            QPushButton:hover {
-                background-color: #4a4a4a;
-            }
-        """
-        )
-        self.camera_toggle_btn.toggled.connect(self.on_camera_toggle)
-        status_bar.addWidget(self.camera_toggle_btn)
-        self.camera_toggle_btn.setEnabled(bool(self.camera_order))
+        status_bar.addWidget(self.time_label)
 
         self.action_label = QLabel("At home position")
         self._action_label_style_template = (
@@ -452,11 +419,9 @@ class DashboardTab(QWidget):
         )
         self._set_action_label_style("#383838")
         self.action_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        status_bar.addWidget(self.action_label, stretch=3)
+        status_bar.addWidget(self.action_label, stretch=1)
 
-        layout.addLayout(status_bar)
-        
-        # Unified RUN selector (Models, Sequences, Actions)
+        # Unified RUN selector with camera toggle button
         run_frame = QFrame()
         run_frame.setFixedHeight(95)
         run_frame.setStyleSheet("""
@@ -469,7 +434,33 @@ class DashboardTab(QWidget):
         run_layout = QHBoxLayout(run_frame)
         run_layout.setSpacing(10)
         run_layout.setContentsMargins(10, 6, 10, 6)
-        
+
+        self.camera_toggle_btn = QPushButton("📷 Cameras")
+        self.camera_toggle_btn.setCheckable(True)
+        self.camera_toggle_btn.setMinimumHeight(85)
+        self.camera_toggle_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #404040;
+                color: #ffffff;
+                border: 2px solid #505050;
+                border-radius: 6px;
+                font-size: 18px;
+                font-weight: bold;
+                padding: 0 14px;
+                min-width: 150px;
+            }
+            QPushButton:hover {
+                background-color: #4a4a4a;
+            }
+            QPushButton:checked {
+                background-color: #4CAF50;
+                border-color: #4CAF50;
+            }
+        """)
+        self.camera_toggle_btn.toggled.connect(self.on_camera_toggle)
+        run_layout.addWidget(self.camera_toggle_btn)
+        self.camera_toggle_btn.setEnabled(bool(self.camera_order))
+
         run_label = QLabel("RUN:")
         run_label.setStyleSheet("color: #ffffff; font-size: 19px; font-weight: bold;")
         run_layout.addWidget(run_label)
@@ -556,7 +547,32 @@ class DashboardTab(QWidget):
         run_layout.addWidget(self.checkpoint_combo, stretch=1)
         self.checkpoint_combo.hide()  # Hidden by default
         
-        layout.addWidget(run_frame)
+        # Assemble top container with optional camera panel
+        top_container = QHBoxLayout()
+        top_container.setSpacing(15)
+
+        left_column = QVBoxLayout()
+        left_column.setSpacing(12)
+        left_column.addLayout(status_bar)
+        left_column.addWidget(run_frame)
+        top_container.addLayout(left_column, stretch=3)
+
+        self.camera_panel = QFrame()
+        self.camera_panel.setStyleSheet("""
+            QFrame {
+                background-color: #1f1f1f;
+                border: 1px solid #404040;
+                border-radius: 8px;
+            }
+        """)
+        self.camera_panel_layout = QVBoxLayout(self.camera_panel)
+        self.camera_panel_layout.setContentsMargins(8, 8, 8, 8)
+        self.camera_panel_layout.setSpacing(10)
+        self.camera_panel.setVisible(False)
+        top_container.addWidget(self.camera_panel, stretch=2)
+
+        layout.addLayout(top_container)
+        self._rebuild_camera_panel()
         
         # Body layout: controls on left, speed override on right
         body_layout = QHBoxLayout()
@@ -644,18 +660,9 @@ class DashboardTab(QWidget):
 
         # Speed slider column
         speed_column = QVBoxLayout()
-        speed_column.setSpacing(4)
+        speed_column.setSpacing(6)
         speed_column.setContentsMargins(0, 0, 0, 0)
-
-        speed_title = QLabel("S\nP\nE\nE\nD\n\nC\nO\nN\nT\nR\nO\nL")
-        speed_title.setAlignment(Qt.AlignCenter)
-        speed_title.setStyleSheet("color: #4CAF50; font-size: 16px; font-weight: bold;")
-        speed_column.addWidget(speed_title)
-
-        self.speed_value_label = QLabel("")
-        self.speed_value_label.setStyleSheet("color: #4CAF50; font-size: 24px; font-weight: bold;")
-        self.speed_value_label.setAlignment(Qt.AlignCenter)
-        speed_column.addWidget(self.speed_value_label)
+        speed_column.addStretch(1)
 
         self.speed_slider = QSlider(Qt.Vertical)
         self.speed_slider.setRange(10, 120)
@@ -664,10 +671,11 @@ class DashboardTab(QWidget):
         self.speed_slider.setTickPosition(QSlider.TicksBothSides)
         self.speed_slider.setTickInterval(10)
         self.speed_slider.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        self.speed_slider.setFixedWidth(32)
         self.speed_slider.setStyleSheet("""
             QSlider::groove:vertical {
                 border: 2px solid #4CAF50;
-                width: 18px;
+                width: 14px;
                 background: #2e2e2e;
                 border-radius: 9px;
             }
@@ -684,12 +692,19 @@ class DashboardTab(QWidget):
                 border: 3px solid #4CAF50;
                 height: 32px;
                 width: 32px;
-                margin: 0 -11px;
+                margin: 0 -10px;
                 border-radius: 16px;
             }
         """)
+        speed_column.addWidget(self.speed_slider, alignment=Qt.AlignHCenter)
         self.speed_slider.valueChanged.connect(self.on_speed_slider_changed)
-        speed_column.addWidget(self.speed_slider, stretch=1)
+
+        self.speed_value_label = QLabel("")
+        self.speed_value_label.setStyleSheet("color: #4CAF50; font-size: 22px; font-weight: bold;")
+        self.speed_value_label.setAlignment(Qt.AlignCenter)
+        speed_column.addWidget(self.speed_value_label)
+
+        speed_column.addStretch(1)
 
         body_layout.addLayout(speed_column, stretch=1)
 
@@ -752,25 +767,11 @@ class DashboardTab(QWidget):
         self.vision_zones = self._load_vision_zones()
 
         self._release_preview_caps()
-
-        new_preview = self.create_camera_preview_widget()
-        if hasattr(self, "status_stack"):
-            index = self.status_stack.indexOf(self.camera_preview_widget)
-            if index != -1:
-                self.status_stack.removeWidget(self.camera_preview_widget)
-            self.camera_preview_widget.deleteLater()
-            self.camera_preview_widget = new_preview
-            self.status_stack.insertWidget(1, self.camera_preview_widget)
-            self.status_stack.setCurrentIndex(1 if self.camera_view_active else 0)
-
+        self._rebuild_camera_panel()
         self.camera_toggle_btn.setEnabled(bool(self.camera_order))
         if not self.camera_view_active:
             for name, tile in self.camera_tiles.items():
-                default_state = "idle" if name in self.vision_zones else "nominal"
-                tile.set_status(default_state)
-        if not self.camera_view_active:
-            for name, tile in self.camera_tiles.items():
-                default_state = "idle" if name in self.vision_zones else "nominal"
+                default_state = "idle" if name in self.vision_zones else "no_vision"
                 tile.set_status(default_state)
 
     def _refresh_loop_button(self):
@@ -844,32 +845,35 @@ class DashboardTab(QWidget):
         else:
             self._speed_initialized = True
 
-    def create_camera_preview_widget(self) -> QWidget:
-        frame = QFrame()
-        frame.setObjectName("cameraPreviewFrame")
-        layout = QHBoxLayout(frame)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+    def _rebuild_camera_panel(self):
+        while self.camera_panel_layout.count():
+            item = self.camera_panel_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
 
         self.camera_tiles = {}
 
         if not self.camera_order:
             placeholder = QLabel("No cameras configured")
-            placeholder.setStyleSheet("color: #909090; font-size: 12px;")
+            placeholder.setStyleSheet("color: #909090; font-size: 13px;")
             placeholder.setAlignment(Qt.AlignCenter)
-            layout.addWidget(placeholder)
-            return frame
+            self.camera_panel_layout.addWidget(placeholder)
+            return
 
         for name in self.camera_order:
+            cfg = self.config.get("cameras", {}).get(name, {})
+            width = max(1, cfg.get("width", 640))
+            height = cfg.get("height", 480)
+            ratio = height / width if width else 0.75
             display_name = name.replace("_", " ").title()
-            tile = CameraPreviewTile(name, display_name)
+            tile = CameraPreviewTile(name, display_name, ratio)
             tile.clicked.connect(self.on_camera_tile_clicked)
-            layout.addWidget(tile, stretch=1)
-            default_state = "idle" if name in self.vision_zones else "nominal"
-            tile.set_status(default_state)
+            tile.set_status("idle" if name in self.vision_zones else "no_vision")
+            self.camera_panel_layout.addWidget(tile)
             self.camera_tiles[name] = tile
 
-        return frame
+        self.camera_panel_layout.addStretch(1)
 
     def on_camera_toggle(self, checked: bool):
         self.camera_toggle_btn.setText("Close Cameras" if checked else "📷 Cameras")
@@ -887,15 +891,13 @@ class DashboardTab(QWidget):
             self.camera_toggle_btn.setChecked(False)
             self.camera_toggle_btn.blockSignals(False)
             return
+        self._rebuild_camera_panel()
+        self.camera_panel.setVisible(True)
         if not self.camera_tiles:
-            self.log_text.append("[warning] No cameras configured for preview")
-            self.camera_toggle_btn.blockSignals(True)
-            self.camera_toggle_btn.setChecked(False)
-            self.camera_toggle_btn.blockSignals(False)
+            self.camera_view_active = False
             return
 
         self.camera_view_active = True
-        self.status_stack.setCurrentIndex(1)
         self.camera_preview_timer.start(300)
         self.update_camera_previews()
 
@@ -903,10 +905,9 @@ class DashboardTab(QWidget):
         if not self.camera_view_active:
             return
         self.camera_view_active = False
-        self.status_stack.setCurrentIndex(0)
         self.camera_preview_timer.stop()
         self._release_preview_caps()
-
+        self.camera_panel.setVisible(False)
         for name, tile in self.camera_tiles.items():
             tile.update_pixmap(None)
             default_state = "idle" if name in self.vision_zones else "nominal"
@@ -1115,8 +1116,9 @@ class DashboardTab(QWidget):
                 self.preview_caps[name] = None
                 continue
 
-            tile_width = max(220, tile.width() - 14)
-            tile_height = max(124, int(tile_width * 9 / 16))
+            ratio = tile.aspect_ratio
+            tile_width = max(200, tile.width() - 14)
+            tile_height = max(100, int(tile_width * ratio))
             scaled_frame = cv2.resize(frame, (tile_width, tile_height))
             render_frame, status = self._render_camera_frame(name, scaled_frame.copy())
 
@@ -1126,6 +1128,9 @@ class DashboardTab(QWidget):
             image = QImage(rgb.data, width, height, channel * width, QImage.Format_RGB888)
             pixmap = QPixmap.fromImage(image)
             tile.update_pixmap(pixmap)
+            if name not in self.vision_zones:
+                tile.set_status("no_vision")
+                continue
 
             if status not in {"triggered", "idle"}:
                 status = "nominal" if status != "offline" else "offline"
@@ -1702,7 +1707,7 @@ class DashboardTab(QWidget):
         if tile:
             if status == "online":
                 if not self.camera_view_active:
-                    default_state = "idle" if camera_name in self.vision_zones else "nominal"
+                    default_state = "idle" if camera_name in self.vision_zones else "no_vision"
                     tile.set_status(default_state)
             elif status == "empty":
                 tile.set_status("no_vision")
