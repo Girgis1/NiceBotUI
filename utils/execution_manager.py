@@ -122,7 +122,7 @@ class ExecutionWorker(QThread):
                 self.log_message.emit('warning', "[SAFETY] No cameras configured for safety monitoring")
                 return
             
-            # Create safety configuration
+            # Create safety configuration (YOLO-only)
             config_obj = SafetyConfig(
                 enabled=True,
                 cameras=camera_sources,
@@ -130,9 +130,7 @@ class ExecutionWorker(QThread):
                 frame_width=safety_config.get("frame_width", 320),
                 frame_height=safety_config.get("frame_height", 240),
                 detection_confidence=safety_config.get("detection_confidence", 0.4),
-                tracking_confidence=safety_config.get("tracking_confidence", 0.35),
                 resume_delay_s=safety_config.get("resume_delay_s", 1.0),
-                detection_method=safety_config.get("detection_method", "yolo"),
                 yolo_model=safety_config.get("yolo_model", "yolov8n.pt"),
             )
             

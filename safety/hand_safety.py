@@ -5,12 +5,12 @@ This module provides CRITICAL SAFETY monitoring that detects hands in the robot
 workspace and EMERGENCY STOPS the robot to prevent injury.
 
 Key Features:
-- YOLOv8 hand detection (primary, fast and reliable)
-- MediaPipe hand detection (fallback option)
+- YOLOv8 hand/person detection (fast and reliable)
 - Configurable FPS (default 8 FPS for lightweight operation)
 - Multi-camera support
 - Automatic camera recovery
 - Emergency stop integration (NOT pause - STOP for safety!)
+- Supports custom hand-detection models
 """
 
 from __future__ import annotations
@@ -42,13 +42,6 @@ except ImportError:
     YOLO = None
     HAVE_YOLO = False
 
-try:
-    import mediapipe as mp
-    HAVE_MEDIAPIPE = True
-except ImportError:
-    mp = None
-    HAVE_MEDIAPIPE = False
-
 
 CameraIdentifier = Union[int, str]
 CameraSource = Tuple[str, CameraIdentifier]
@@ -56,18 +49,16 @@ CameraSource = Tuple[str, CameraIdentifier]
 
 @dataclass
 class SafetyConfig:
-    """Configuration for hand safety monitoring."""
+    """Configuration for hand safety monitoring using YOLOv8."""
     
     enabled: bool = False
     cameras: List[CameraSource] = None
     detection_fps: float = 8.0  # Lower FPS for resource efficiency
     frame_width: int = 320
     frame_height: int = 240
-    detection_confidence: float = 0.4  # YOLO/MediaPipe confidence threshold
-    tracking_confidence: float = 0.35  # MediaPipe tracking threshold
+    detection_confidence: float = 0.4  # YOLO confidence threshold
     resume_delay_s: float = 1.0  # Delay before resuming after hand cleared
-    detection_method: str = "yolo"  # "yolo" or "mediapipe"
-    yolo_model: str = "yolov8n.pt"  # YOLO model to use
+    yolo_model: str = "yolov8n.pt"  # YOLO model to use (change to hand-specific model if available)
     
     def __post_init__(self):
         if self.cameras is None:
@@ -82,7 +73,7 @@ class SafetyEvent:
     confidence: float
     camera_label: str
     timestamp: float
-    detection_method: str  # "yolo" or "mediapipe"
+    detection_method: str  # "yolo"
 
 
 class HandSafetyMonitor:
@@ -133,44 +124,22 @@ class HandSafetyMonitor:
         self._init_detector()
     
     def _init_detector(self):
-        """Initialize hand detection backend based on configuration."""
-        requested_method = self.config.detection_method.lower()
+        """Initialize YOLOv8 detection backend."""
+        if not HAVE_YOLO:
+            raise RuntimeError(
+                "[SAFETY] CRITICAL ERROR: YOLOv8 not available! "
+                "Install ultralytics: pip install ultralytics>=8.0.0"
+            )
         
-        # Try YOLO first if requested or as default
-        if requested_method == "yolo" and HAVE_YOLO:
-            try:
-                # Use YOLOv8n (nano) for speed, trained on COCO which includes 'person' class
-                # We'll detect hands as part of person detection initially
-                self._detector = YOLO(self.config.yolo_model)
-                self._detector.overrides['verbose'] = False  # Quiet mode
-                self._detection_method = "yolo"
-                self._log("info", f"[SAFETY] ✓ Initialized YOLOv8 detection (MODEL: {self.config.yolo_model})")
-                self._log("info", "[SAFETY] Using YOLO person detection - much faster and more reliable!")
-                return
-            except Exception as e:
-                self._log("error", f"[SAFETY] Failed to initialize YOLO: {e}, trying MediaPipe...")
-        
-        # Fall back to MediaPipe if YOLO unavailable or requested
-        if (requested_method in ("mediapipe", "yolo")) and HAVE_MEDIAPIPE:
-            try:
-                self._detector = mp.solutions.hands.Hands(
-                    static_image_mode=False,
-                    model_complexity=0,  # Lightweight model
-                    max_num_hands=2,
-                    min_detection_confidence=self.config.detection_confidence,
-                    min_tracking_confidence=self.config.tracking_confidence,
-                )
-                self._detection_method = "mediapipe"
-                self._log("info", "[SAFETY] Initialized MediaPipe hand detection (LIGHTWEIGHT MODE)")
-                return
-            except Exception as e:
-                self._log("error", f"[SAFETY] CRITICAL - Failed to initialize MediaPipe: {e}")
-        
-        # No detection available - raise error
-        raise RuntimeError(
-            "[SAFETY] CRITICAL ERROR: No hand detection method available! "
-            "Install ultralytics (YOLO) or mediapipe to use safety monitoring."
-        )
+        try:
+            # Load YOLO model (can be yolov8n.pt for person detection or custom hand model)
+            self._detector = YOLO(self.config.yolo_model)
+            self._detector.overrides['verbose'] = False  # Quiet mode
+            self._detection_method = "yolo"
+            self._log("info", f"[SAFETY] ✓ Initialized YOLOv8 detection (MODEL: {self.config.yolo_model})")
+            self._log("info", "[SAFETY] Detection active - monitoring for hands/person in workspace")
+        except Exception as e:
+            raise RuntimeError(f"[SAFETY] CRITICAL - Failed to initialize YOLO: {e}")
     
     def start(self):
         """Start the safety monitoring thread."""
@@ -322,7 +291,7 @@ class HandSafetyMonitor:
     
     def _detect_hand(self, frame) -> Tuple[bool, float]:
         """
-        Detect hands in a frame using the configured method.
+        Detect hands/person in a frame using YOLOv8.
         
         Returns:
             (detected: bool, confidence: float)
@@ -331,13 +300,7 @@ class HandSafetyMonitor:
         if frame.shape[1] > self.config.frame_width:
             frame = cv2.resize(frame, (self.config.frame_width, self.config.frame_height))
         
-        if self._detection_method == "yolo" and self._detector:
-            return self._detect_yolo(frame)
-        elif self._detection_method == "mediapipe" and self._detector:
-            return self._detect_mediapipe(frame)
-        else:
-            self._log("error", "[SAFETY] No valid detection method available!")
-            return False, 0.0
+        return self._detect_yolo(frame)
     
     def _detect_yolo(self, frame) -> Tuple[bool, float]:
         """Detect hands/person using YOLOv8."""
@@ -374,30 +337,6 @@ class HandSafetyMonitor:
         except Exception as e:
             self._log("warning", f"[SAFETY] YOLO detection error: {e}")
             return False, 0.0
-    
-    def _detect_mediapipe(self, frame) -> Tuple[bool, float]:
-        """Detect hands using MediaPipe."""
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        rgb.flags.writeable = False
-        
-        try:
-            results = self._detector.process(rgb)
-            
-            if results and results.multi_hand_landmarks:
-                # Calculate confidence from hand size/position
-                confidence = 0.8  # Default confidence
-                
-                if results.multi_handedness:
-                    # Get highest confidence from detected hands
-                    for hand_info in results.multi_handedness:
-                        for classification in hand_info.classification:
-                            confidence = max(confidence, classification.score)
-                
-                return True, float(confidence)
-        except Exception as e:
-            self._log("warning", f"[SAFETY] MediaPipe detection error: {e}")
-        
-        return False, 0.0
     
     def _open_cameras(self):
         """Open all configured cameras."""
