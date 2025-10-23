@@ -84,7 +84,7 @@ def create_default_vision_config() -> Dict:
 
 
 def _load_system_config() -> Dict:
-    """Load the kiosk config (if available) to expose camera names."""
+    """Load the shared config (if available) to expose camera names."""
     root = Path(__file__).resolve().parent.parent
     config_path = root / "config.json"
     try:
@@ -92,7 +92,7 @@ def _load_system_config() -> Dict:
             with config_path.open("r", encoding="utf-8") as handle:
                 return json.load(handle)
     except Exception as exc:
-        print(f"[VISION][WARN] Unable to load kiosk config: {exc}")
+        print(f"[VISION][WARN] Unable to load system config: {exc}")
     return {}
 
 
@@ -182,7 +182,7 @@ class CameraStream:
     def list_sources(self, max_devices: int = 5) -> List[CameraSource]:
         sources: List[CameraSource] = []
 
-        # First, prefer cameras that were configured in kiosk settings.
+        # First, prefer cameras that were configured in the shared settings file.
         for key, cam_cfg in self.system_cameras.items():
             label = cam_cfg.get("label") or cam_cfg.get("name") or key.replace("_", " ").title()
             index_or_path = cam_cfg.get("index_or_path", cam_cfg.get("index", 0))
