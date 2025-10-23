@@ -377,15 +377,18 @@ class KioskDashboard(QWidget):
             # Test up to 3 cameras
             for i, dot in enumerate([self.camera_dot1, self.camera_dot2, self.camera_dot3]):
                 if i < len(camera_indices):
+                    cap = None
                     try:
                         cap = cv2.VideoCapture(camera_indices[i])
                         if cap.isOpened():
                             dot.set_connected(True)
-                            cap.release()
                         else:
                             dot.set_connected(False)
-                    except:
+                    except Exception:
                         dot.set_connected(False)
+                    finally:
+                        if cap is not None:
+                            cap.release()
                 else:
                     dot.set_disabled()
         except ImportError:
