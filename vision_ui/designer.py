@@ -21,7 +21,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap, QPolygonF
+from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
@@ -463,11 +463,38 @@ class CameraCanvas(QWidget):
                 for wpt in widget_points:
                     painter.drawEllipse(wpt, 6, 6)
 
-            # Label
-            painter.setPen(QPen(border_color))
-            painter.setFont(QFont("Noto Sans", 14, QFont.Medium))
-            center = poly.boundingRect().center()
-            painter.drawText(center, zone.get("name", "Zone"))
+            # Zone info block inside polygon
+            info_rect = poly.boundingRect().adjusted(10, 10, -10, -10)
+            if info_rect.width() > 0 and info_rect.height() > 0:
+                detection = zone.get("detection", {})
+                metric = detection.get("metric")
+                threshold = detection.get("threshold")
+                next_check = detection.get("next_check_seconds")
+                interval = detection.get("interval_seconds")
+                invert = detection.get("invert", False)
+                if invert:
+                    comparator = "≤" if is_triggered else ">"
+                else:
+                    comparator = "≥" if is_triggered else "<"
+
+                text_lines = [zone.get("name", "Zone"), f"State: {'TRUE' if is_triggered else 'FALSE'}"]
+                if metric is not None and threshold is not None:
+                    text_lines.append(f"Metric {metric:.2f} {comparator} {threshold:.2f}")
+                elif metric is not None:
+                    text_lines.append(f"Metric {metric:.2f}")
+                if interval:
+                    text_lines.append(f"Next {next_check:.1f}s • Every {interval:.1f}s")
+
+                text = "\n".join(text_lines)
+
+                painter.save()
+                painter.setBrush(QColor(0, 0, 0, 160))
+                painter.setPen(Qt.NoPen)
+                painter.drawRoundedRect(info_rect, 10, 10)
+                painter.setPen(QPen(QColor("#ffffff")))
+                painter.setFont(QFont("Noto Sans", 11, QFont.Medium))
+                painter.drawText(info_rect, Qt.AlignCenter | Qt.TextWordWrap, text)
+                painter.restore()
 
         # Draw in-progress polygon (drawing mode)
         if self._mode == "drawing" and self._current_points:
@@ -608,9 +635,8 @@ class VisionDesignerWidget(QWidget):
         self.scroll_up_btn: Optional[QPushButton] = None
         self.scroll_down_btn: Optional[QPushButton] = None
 
-        self._normal_interval_ms = 1000 // 30
-        self._idle_min_interval_ms = 1000  # 1 FPS baseline for idle preview
-        self._current_timer_interval_ms = self._normal_interval_ms
+        self._frame_interval_ms = 1000 // 15  # Balanced preview frame rate
+        self._idle_min_interval_s = 1.0
         self._last_detection_check = 0.0
 
         self._build_ui()
@@ -619,30 +645,11 @@ class VisionDesignerWidget(QWidget):
         # Camera update timer
         self.frame_timer = QTimer(self)
         self.frame_timer.timeout.connect(self._update_frame)
-        self.frame_timer.start(self._normal_interval_ms)
+        self.frame_timer.start(self._frame_interval_ms)
 
         # Kick off with initial camera
         self._sync_camera_selection(initial=True)
 
-    # ------------------------------------------------------------------
-    # Timing helpers
-    def _set_timer_interval(self, interval_ms: int):
-        interval_ms = max(25, int(interval_ms))
-        if interval_ms == self._current_timer_interval_ms:
-            return
-        if self.frame_timer.isActive():
-            self.frame_timer.stop()
-        self.frame_timer.start(interval_ms)
-        self._current_timer_interval_ms = interval_ms
-
-    def _adjust_frame_timer(self, state: str, idle_interval: float):
-        if state == "idle":
-            interval_ms = max(int(idle_interval * 1000), self._idle_min_interval_ms)
-        else:
-            interval_ms = self._normal_interval_ms
-        self._set_timer_interval(interval_ms)
-
-    # ------------------------------------------------------------------
     # UI construction
     def _build_ui(self):
         main_layout = QHBoxLayout(self)
@@ -1070,23 +1077,6 @@ class VisionDesignerWidget(QWidget):
 
         layout.addLayout(form)
 
-        debug_row = QVBoxLayout()
-        debug_row.setSpacing(6)
-        self.debug_toggle = QCheckBox("Show debug preview (camera + metrics overlay)")
-        self.debug_toggle.setStyleSheet("color: #dddddd; font-size: 12px;")
-        self.debug_toggle.toggled.connect(self._on_debug_toggled)
-        debug_row.addWidget(self.debug_toggle)
-
-        self.debug_preview_label = QLabel("Enable debug preview to visualize threshold checks.")
-        self.debug_preview_label.setAlignment(Qt.AlignCenter)
-        self.debug_preview_label.setMinimumHeight(120)
-        self.debug_preview_label.setStyleSheet(
-            "color: #aaaaaa; font-size: 12px; border: 1px dashed #444444; border-radius: 10px; padding: 6px;"
-        )
-        debug_row.addWidget(self.debug_preview_label)
-
-        layout.addLayout(debug_row)
-
         return frame
 
     def _populate_camera_combo(self):
@@ -1358,9 +1348,6 @@ class VisionDesignerWidget(QWidget):
         signature = (state, message)
         self._current_state = state
 
-        idle_interval = self._config["trigger"].get("idle_mode", {}).get("interval_seconds", 2.0)
-        self._adjust_frame_timer(state, idle_interval)
-
         if state == "triggered":
             self._apply_state_chip("true")
             self.detection_status.setText(message)
@@ -1545,7 +1532,6 @@ class VisionDesignerWidget(QWidget):
             self.canvas.set_frame(QImage(), (0, 0))
             self.detection_status.setText("Waiting for camera...")
             self.metric_label.setText("Metric: N/A")
-            self._update_debug_preview(None, {})
             self._update_state("watching", {"message": "Waiting for camera feed"})
             return
 
@@ -1558,9 +1544,7 @@ class VisionDesignerWidget(QWidget):
         idle_cfg = self._config["trigger"].get("idle_mode", {})
         interval = max(float(idle_cfg.get("interval_seconds", 2.0)), 0.0)
         idle_enabled = idle_cfg.get("enabled", False)
-        effective_interval = (
-            max(interval, self._idle_min_interval_ms / 1000.0) if idle_enabled else interval
-        )
+        effective_interval = max(interval, self._idle_min_interval_s) if idle_enabled else interval
 
         should_sample = True
         if idle_enabled and self._current_state != "triggered":
@@ -1586,10 +1570,19 @@ class VisionDesignerWidget(QWidget):
             zone["detection"] = {
                 "triggered": triggered,
                 "metric": detection_summary.get(f"{zone_id}_metric"),
+                "threshold": detection_summary.get(f"{zone_id}_threshold"),
+                "invert": self._config["trigger"]["settings"].get("invert", False),
+                "next_check_seconds": 0.0,
+                "last_sample_seconds": 0.0,
             }
 
         time_since_last = now - self._last_detection_check if self._last_detection_check else 0.0
         time_until_next = max(0.0, effective_interval - time_since_last) if idle_enabled else 0.0
+        for zone in zones:
+            det = zone.get("detection", {})
+            det["next_check_seconds"] = time_until_next
+            det["last_sample_seconds"] = time_since_last
+            det["interval_seconds"] = effective_interval if idle_enabled else 0.0
 
         if triggered_zones:
             message = "Triggered • " + ", ".join(triggered_zones)
@@ -1612,7 +1605,6 @@ class VisionDesignerWidget(QWidget):
 
         self.canvas.set_frame(_to_qimage(frame), (width, height))
         self.canvas.set_zones(zones, self.active_zone_id)
-        self._update_debug_preview(self._last_frame, detection_summary)
         self.detection_status.setText(message)
 
         payload = {
@@ -1662,12 +1654,12 @@ class VisionDesignerWidget(QWidget):
             else:
                 metric = cv2.mean(gray, mask=mask)[0] / 255.0
 
-            detection_summary[f"{zone['zone_id']}_metric"] = metric
-
             threshold = _clamp(self._config["trigger"]["settings"].get("threshold", 0.55))
             invert = self._config["trigger"]["settings"].get("invert", False)
 
             triggered = metric <= threshold if invert else metric >= threshold
+            detection_summary[f"{zone['zone_id']}_metric"] = metric
+            detection_summary[f"{zone['zone_id']}_threshold"] = threshold
             detection_summary[zone["zone_id"]] = triggered
 
         return detection_summary
@@ -1729,70 +1721,12 @@ class VisionDesignerWidget(QWidget):
     def _on_idle_interval_changed(self, value: float):
         idle_cfg = self._config["trigger"].setdefault("idle_mode", {})
         idle_cfg["interval_seconds"] = value
-        if idle_cfg.get("enabled", False):
+        if idle_cfg.get("enabled", False) and self._current_state != "triggered":
             self._last_detection_check = 0.0
-            if self._current_state != "triggered":
-                self._update_state("idle", {
-                    "message": f"Idle mode • next check in {value:.1f}s (every {value:.1f}s)",
-                    "interval_seconds": value,
-                })
-            else:
-                self._adjust_frame_timer(self._current_state, value)
-
-    def _on_debug_toggled(self, checked: bool):
-        if not checked:
-            self.debug_preview_label.setPixmap(QPixmap())
-            self.debug_preview_label.setText("Enable debug preview to visualize threshold checks.")
-            return
-        self._update_debug_preview(self._last_frame, self._current_detection_summary)
-
-    def _update_debug_preview(self, frame: Optional[np.ndarray], detection_summary: Dict[str, float]):
-        if not self.debug_toggle.isChecked():
-            return
-        if frame is None:
-            self.debug_preview_label.setPixmap(QPixmap())
-            self.debug_preview_label.setText("Waiting for camera frame...")
-            return
-        zones = self._config["trigger"].get("zones", [])
-        if not zones:
-            self.debug_preview_label.setPixmap(QPixmap())
-            self.debug_preview_label.setText("Add a draw area to view debug preview.")
-            return
-
-        overlay = frame.copy()
-        height, width = overlay.shape[:2]
-        threshold = _clamp(self._config["trigger"]["settings"].get("threshold", 0.55))
-
-        for zone in zones:
-            polygon = zone.get("polygon", [])
-            if len(polygon) < 3:
-                continue
-            pts = _normalized_polygon_to_pixels(polygon, width, height)
-            if pts.size == 0:
-                continue
-            triggered = detection_summary.get(zone.get("zone_id", ""), False)
-            metric = detection_summary.get(f"{zone.get('zone_id')}_metric")
-            color = (67, 160, 71) if triggered else (198, 40, 40)
-
-            mask = np.zeros_like(overlay)
-            cv2.fillPoly(mask, [pts], color)
-            overlay = cv2.addWeighted(overlay, 1.0, mask, 0.32, 0)
-            cv2.polylines(overlay, [pts], True, color, 2)
-
-            if metric is not None:
-                comparator = "≥" if triggered else "<"
-                text = f"{metric:.2f} {comparator} {threshold:.2f}"
-            else:
-                text = f"Threshold {threshold:.2f}"
-            text_start = (max(0, pts[0][0] + 6), max(22, pts[0][1] + 18))
-            cv2.putText(overlay, text, text_start, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
-
-        pixmap = QPixmap.fromImage(_to_qimage(overlay))
-        target_width = max(20, self.debug_preview_label.width() - 12)
-        target_height = max(20, self.debug_preview_label.height() - 12)
-        pixmap = pixmap.scaled(target_width, target_height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        self.debug_preview_label.setPixmap(pixmap)
-        self.debug_preview_label.setText("")
+            self._update_state("idle", {
+                "message": f"Idle mode • next check in {value:.1f}s (every {value:.1f}s)",
+                "interval_seconds": value,
+            })
 
     # ------------------------------------------------------------------
     # Zone management
