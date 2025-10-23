@@ -1,0 +1,54 @@
+{
+  "zones": [
+    {
+      "zone_id": "box_1",
+      "name": "Box 1",
+      "type": "trigger",
+      "polygon": [
+        [
+          100,
+          200
+        ],
+        [
+          400,
+          200
+        ],
+        [
+          400,
+          500
+        ],
+        [
+          100,
+          500
+        ]
+      ],
+      "enabled": true,
+      "notes": "Left input box"
+    },
+    {
+      "zone_id": "box_2",
+      "name": "Box 2",
+      "type": "trigger",
+      "polygon": [
+        [
+          600,
+          200
+        ],
+        [
+          900,
+          200
+        ],
+        [
+          900,
+          500
+        ],
+        [
+          600,
+          500
+        ]
+      ],
+      "enabled": true,
+      "notes": "Right input box"
+    }
+  ]
+}

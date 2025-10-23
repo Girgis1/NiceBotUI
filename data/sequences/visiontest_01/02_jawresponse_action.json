@@ -1,0 +1,11 @@
+{
+  "step_type": "action",
+  "name": "JawResponse",
+  "enabled": true,
+  "delay_after": 0.0,
+  "metadata": {
+    "created_at": "2025-10-22T23:47:14.481669+11:00",
+    "modified_at": "2025-10-22T23:47:14.481679+11:00"
+  },
+  "action_name": "JawResponse"
+}

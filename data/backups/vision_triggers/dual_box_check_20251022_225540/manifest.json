@@ -1,0 +1,21 @@
+{
+  "name": "Dual Box Check",
+  "trigger_id": "dual_box_check",
+  "type": "multi_zone",
+  "created_at": "2025-10-22T22:38:29.816298+11:00",
+  "modified_at": "2025-10-22T22:55:17.221729+11:00",
+  "description": "Start when objects present in BOTH boxes. Useful for dual-part assembly.",
+  "enabled": false,
+  "check_interval_seconds": 2.0,
+  "active_when": {
+    "robot_state": "home"
+  },
+  "action": {
+    "type": "start_sequence",
+    "sequence_id": "production_run"
+  },
+  "components": {
+    "zones": "zones.json",
+    "conditions": "conditions.json"
+  }
+}
