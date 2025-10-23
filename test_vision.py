@@ -32,7 +32,7 @@ def main():
         print(f"   ✓ Daemon is running (PID: {pid})")
     else:
         print("   ✗ Daemon is not running")
-        print("   Run: python vision_triggers/daemon.py")
+        print("   Run: python -m vision_triggers.daemon")
         return 1
     print()
     

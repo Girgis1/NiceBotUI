@@ -738,7 +738,7 @@ class SequenceTab(QWidget):
         
         step = item.data(Qt.UserRole) or {}
         
-        dialog = VisionConfigDialog(self, step)
+        dialog = VisionConfigDialog(self, step, self.config)
         if hasattr(dialog, "state_changed"):
             dialog.state_changed.connect(self._handle_designer_state_changed)
         result = dialog.exec()

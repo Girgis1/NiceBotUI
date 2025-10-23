@@ -1,11 +1,15 @@
 # Vision Triggers System Configuration
 
+# Global Settings
+timezone: UTC                # Optional override; defaults to system timezone if omitted
+
 # Camera Settings
 camera:
   index: 0                    # Camera device index
   width: 1280                 # Capture width
   height: 720                 # Capture height
   fps: 30                     # Camera FPS
+  allow_virtual_fallback: true # Use demo feed when camera unavailable (for dev/CI)
   exposure_auto: false        # Lock exposure for stability
   white_balance_auto: false   # Lock white balance for stability
 

@@ -18,17 +18,14 @@ EXAMPLE:
 import json
 import shutil
 from pathlib import Path
-from datetime import datetime
-from typing import Optional, List, Dict
-import pytz
+from typing import Dict, List, Optional
 
 try:
     from .zone import Zone
 except ImportError:
     from zone import Zone
 
-
-TIMEZONE = pytz.timezone('Australia/Sydney')
+from .time_utils import now_iso
 
 
 class CompositeTrigger:
@@ -56,8 +53,8 @@ class CompositeTrigger:
         self.conditions = {}
         self.action = {"type": self.ACTION_ADVANCE}
         self.active_when = {"robot_state": "home"}
-        self.created_at = datetime.now(TIMEZONE).isoformat()
-        self.modified_at = datetime.now(TIMEZONE).isoformat()
+        self.created_at = now_iso()
+        self.modified_at = now_iso()
         
         # Ensure triggers directory exists
         self.triggers_dir.mkdir(parents=True, exist_ok=True)
@@ -108,7 +105,7 @@ class CompositeTrigger:
         """Save all trigger components to disk"""
         try:
             self.trigger_dir.mkdir(parents=True, exist_ok=True)
-            self.modified_at = datetime.now(TIMEZONE).isoformat()
+            self.modified_at = now_iso()
             
             # Save manifest
             manifest_data = {

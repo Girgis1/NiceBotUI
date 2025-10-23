@@ -12,17 +12,14 @@ DESIGN:
 import json
 import shutil
 from pathlib import Path
-from datetime import datetime
-from typing import Optional, List, Dict
-import pytz
+from typing import Dict, List, Optional
 
 try:
     from .composite_trigger import CompositeTrigger
 except ImportError:
     from composite_trigger import CompositeTrigger
 
-
-TIMEZONE = pytz.timezone('Australia/Sydney')
+from .time_utils import format_timestamp
 TRIGGERS_DIR = Path(__file__).parent.parent / "data" / "vision_triggers"
 BACKUPS_DIR = Path(__file__).parent.parent / "data" / "backups" / "vision_triggers"
 
@@ -52,7 +49,7 @@ class TriggersManager:
         if not trigger_dir.exists() or not trigger_dir.is_dir():
             return
         
-        timestamp = datetime.now(TIMEZONE).strftime("%Y%m%d_%H%M%S")
+        timestamp = format_timestamp("%Y%m%d_%H%M%S")
         backup_name = f"{trigger_dir.name}_{timestamp}"
         backup_path = self.backups_dir / backup_name
         

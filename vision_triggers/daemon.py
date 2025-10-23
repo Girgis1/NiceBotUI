@@ -1,40 +1,80 @@
-"""
-Vision Daemon - Main orchestrator for vision-based triggers
+"""Vision Daemon - Main orchestrator for vision-based triggers."""
 
-Long-running process that:
-- Captures camera frames with adaptive frame rate
-- Runs detection on active zones
-- Evaluates trigger conditions
-- Communicates with sequencer via IPC
-- Manages memory and prevents leaks
-- Home-gates detection (only runs when robot at home)
-- Auto-restarts on errors
-"""
+from __future__ import annotations
 
+import gc
 import os
+import signal
 import sys
 import time
-import gc
-import signal
-import psutil
-import cv2
-import yaml
-import numpy as np
 from pathlib import Path
-from typing import Optional, Dict, List
-from datetime import datetime
-import pytz
+from typing import Dict, List, Optional
 
-# Add parent directory to path for imports
-sys.path.append(str(Path(__file__).parent.parent))
+import cv2
+import numpy as np
+import psutil
+import yaml
 
-from vision_triggers.detectors.presence import PresenceDetector
-from vision_triggers.trigger_rules import TriggerEvaluator
-from vision_triggers.triggers_manager import TriggersManager
-from vision_triggers.ipc import IPCManager
+try:  # pragma: no cover - support running as package or script
+    from .detectors.presence import PresenceDetector
+    from .ipc import IPCManager
+    from .time_utils import get_timezone, now_iso
+    from .trigger_rules import TriggerEvaluator
+    from .triggers_manager import TriggersManager
+except ImportError:  # pragma: no cover
+    from vision_triggers.detectors.presence import PresenceDetector
+    from vision_triggers.ipc import IPCManager
+    from vision_triggers.time_utils import get_timezone, now_iso
+    from vision_triggers.trigger_rules import TriggerEvaluator
+    from vision_triggers.triggers_manager import TriggersManager
 
 
-TIMEZONE = pytz.timezone('Australia/Sydney')
+class VirtualCamera:
+    """Simple virtual camera that generates synthetic frames for testing."""
+
+    def __init__(self, width: int = 960, height: int = 540, fps: float = 5.0):
+        self.width = width
+        self.height = height
+        self.fps = max(fps, 0.1)
+        self._tick = 0
+        self._last_frame_time = time.time()
+
+    def isOpened(self) -> bool:  # noqa: N802 - mimics cv2.VideoCapture
+        return True
+
+    def read(self):  # noqa: N802 - mimics cv2.VideoCapture
+        now = time.time()
+        delay = max(0.0, (1.0 / self.fps) - (now - self._last_frame_time))
+        if delay:
+            time.sleep(delay)
+        self._last_frame_time = time.time()
+
+        frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+
+        x = (self._tick % self.width)
+        cv2.rectangle(frame, (x, 120), (x + 160, min(360, self.height - 1)), (0, 220, 120), -1)
+
+        cx = int((np.sin(self._tick / 40.0) * 0.4 + 0.5) * self.width)
+        cy = int((np.cos(self._tick / 30.0) * 0.3 + 0.5) * self.height)
+        cv2.circle(frame, (cx, cy), 60, (40, 160, 255), -1)
+
+        overlay = (self._tick % 255)
+        frame[:, :, 0] = (frame[:, :, 0] + overlay) % 255
+
+        self._tick += 4
+        return True, frame
+
+    def release(self):  # noqa: N802 - mimics cv2.VideoCapture
+        """Release the virtual camera (no-op)."""
+
+    def set(self, prop_id: int, value: float):  # noqa: N802 - mimic VideoCapture.set
+        if prop_id == cv2.CAP_PROP_FRAME_WIDTH:
+            self.width = int(value) or self.width
+        elif prop_id == cv2.CAP_PROP_FRAME_HEIGHT:
+            self.height = int(value) or self.height
+        elif prop_id == cv2.CAP_PROP_FPS:
+            self.fps = max(float(value), 0.1)
+        return True
 
 
 class VisionDaemon:
@@ -53,16 +93,19 @@ class VisionDaemon:
         
         # Load configuration
         self.config = self._load_config()
+        self.timezone = get_timezone(self.config.get('timezone'))
         
         # Initialize components
-        self.ipc = IPCManager(runtime_dir)
+        self.ipc = IPCManager(runtime_dir, timezone_name=self.config.get('timezone'))
         self.triggers_manager = TriggersManager()
         self.detector = None
         self.evaluator = TriggerEvaluator()
         
         # Camera
+        camera_cfg = self.config.get('camera', {})
         self.camera = None
-        self.camera_index = self.config['camera']['index']
+        self.camera_index = camera_cfg.get('index', 0)
+        self.using_virtual_camera = False
         
         # State
         self.running = False
@@ -97,7 +140,14 @@ class VisionDaemon:
     def _get_default_config(self) -> Dict:
         """Get default configuration"""
         return {
-            'camera': {'index': 0, 'width': 1280, 'height': 720, 'fps': 30},
+            'timezone': 'UTC',
+            'camera': {
+                'index': 0,
+                'width': 1280,
+                'height': 720,
+                'fps': 30,
+                'allow_virtual_fallback': True,
+            },
             'detection': {
                 'min_blob_area': 1200,
                 'stability_check': True,
@@ -171,23 +221,41 @@ class VisionDaemon:
             return False
     
     def _init_camera(self) -> bool:
-        """Initialize camera"""
+        """Initialize camera (real or virtual fallback)."""
         try:
-            cam_cfg = self.config['camera']
-            self.camera = cv2.VideoCapture(self.camera_index)
-            
-            if not self.camera.isOpened():
-                print(f"[DAEMON] ✗ Failed to open camera {self.camera_index}")
-                return False
-            
-            # Set camera properties
-            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, cam_cfg.get('width', 1280))
-            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, cam_cfg.get('height', 720))
-            self.camera.set(cv2.CAP_PROP_FPS, cam_cfg.get('fps', 30))
-            
-            print(f"[DAEMON] ✓ Camera {self.camera_index} opened")
-            return True
-        
+            cam_cfg = self.config.get('camera', {})
+            desired_width = cam_cfg.get('width', 1280)
+            desired_height = cam_cfg.get('height', 720)
+            desired_fps = cam_cfg.get('fps', 30)
+            allow_virtual = cam_cfg.get('allow_virtual_fallback', True)
+
+            capture = cv2.VideoCapture(self.camera_index)
+
+            if capture and capture.isOpened():
+                capture.set(cv2.CAP_PROP_FRAME_WIDTH, desired_width)
+                capture.set(cv2.CAP_PROP_FRAME_HEIGHT, desired_height)
+                capture.set(cv2.CAP_PROP_FPS, desired_fps)
+
+                self.camera = capture
+                self.using_virtual_camera = False
+                print(f"[DAEMON] ✓ Camera {self.camera_index} opened")
+                return True
+
+            if capture:
+                capture.release()
+
+            if allow_virtual:
+                self.camera = VirtualCamera(desired_width, desired_height, desired_fps)
+                self.using_virtual_camera = True
+                print(
+                    f"[DAEMON] ⚠ Camera {self.camera_index} unavailable. "
+                    "Using virtual demo feed."
+                )
+                return True
+
+            print(f"[DAEMON] ✗ Failed to open camera {self.camera_index}")
+            return False
+
         except Exception as e:
             print(f"[DAEMON] Camera initialization error: {e}")
             return False
@@ -309,6 +377,7 @@ class VisionDaemon:
                 
                 event = {
                     "timestamp": time.time(),
+                    "timestamp_iso": now_iso(self.timezone),
                     "result": "PRESENT",
                     "reason": evaluation.reason,
                     "details": evaluation.details,
