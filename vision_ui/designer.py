@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 import uuid
 from copy import deepcopy
 from dataclasses import dataclass
@@ -441,9 +442,10 @@ class CameraCanvas(QWidget):
             is_active = zone_id == self._active_zone_id
             is_triggered = zone.get("detection", {}).get("triggered", False)
 
-            base_color = QColor(zone.get("color", "#33FF99"))
             if is_triggered:
-                base_color = QColor("#4CAF50")
+                base_color = QColor("#2ECC71")  # Green when active
+            else:
+                base_color = QColor("#F44336")  # Red when inactive
 
             fill_color = QColor(base_color)
             fill_color.setAlpha(80 if is_active else 45)
@@ -606,16 +608,39 @@ class VisionDesignerWidget(QWidget):
         self.scroll_up_btn: Optional[QPushButton] = None
         self.scroll_down_btn: Optional[QPushButton] = None
 
+        self._normal_interval_ms = 1000 // 30
+        self._idle_min_interval_ms = 1000  # 1 FPS baseline for idle preview
+        self._current_timer_interval_ms = self._normal_interval_ms
+        self._last_detection_check = 0.0
+
         self._build_ui()
         self._update_state("watching", {"message": "Watching for triggers"})
 
         # Camera update timer
         self.frame_timer = QTimer(self)
         self.frame_timer.timeout.connect(self._update_frame)
-        self.frame_timer.start(1000 // 30)
+        self.frame_timer.start(self._normal_interval_ms)
 
         # Kick off with initial camera
         self._sync_camera_selection(initial=True)
+
+    # ------------------------------------------------------------------
+    # Timing helpers
+    def _set_timer_interval(self, interval_ms: int):
+        interval_ms = max(25, int(interval_ms))
+        if interval_ms == self._current_timer_interval_ms:
+            return
+        if self.frame_timer.isActive():
+            self.frame_timer.stop()
+        self.frame_timer.start(interval_ms)
+        self._current_timer_interval_ms = interval_ms
+
+    def _adjust_frame_timer(self, state: str, idle_interval: float):
+        if state == "idle":
+            interval_ms = max(int(idle_interval * 1000), self._idle_min_interval_ms)
+        else:
+            interval_ms = self._normal_interval_ms
+        self._set_timer_interval(interval_ms)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -1333,6 +1358,9 @@ class VisionDesignerWidget(QWidget):
         signature = (state, message)
         self._current_state = state
 
+        idle_interval = self._config["trigger"].get("idle_mode", {}).get("interval_seconds", 2.0)
+        self._adjust_frame_timer(state, idle_interval)
+
         if state == "triggered":
             self._apply_state_chip("true")
             self.detection_status.setText(message)
@@ -1525,9 +1553,29 @@ class VisionDesignerWidget(QWidget):
         self._config["camera"]["resolution"] = [width, height]
         self._last_frame = frame.copy()
 
-        # Compute detection metric
-        detection_summary = self._evaluate_detection(frame)
-        self._current_detection_summary = detection_summary
+        now = time.monotonic()
+
+        idle_cfg = self._config["trigger"].get("idle_mode", {})
+        interval = max(float(idle_cfg.get("interval_seconds", 2.0)), 0.0)
+        idle_enabled = idle_cfg.get("enabled", False)
+        effective_interval = (
+            max(interval, self._idle_min_interval_ms / 1000.0) if idle_enabled else interval
+        )
+
+        should_sample = True
+        if idle_enabled and self._current_state != "triggered":
+            if effective_interval > 0 and self._last_detection_check:
+                should_sample = (now - self._last_detection_check) >= effective_interval
+        if not self._current_detection_summary:
+            should_sample = True
+
+        if should_sample:
+            detection_summary = self._evaluate_detection(frame)
+            self._current_detection_summary = detection_summary
+            self._last_detection_check = now
+        else:
+            detection_summary = self._current_detection_summary
+
         triggered_zones = []
         zones = deepcopy(self._config["trigger"]["zones"])
         for zone in zones:
@@ -1540,14 +1588,17 @@ class VisionDesignerWidget(QWidget):
                 "metric": detection_summary.get(f"{zone_id}_metric"),
             }
 
-        idle_cfg = self._config["trigger"].get("idle_mode", {})
-        interval = idle_cfg.get("interval_seconds", 2.0)
+        time_since_last = now - self._last_detection_check if self._last_detection_check else 0.0
+        time_until_next = max(0.0, effective_interval - time_since_last) if idle_enabled else 0.0
 
         if triggered_zones:
             message = "Triggered • " + ", ".join(triggered_zones)
             state = "triggered"
         elif idle_cfg.get("enabled", False):
-            message = f"Idle mode • checking every {interval:.1f}s"
+            message = (
+                f"Idle mode • next check in {time_until_next:.1f}s "
+                f"(every {effective_interval:.1f}s)"
+            )
             state = "idle"
         else:
             message = "Watching for triggers"
@@ -1567,8 +1618,10 @@ class VisionDesignerWidget(QWidget):
         payload = {
             "message": message,
             "zones": triggered_zones,
-            "interval_seconds": interval,
+            "interval_seconds": effective_interval,
+            "configured_interval_seconds": interval,
             "metric": metric_value,
+            "next_check_seconds": time_until_next,
         }
         self._update_state(state, payload)
 
@@ -1663,6 +1716,8 @@ class VisionDesignerWidget(QWidget):
             idle_cfg["interval_seconds"] = 2.0
         self.idle_interval_spin.setEnabled(checked)
         self._apply_idle_toggle_style(checked)
+        if checked:
+            self._last_detection_check = 0.0
         interval = idle_cfg.get("interval_seconds", 2.0)
         message = "Idle mode" if checked else "Watching for triggers"
         if self._current_state != "triggered":
@@ -1674,11 +1729,15 @@ class VisionDesignerWidget(QWidget):
     def _on_idle_interval_changed(self, value: float):
         idle_cfg = self._config["trigger"].setdefault("idle_mode", {})
         idle_cfg["interval_seconds"] = value
-        if idle_cfg.get("enabled", False) and self._current_state != "triggered":
-            self._update_state("idle", {
-                "message": f"Idle mode • checking every {value:.1f}s",
-                "interval_seconds": value,
-            })
+        if idle_cfg.get("enabled", False):
+            self._last_detection_check = 0.0
+            if self._current_state != "triggered":
+                self._update_state("idle", {
+                    "message": f"Idle mode • next check in {value:.1f}s (every {value:.1f}s)",
+                    "interval_seconds": value,
+                })
+            else:
+                self._adjust_frame_timer(self._current_state, value)
 
     def _on_debug_toggled(self, checked: bool):
         if not checked:
