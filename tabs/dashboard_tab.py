@@ -134,11 +134,12 @@ class StatusIndicator(QLabel):
 
 class DashboardTab(QWidget):
     """Main dashboard for robot control (existing UI)"""
-    
-    def __init__(self, config: dict, parent=None, device_manager=None):
+
+    def __init__(self, config: dict, parent=None, device_manager=None, safety_controller=None):
         super().__init__(parent)
         self.config = config
         self.device_manager = device_manager
+        self.safety_controller = safety_controller
         self.worker = None
         self.execution_worker = None  # New unified execution worker
         self.start_time = None
@@ -858,7 +859,8 @@ class DashboardTab(QWidget):
             self.config,
             execution_type,
             execution_name,
-            options or {}
+            options or {},
+            safety_controller=self.safety_controller,
         )
         
         # Connect signals

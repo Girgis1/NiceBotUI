@@ -5,6 +5,7 @@ Motor Controller - Unified interface for motor operations with position verifica
 import time
 from pathlib import Path
 import sys
+from typing import Callable, Optional
 
 # Add parent directory to path to import HomePos
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -81,7 +82,12 @@ class MotorController:
             print(f"[MOTOR] Error reading positions from bus: {e}")
             return []
     
-    def verify_position_reached(self, target_positions: list[int], timeout: float = 5.0) -> tuple[bool, list[int]]:
+    def verify_position_reached(
+        self,
+        target_positions: list[int],
+        timeout: float = 5.0,
+        pause_monitor: Optional[Callable[[], None]] = None,
+    ) -> tuple[bool, list[int]]:
         """Verify motors reached target positions using position feedback
         
         Args:
@@ -102,6 +108,9 @@ class MotorController:
         print(f"[MOTOR] 🎯 Verifying position (tolerance: ±{self.POSITION_TOLERANCE} units)")
         
         while (time.time() - start_time) < timeout:
+            if pause_monitor:
+                pause_monitor()
+
             current_positions = self.read_positions_from_bus()
             
             if not current_positions:
@@ -134,7 +143,10 @@ class MotorController:
                     stable_since = None
             
             last_positions = current_positions
-            time.sleep(self.POLL_INTERVAL)
+            sleep_duration = self.POLL_INTERVAL
+            if pause_monitor:
+                pause_monitor()
+            time.sleep(sleep_duration)
         
         # Timeout reached
         final_positions = self.read_positions_from_bus()
@@ -171,7 +183,14 @@ class MotorController:
                 pass
             self.bus = None
     
-    def set_positions(self, positions: list[int], velocity: int = 600, wait: bool = True, keep_connection: bool = False):
+    def set_positions(
+        self,
+        positions: list[int],
+        velocity: int = 600,
+        wait: bool = True,
+        keep_connection: bool = False,
+        pause_monitor: Optional[Callable[[], None]] = None,
+    ):
         """Set motor positions with velocity and position verification (Option D - Hybrid Approach)
         
         Args:
@@ -193,6 +212,9 @@ class MotorController:
             connected_locally = True
         
         try:
+            if pause_monitor:
+                pause_monitor()
+
             # Read current positions to calculate actual move distance
             current_positions = self.read_positions_from_bus()
             
@@ -209,10 +231,13 @@ class MotorController:
             print(f"[MOTOR] Velocity scale applied: base={velocity}, multiplier={self.speed_multiplier:.2f}, "
                   f"effective={effective_velocity}, acceleration={effective_acceleration}")
             
+            if pause_monitor:
+                pause_monitor()
+
             # Set goal positions
             for idx, name in enumerate(self.motor_names):
                 self.bus.write("Goal_Position", name, positions[idx], normalize=False)
-            
+
             # Wait for movement if requested
             if wait:
                 # OPTION D - HYBRID APPROACH:
@@ -239,11 +264,23 @@ class MotorController:
                 # 3. Wait for 80% of estimated time (let most of move complete)
                 wait_time = total_time * 0.8
                 print(f"[MOTOR] ⏱️ Estimated move time: {total_time:.2f}s, waiting {wait_time:.2f}s before verification")
-                time.sleep(wait_time)
-                
+                if wait_time > 0:
+                    end_time = time.time() + wait_time
+                    while time.time() < end_time:
+                        if pause_monitor:
+                            pause_monitor()
+                        remaining = end_time - time.time()
+                        if remaining <= 0:
+                            break
+                        time.sleep(min(0.05, remaining))
+
                 # 4. Poll position feedback until stable or timeout
                 verification_timeout = max(2.0, total_time * 0.5)  # At least 2s for verification
-                success, final_positions = self.verify_position_reached(positions, timeout=verification_timeout)
+                success, final_positions = self.verify_position_reached(
+                    positions,
+                    timeout=verification_timeout,
+                    pause_monitor=pause_monitor,
+                )
                 
                 if not success:
                     print(f"[MOTOR] ⚠️ Position verification failed - motors may not have reached target")
@@ -257,7 +294,34 @@ class MotorController:
     def move_to_position(self, positions: list[int], velocity: int = 600, wait: bool = True, keep_connection: bool = False):
         """Alias for set_positions (more descriptive name)"""
         self.set_positions(positions, velocity, wait, keep_connection)
-    
+
+    def hold_position(self) -> bool:
+        """Command motors to hold their current position with torque enabled."""
+        if not MOTOR_CONTROL_AVAILABLE:
+            return False
+
+        if not self.bus:
+            if not self.connect():
+                return False
+
+        try:
+            positions = self.read_positions_from_bus()
+            if not positions:
+                positions = self.read_positions()
+            if not positions:
+                return False
+
+            for name in self.motor_names:
+                self.bus.write("Torque_Enable", name, 1, normalize=False)
+
+            for idx, name in enumerate(self.motor_names):
+                self.bus.write("Goal_Position", name, positions[idx], normalize=False)
+
+            return True
+        except Exception as exc:
+            print(f"[MOTOR] ⚠️ Failed to hold position: {exc}")
+            return False
+
     def emergency_stop(self):
         """Emergency stop - disable all motor torque"""
         if not self.bus:

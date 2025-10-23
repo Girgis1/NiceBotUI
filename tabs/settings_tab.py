@@ -24,6 +24,8 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     np = None
 
+from utils.hand_detection import HandDetector, HandDetectionResult
+
 
 class HandDetectionTestDialog(QDialog):
     """Live camera preview with lightweight hand detection overlay."""
@@ -40,9 +42,10 @@ class HandDetectionTestDialog(QDialog):
         self.timer = QTimer(self)
         self.timer.setInterval(120)  # ~8 FPS keeps CPU light
         self.timer.timeout.connect(self._update_frame)
+        self.detector: Optional[HandDetector] = None
 
         self.last_detection: Optional[bool] = None
-        self.last_ratio: float = 0.0
+        self.last_confidence: float = 0.0
         self.detected_any = False
         self.error_message: Optional[str] = None
         self.result_summary = "Camera preview not started."
@@ -51,7 +54,7 @@ class HandDetectionTestDialog(QDialog):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
-        info_label = QLabel("Live feed with simple skin-tone heuristic. Move your hand into view to verify detection.")
+        info_label = QLabel("Live feed with MediaPipe hand detection (falls back to skin-tone heuristic if unavailable). Move your hand into view to verify detection.")
         info_label.setWordWrap(True)
         info_label.setStyleSheet("color: #e0e0e0; font-size: 14px;")
         layout.addWidget(info_label)
@@ -104,6 +107,8 @@ class HandDetectionTestDialog(QDialog):
             self.status_label.setText("❌ No cameras configured. Update camera settings first.")
             print("[SAFETY] Hand detection test aborted — no configured camera sources.")
             return
+
+        self.detector = HandDetector(annotate=True)
 
         initial_index = 0
         if self.source_combo:
@@ -159,20 +164,20 @@ class HandDetectionTestDialog(QDialog):
             self.result_summary = "Frame capture failed."
             return
 
-        detected, ratio, annotated = self._detect_hand(frame)
+        detected, confidence, annotated = self._detect_hand(frame)
 
         if self.last_detection is None or detected != self.last_detection:
             camera_label = self.camera_sources[self.current_source_index][0] if self.current_source_index is not None else "camera"
             state = "DETECTED" if detected else "clear"
-            print(f"[SAFETY] Hand {state} on {camera_label} (ratio {ratio:.2%}).")
+            print(f"[SAFETY] Hand {state} on {camera_label} (confidence {confidence:.2f}).")
 
         self.last_detection = detected
-        self.last_ratio = ratio
+        self.last_confidence = confidence
         if detected:
             self.detected_any = True
 
         state_text = "Hand detected ✅" if detected else "No hand detected"
-        self.status_label.setText(f"{state_text} — skin-like pixels {ratio:.1%}")
+        self.status_label.setText(f"{state_text} — detector confidence {confidence:.1%}")
         self.result_summary = self.status_label.text()
 
         rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
@@ -186,37 +191,13 @@ class HandDetectionTestDialog(QDialog):
         if cv2 is None or np is None:  # pragma: no cover - handled earlier
             return False, 0.0, frame
 
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        lower_a = np.array([0, 30, 60], dtype=np.uint8)
-        upper_a = np.array([20, 150, 255], dtype=np.uint8)
-        lower_b = np.array([170, 30, 60], dtype=np.uint8)
-        upper_b = np.array([180, 150, 255], dtype=np.uint8)
+        if not self.detector:
+            return False, 0.0, frame
 
-        mask_a = cv2.inRange(hsv, lower_a, upper_a)
-        mask_b = cv2.inRange(hsv, lower_b, upper_b)
-        mask = cv2.bitwise_or(mask_a, mask_b)
-        mask = cv2.GaussianBlur(mask, (7, 7), 0)
-        mask = cv2.erode(mask, np.ones((3, 3), np.uint8), iterations=1)
-        mask = cv2.dilate(mask, np.ones((5, 5), np.uint8), iterations=1)
-
-        ratio = float(cv2.countNonZero(mask)) / float(mask.size)
-        detected = ratio >= 0.04
-
-        overlay = frame.copy()
-        overlay[mask > 0] = (0, 0, 255)
-        annotated = cv2.addWeighted(overlay, 0.4, frame, 0.6, 0)
-        cv2.putText(
-            annotated,
-            f"Hand: {'YES' if detected else 'NO'}  ({ratio*100:.1f}% skin)",
-            (10, 28),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (255, 255, 255),
-            2,
-            cv2.LINE_AA
-        )
-
-        return detected, ratio, annotated
+        frame_small = cv2.resize(frame, (320, 240)) if frame.shape[1] > 320 else frame
+        result: HandDetectionResult = self.detector.detect(frame_small, annotate=True)
+        annotated = result.annotated_frame if result.annotated_frame is not None else frame_small
+        return result.detected, result.confidence, annotated
 
     def _release_camera(self):
         if self.cap:
@@ -229,6 +210,8 @@ class HandDetectionTestDialog(QDialog):
     def closeEvent(self, event):  # noqa: D401 - Qt override
         self.timer.stop()
         self._release_camera()
+        if hasattr(self, "detector") and self.detector:
+            self.detector.close()
         super().closeEvent(event)
 
 

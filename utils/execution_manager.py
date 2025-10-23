@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.motor_controller import MotorController
 from utils.actions_manager import ActionsManager
 from utils.sequences_manager import SequencesManager
+from utils.safety_controller import SafetyController
 
 
 class ExecutionWorker(QThread):
@@ -42,7 +43,14 @@ class ExecutionWorker(QThread):
     sequence_step_completed = Signal(int, int, dict) # step_index, total_steps, step data
     vision_state_update = Signal(str, dict)          # state, payload
     
-    def __init__(self, config: dict, execution_type: str, execution_name: str, execution_data: dict = None):
+    def __init__(
+        self,
+        config: dict,
+        execution_type: str,
+        execution_name: str,
+        execution_data: dict = None,
+        safety_controller: Optional[SafetyController] = None,
+    ):
         """
         Args:
             config: Robot configuration
@@ -58,6 +66,9 @@ class ExecutionWorker(QThread):
         self.options = execution_data or {}  # Alias for compatibility
         self._stop_requested = False
         self._last_vision_state_signature = None
+        self.safety_controller = safety_controller
+        self._safety_hold_active = False
+        self._safety_status_logged = False
         
         # Managers
         self.actions_mgr = ActionsManager()
@@ -80,11 +91,51 @@ class ExecutionWorker(QThread):
                 self._execute_model()
             else:
                 raise ValueError(f"Unsupported execution type: {self.execution_type}")
-                
+
         except Exception as e:
             self.log_message.emit('error', f"Execution error: {e}")
             self.execution_completed.emit(False, f"Failed: {e}")
-    
+
+    def _safety_pause_monitor(self):
+        if not self.safety_controller or not self.safety_controller.is_active():
+            return
+
+        if self.safety_controller.is_paused():
+            if not self._safety_hold_active:
+                self.log_message.emit('warning', "[SAFETY] Hand detected - pausing robot")
+                self.status_update.emit("Safety pause: Hand detected")
+                if self.safety_controller.should_hold_position():
+                    try:
+                        held = self.motor_controller.hold_position()
+                        if not held:
+                            self.log_message.emit('warning', "[SAFETY] Unable to hold position")
+                    except Exception as exc:
+                        self.log_message.emit('error', f"[SAFETY] Hold failed: {exc}")
+                self._safety_hold_active = True
+                self._safety_status_logged = True
+
+            waited = self.safety_controller.wait_until_clear()
+            if waited:
+                if self._safety_status_logged:
+                    self.status_update.emit("Safety pause cleared - resuming")
+                self.log_message.emit('info', "[SAFETY] Hand cleared - resuming")
+            self._safety_hold_active = False
+            self._safety_status_logged = False
+        else:
+            if self._safety_hold_active:
+                self._safety_hold_active = False
+
+    def _sleep_with_safety(self, duration: float):
+        if duration <= 0:
+            return
+        end_time = time.time() + duration
+        while not self._stop_requested and time.time() < end_time:
+            self._safety_pause_monitor()
+            remaining = end_time - time.time()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.05, remaining))
+
     def _execute_model(self):
         """Execute a model directly (for Dashboard model runs)"""
         self.log_message.emit('info', f"Loading model: {self.execution_name}")
@@ -185,7 +236,7 @@ class ExecutionWorker(QThread):
             # Delay before step
             if delay_before > 0:
                 self.log_message.emit('info', f"⏱ Waiting {delay_before}s before step...")
-                time.sleep(delay_before)
+                self._sleep_with_safety(delay_before)
             
             # Get component data
             component_data = step.get('component_data', {})
@@ -209,7 +260,7 @@ class ExecutionWorker(QThread):
             # Delay after step
             if delay_after > 0:
                 self.log_message.emit('info', f"⏱ Waiting {delay_after}s after step...")
-                time.sleep(delay_after)
+                self._sleep_with_safety(delay_after)
             
             # Update overall progress
             progress_pct = int(((step_idx + 1) / total_steps) * 100)
@@ -233,16 +284,20 @@ class ExecutionWorker(QThread):
         for idx, point in enumerate(recorded_data):
             if self._stop_requested:
                 break
-            
+
+            self._safety_pause_monitor()
+
+            self._safety_pause_monitor()
+
             positions = point['positions']
             target_timestamp = point['timestamp'] * (100.0 / speed_override)  # Speed scaling
             velocity = int(point.get('velocity', 600) * (speed_override / 100.0))
-            
+
             # Wait until target time
             current_time = time.time() - start_time
             wait_time = target_timestamp - current_time
             if wait_time > 0:
-                time.sleep(wait_time)
+                self._sleep_with_safety(wait_time)
             
             # Update progress (every 10 points to avoid spam)
             if idx % 10 == 0:
@@ -254,7 +309,8 @@ class ExecutionWorker(QThread):
                 positions,
                 velocity=velocity,
                 wait=False,  # Don't wait for live recordings (time-based)
-                keep_connection=True
+                keep_connection=True,
+                pause_monitor=self._safety_pause_monitor,
             )
     
     def _execute_position_component(self, component: dict, speed_override: int):
@@ -271,6 +327,8 @@ class ExecutionWorker(QThread):
         for idx, pos_data in enumerate(positions_list):
             if self._stop_requested:
                 break
+
+            self._safety_pause_monitor()
             
             # Extract position data
             pos_name = pos_data.get("name", f"Position {idx + 1}")
@@ -287,7 +345,8 @@ class ExecutionWorker(QThread):
                 motor_positions,
                 velocity=velocity,
                 wait=wait_for_completion,
-                keep_connection=True
+                keep_connection=True,
+                pause_monitor=self._safety_pause_monitor,
             )
             
             progress = int(((idx + 1) / total_positions) * 100)
@@ -305,6 +364,8 @@ class ExecutionWorker(QThread):
         for idx, pos_data in enumerate(positions_list):
             if self._stop_requested:
                 break
+
+            self._safety_pause_monitor()
             
             # Extract position
             if isinstance(pos_data, dict):
@@ -327,14 +388,15 @@ class ExecutionWorker(QThread):
                 positions,
                 velocity=velocity,
                 wait=True,
-                keep_connection=True
+                keep_connection=True,
+                pause_monitor=self._safety_pause_monitor,
             )
             
             # Apply delay if specified
             delay = delays.get(str(idx), 0)
             if delay > 0:
                 self.log_message.emit('info', f"Delay: {delay}s")
-                time.sleep(delay)
+                self._sleep_with_safety(delay)
     
     def _playback_live_recording(self, recording: dict):
         """Play back a live recording with time-based interpolation"""
@@ -363,7 +425,7 @@ class ExecutionWorker(QThread):
             current_time = time.time() - start_time
             wait_time = target_timestamp - current_time
             if wait_time > 0:
-                time.sleep(wait_time)
+                self._sleep_with_safety(wait_time)
             
             # Update progress (every 10 points to avoid spam)
             if idx % 10 == 0:
@@ -377,7 +439,8 @@ class ExecutionWorker(QThread):
                 positions,
                 velocity=velocity,
                 wait=False,  # Don't wait for live recordings (time-based)
-                keep_connection=True
+                keep_connection=True,
+                pause_monitor=self._safety_pause_monitor,
             )
     
     def _execute_sequence(self):
@@ -434,7 +497,9 @@ class ExecutionWorker(QThread):
                 for idx, step in enumerate(steps):
                     if self._stop_requested:
                         break
-                    
+
+                    self._safety_pause_monitor()
+
                     step_type = step.get("type")
                     step_label = self._describe_step(step_type, step)
                     
@@ -486,7 +551,9 @@ class ExecutionWorker(QThread):
                 
                 if self._stop_requested or not loop:
                     break
-                
+
+                self._safety_pause_monitor()
+
                 self.log_message.emit('info', f"Loop iteration {iteration} completed, repeating...")
         
         finally:
@@ -758,7 +825,7 @@ class ExecutionWorker(QThread):
             if not self.motor_controller.connect():
                 self.log_message.emit('error', "Failed to connect to motors - cannot hold position during delay")
                 # Fall back to regular sleep
-                time.sleep(duration)
+                self._sleep_with_safety(duration)
                 return
         
         try:
@@ -767,7 +834,7 @@ class ExecutionWorker(QThread):
             
             if not current_positions:
                 self.log_message.emit('warning', "Could not read positions - delay without holding")
-                time.sleep(duration)
+                self._sleep_with_safety(duration)
                 return
             
             self.log_message.emit('info', f"Holding position: {current_positions}")
@@ -780,7 +847,9 @@ class ExecutionWorker(QThread):
             while (time.time() - start_time) < duration:
                 if self._stop_requested:
                     break
-                
+
+                self._safety_pause_monitor()
+
                 # Re-send position command to maintain hold
                 try:
                     for idx, motor_name in enumerate(self.motor_controller.motor_names):
@@ -797,7 +866,7 @@ class ExecutionWorker(QThread):
                 remaining = duration - (time.time() - start_time)
                 sleep_time = min(hold_interval, remaining)
                 if sleep_time > 0:
-                    time.sleep(sleep_time)
+                    self._sleep_with_safety(sleep_time)
             
             self.log_message.emit('info', "✓ Delay complete (position held)")
             
@@ -807,7 +876,7 @@ class ExecutionWorker(QThread):
             elapsed = time.time() - start_time if 'start_time' in locals() else 0
             remaining = duration - elapsed
             if remaining > 0:
-                time.sleep(remaining)
+                self._sleep_with_safety(remaining)
     
     def _execute_home_inline(self):
         """Return arm Home"""
@@ -830,7 +899,8 @@ class ExecutionWorker(QThread):
                 home_positions,
                 velocity=home_velocity,
                 wait=True,
-                keep_connection=True
+                keep_connection=True,
+                pause_monitor=self._safety_pause_monitor,
             )
             
             self.log_message.emit('info', "✓ Reached home position")
@@ -1380,7 +1450,10 @@ class ExecutionWorker(QThread):
         self._stop_requested = True
         self._emit_vision_state("clear", {"message": "Vision cancelled"})
         self._reset_vision_tracking()
-        
+
+        if self.safety_controller:
+            self.safety_controller.force_release()
+
         # Emergency stop motors
         if self.motor_controller.bus:
             self.motor_controller.emergency_stop()
