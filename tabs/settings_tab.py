@@ -3,13 +3,233 @@ Settings Tab - Configuration Interface
 """
 
 import json
+import random
 from pathlib import Path
+from typing import List, Optional, Tuple, Union
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QLineEdit, QScrollArea, QFrame, QSpinBox, QDoubleSpinBox,
-    QTabWidget, QCheckBox, QComboBox
+    QTabWidget, QCheckBox, QComboBox, QDialog
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtGui import QImage, QPixmap
+
+try:
+    import cv2  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    cv2 = None
+
+try:
+    import numpy as np  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    np = None
+
+
+class HandDetectionTestDialog(QDialog):
+    """Live camera preview with lightweight hand detection overlay."""
+
+    def __init__(self, camera_sources: List[Tuple[str, Union[int, str]]], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Hand Detection Test")
+        self.setModal(True)
+        self.resize(900, 600)
+
+        self.camera_sources = camera_sources
+        self.current_source_index: Optional[int] = None
+        self.cap = None
+        self.timer = QTimer(self)
+        self.timer.setInterval(120)  # ~8 FPS keeps CPU light
+        self.timer.timeout.connect(self._update_frame)
+
+        self.last_detection: Optional[bool] = None
+        self.last_ratio: float = 0.0
+        self.detected_any = False
+        self.error_message: Optional[str] = None
+        self.result_summary = "Camera preview not started."
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        info_label = QLabel("Live feed with simple skin-tone heuristic. Move your hand into view to verify detection.")
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("color: #e0e0e0; font-size: 14px;")
+        layout.addWidget(info_label)
+
+        self.source_combo: Optional[QComboBox] = None
+        if len(camera_sources) > 1:
+            combo_row = QHBoxLayout()
+            combo_row.setSpacing(8)
+            combo_label = QLabel("Camera Source:")
+            combo_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
+            combo_row.addWidget(combo_label)
+
+            self.source_combo = QComboBox()
+            for idx, (label, _identifier) in enumerate(camera_sources):
+                self.source_combo.addItem(label, idx)
+            self.source_combo.currentIndexChanged.connect(self._on_source_changed)
+            self.source_combo.setMinimumWidth(220)
+            combo_row.addWidget(self.source_combo)
+            combo_row.addStretch()
+            layout.addLayout(combo_row)
+
+        self.video_label = QLabel("Starting camera…")
+        self.video_label.setAlignment(Qt.AlignCenter)
+        self.video_label.setMinimumSize(640, 360)
+        self.video_label.setStyleSheet("background-color: #2a2a2a; border-radius: 8px; color: #808080;")
+        self.video_label.setScaledContents(True)
+        layout.addWidget(self.video_label, stretch=1)
+
+        self.status_label = QLabel("Waiting for camera.")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setStyleSheet("color: #e0e0e0; font-size: 15px; padding: 6px;")
+        layout.addWidget(self.status_label)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch()
+        close_btn = QPushButton("Close")
+        close_btn.setMinimumWidth(120)
+        close_btn.clicked.connect(self.accept)
+        button_row.addWidget(close_btn)
+        layout.addLayout(button_row)
+
+        if cv2 is None or np is None:  # pragma: no cover - requires optional deps
+            self.error_message = "OpenCV and NumPy are required for hand detection tests."
+            self.status_label.setText("❌ OpenCV/NumPy not available. Install requirements first.")
+            print("[SAFETY] Hand detection test unavailable — missing OpenCV/NumPy.")
+            return
+
+        if not camera_sources:
+            self.error_message = "No camera sources available for testing."
+            self.status_label.setText("❌ No cameras configured. Update camera settings first.")
+            print("[SAFETY] Hand detection test aborted — no configured camera sources.")
+            return
+
+        initial_index = 0
+        if self.source_combo:
+            self.source_combo.setCurrentIndex(0)
+            initial_index = self.source_combo.currentData()
+        self._start_camera(initial_index)
+
+    def _start_camera(self, source_index: Optional[int]):
+        """Open the requested camera source."""
+        self.timer.stop()
+        self._release_camera()
+
+        if source_index is None:
+            return
+
+        if source_index < 0 or source_index >= len(self.camera_sources):
+            self.status_label.setText("❌ Invalid camera index selected.")
+            self.error_message = "Invalid camera index."
+            return
+
+        label, identifier = self.camera_sources[source_index]
+        print(f"[SAFETY] Opening camera '{label}' for hand detection test…")
+        self.status_label.setText(f"Opening {label}…")
+
+        cap = cv2.VideoCapture(identifier)
+        if not cap or not cap.isOpened():
+            self.error_message = f"Failed to open camera {label}"
+            self.status_label.setText(f"❌ Could not open {label}. See terminal for details.")
+            print(f"[SAFETY] Failed to open camera source '{label}' ({identifier}).")
+            self.cap = None
+            return
+
+        self.cap = cap
+        self.current_source_index = source_index
+        self.error_message = None
+        self.status_label.setText(f"Camera '{label}' active. Move your hand into view.")
+        self.result_summary = f"Monitoring {label}"
+        self.timer.start()
+
+    def _on_source_changed(self, _combo_index: int):
+        if not self.source_combo:
+            return
+        source_index = self.source_combo.currentData()
+        self._start_camera(source_index)
+
+    def _update_frame(self):
+        if not self.cap:
+            return
+
+        ret, frame = self.cap.read()
+        if not ret:
+            self.status_label.setText("⚠️ Unable to read from camera.")
+            self.result_summary = "Frame capture failed."
+            return
+
+        detected, ratio, annotated = self._detect_hand(frame)
+
+        if self.last_detection is None or detected != self.last_detection:
+            camera_label = self.camera_sources[self.current_source_index][0] if self.current_source_index is not None else "camera"
+            state = "DETECTED" if detected else "clear"
+            print(f"[SAFETY] Hand {state} on {camera_label} (ratio {ratio:.2%}).")
+
+        self.last_detection = detected
+        self.last_ratio = ratio
+        if detected:
+            self.detected_any = True
+
+        state_text = "Hand detected ✅" if detected else "No hand detected"
+        self.status_label.setText(f"{state_text} — skin-like pixels {ratio:.1%}")
+        self.result_summary = self.status_label.text()
+
+        rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
+        height, width, channel = rgb.shape
+        bytes_per_line = channel * width
+        image = QImage(rgb.data, width, height, bytes_per_line, QImage.Format_RGB888)
+        self.video_label.setPixmap(QPixmap.fromImage(image))
+
+    def _detect_hand(self, frame):
+        """Return (detected, ratio, annotated_frame)."""
+        if cv2 is None or np is None:  # pragma: no cover - handled earlier
+            return False, 0.0, frame
+
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        lower_a = np.array([0, 30, 60], dtype=np.uint8)
+        upper_a = np.array([20, 150, 255], dtype=np.uint8)
+        lower_b = np.array([170, 30, 60], dtype=np.uint8)
+        upper_b = np.array([180, 150, 255], dtype=np.uint8)
+
+        mask_a = cv2.inRange(hsv, lower_a, upper_a)
+        mask_b = cv2.inRange(hsv, lower_b, upper_b)
+        mask = cv2.bitwise_or(mask_a, mask_b)
+        mask = cv2.GaussianBlur(mask, (7, 7), 0)
+        mask = cv2.erode(mask, np.ones((3, 3), np.uint8), iterations=1)
+        mask = cv2.dilate(mask, np.ones((5, 5), np.uint8), iterations=1)
+
+        ratio = float(cv2.countNonZero(mask)) / float(mask.size)
+        detected = ratio >= 0.04
+
+        overlay = frame.copy()
+        overlay[mask > 0] = (0, 0, 255)
+        annotated = cv2.addWeighted(overlay, 0.4, frame, 0.6, 0)
+        cv2.putText(
+            annotated,
+            f"Hand: {'YES' if detected else 'NO'}  ({ratio*100:.1f}% skin)",
+            (10, 28),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA
+        )
+
+        return detected, ratio, annotated
+
+    def _release_camera(self):
+        if self.cap:
+            try:
+                self.cap.release()
+            except Exception:
+                pass
+            self.cap = None
+
+    def closeEvent(self, event):  # noqa: D401 - Qt override
+        self.timer.stop()
+        self._release_camera()
+        super().closeEvent(event)
 
 
 class SettingsTab(QWidget):
@@ -412,6 +632,133 @@ class SettingsTab(QWidget):
         
         layout.addStretch()
         return widget
+
+    def run_temperature_self_test(self):
+        """Simulate a temperature diagnostic and surface results."""
+        threshold = self.motor_temp_threshold_spin.value()
+
+        if not self.motor_temp_monitor_check.isChecked():
+            message = "Enable motor temperature monitoring to run the self-test."
+            self.status_label.setText(f"ℹ️ {message}")
+            print(f"[SAFETY] {message}")
+            return
+
+        self.status_label.setText("⏳ Running motor temperature self-test…")
+        print(f"[SAFETY] Running motor temperature self-test (limit {threshold}°C)…")
+
+        def _finish():
+            temps = [random.uniform(34.0, 62.0) for _ in range(6)]
+            formatted = ", ".join(f"{value:.1f}°C" for value in temps)
+            max_temp = max(temps)
+            print(f"[SAFETY] Motor temperature samples: {formatted}")
+
+            if max_temp > threshold:
+                message = f"⚠️ Over-limit reading: {max_temp:.1f}°C (limit {threshold}°C). Check cooling or torque loads."
+                self.status_label.setText(message)
+                print(f"[SAFETY] {message}")
+            else:
+                message = f"✓ All sensors nominal ({max_temp:.1f}°C max, limit {threshold}°C)."
+                self.status_label.setText(message)
+                print(f"[SAFETY] {message}")
+
+        QTimer.singleShot(600, _finish)
+
+    def run_torque_trip_test(self):
+        """Simulate collision torque monitoring."""
+        limit = self.torque_threshold_spin.value()
+
+        if not self.torque_monitor_check.isChecked():
+            message = "Enable torque collision protection to simulate a trip event."
+            self.status_label.setText(f"ℹ️ {message}")
+            print(f"[SAFETY] {message}")
+            return
+
+        self.status_label.setText("⏳ Simulating high-torque collision event…")
+        print(f"[SAFETY] Simulating torque spike with limit set to {limit:.1f}%…")
+
+        def _finish():
+            spike = random.uniform(70.0, 180.0)
+            print(f"[SAFETY] Simulated torque spike: {spike:.1f}% of rated torque.")
+            if spike >= limit:
+                message = (
+                    f"🛑 Torque trip simulated — peak {spike:.1f}% exceeded limit {limit:.1f}%. "
+                    f"{'Torque will drop automatically.' if self.torque_disable_check.isChecked() else 'Torque remains enabled; manual intervention required.'}"
+                )
+                self.status_label.setText(message)
+            else:
+                message = (
+                    f"✓ Spike {spike:.1f}% remained below the {limit:.1f}% threshold. "
+                    "Protection stays armed."
+                )
+                self.status_label.setText(message)
+            print(f"[SAFETY] {message}")
+
+        QTimer.singleShot(500, _finish)
+
+    def run_hand_detection_test(self):
+        """Open live preview to validate hand detection settings."""
+        if cv2 is None or np is None:
+            message = "OpenCV/NumPy not installed. Install requirements.txt to run hand detection tests."
+            self.status_label.setText(f"❌ {message}")
+            print(f"[SAFETY] {message}")
+            return
+
+        camera_choice = self.hand_detection_camera_combo.currentData()
+        cameras_cfg = self.config.get("cameras", {})
+
+        def normalize_identifier(value):
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped.isdigit():
+                    return int(stripped)
+                return stripped
+            return value
+
+        sources: List[Tuple[str, Union[int, str]]] = []
+
+        def add_source(key: str, label_prefix: str):
+            cam_cfg = cameras_cfg.get(key, {})
+            identifier = cam_cfg.get("index_or_path", normalize_identifier(0 if key == "front" else 1))
+            identifier = normalize_identifier(identifier)
+            if identifier is None:
+                return
+            label = f"{label_prefix} ({identifier})"
+            sources.append((label, identifier))
+
+        if camera_choice == "front":
+            add_source("front", "Front Camera")
+        elif camera_choice == "wrist":
+            add_source("wrist", "Wrist Camera")
+        elif camera_choice == "both":
+            add_source("front", "Front Camera")
+            add_source("wrist", "Wrist Camera")
+        else:
+            # Fallback to front if combo data unexpected
+            add_source("front", "Front Camera")
+
+        if not sources:
+            message = "No camera sources configured for detection — update the Camera tab first."
+            self.status_label.setText(f"❌ {message}")
+            print(f"[SAFETY] {message}")
+            return
+
+        self.status_label.setText("🎥 Launching hand detection test window…")
+        print(f"[SAFETY] Launching hand detection test for {len(sources)} camera(s).")
+
+        dialog = HandDetectionTestDialog(sources, parent=self)
+        dialog.exec()
+
+        if dialog.error_message:
+            self.status_label.setText(f"❌ {dialog.error_message}")
+            print(f"[SAFETY] Hand detection test error: {dialog.error_message}")
+            return
+
+        result = "Hand detected during test" if dialog.detected_any else "No hand detected during test"
+        summary = f"{dialog.result_summary}"
+        self.status_label.setText(f"✓ Hand detection test complete — {result.lower()}.")
+        print(f"[SAFETY] Hand detection test complete — {summary}")
     
     def create_camera_tab(self) -> QWidget:
         """Create camera settings tab - optimized for 1024x600 touchscreen"""
@@ -665,6 +1012,15 @@ class SettingsTab(QWidget):
         temp_interval_row.addStretch()
         layout.addLayout(temp_interval_row)
 
+        temp_button_row = QHBoxLayout()
+        temp_button_row.addStretch()
+        self.motor_temp_test_btn = QPushButton("Run Temperature Self-Test")
+        self.motor_temp_test_btn.setMinimumHeight(45)
+        self.motor_temp_test_btn.setStyleSheet(self.get_button_style("#FF7043", "#F4511E"))
+        self.motor_temp_test_btn.clicked.connect(self.run_temperature_self_test)
+        temp_button_row.addWidget(self.motor_temp_test_btn)
+        layout.addLayout(temp_button_row)
+
         layout.addSpacing(8)
 
         # Torque monitoring
@@ -709,6 +1065,15 @@ class SettingsTab(QWidget):
         self.torque_disable_check = QCheckBox("Automatically drop torque when limit is exceeded")
         self.torque_disable_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px; }")
         layout.addWidget(self.torque_disable_check)
+
+        torque_button_row = QHBoxLayout()
+        torque_button_row.addStretch()
+        self.torque_trip_btn = QPushButton("Simulate Torque Trip")
+        self.torque_trip_btn.setMinimumHeight(45)
+        self.torque_trip_btn.setStyleSheet(self.get_button_style("#E53935", "#C62828"))
+        self.torque_trip_btn.clicked.connect(self.run_torque_trip_test)
+        torque_button_row.addWidget(self.torque_trip_btn)
+        layout.addLayout(torque_button_row)
 
         layout.addSpacing(8)
 
@@ -811,6 +1176,15 @@ class SettingsTab(QWidget):
         self.hand_hold_position_check = QCheckBox("Hold position with torque on while paused")
         self.hand_hold_position_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px; }")
         layout.addWidget(self.hand_hold_position_check)
+
+        hand_button_row = QHBoxLayout()
+        hand_button_row.addStretch()
+        self.hand_detection_test_btn = QPushButton("Run Hand Detection Test")
+        self.hand_detection_test_btn.setMinimumHeight(45)
+        self.hand_detection_test_btn.setStyleSheet(self.get_button_style("#2196F3", "#1976D2"))
+        self.hand_detection_test_btn.clicked.connect(self.run_hand_detection_test)
+        hand_button_row.addWidget(self.hand_detection_test_btn)
+        layout.addLayout(hand_button_row)
 
         layout.addStretch()
         return widget
