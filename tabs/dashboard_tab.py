@@ -332,14 +332,25 @@ class DashboardTab(QWidget):
         self.camera_order: List[str] = list(self.config.get("cameras", {}).keys())
         self.preview_caps: Dict[str, Optional['cv2.VideoCapture']] = {}
         self.vision_zones = self._load_vision_zones()
+        self._robot_status = "empty"
+        self._robot_total = 1 if self.config.get("robot") else 0
+        self._camera_status: Dict[str, str] = {
+            name: "empty" for name in self.camera_order
+        }
+        self.robot_indicator1: Optional[StatusIndicator] = None
+        self.robot_indicator2: Optional[StatusIndicator] = None
+        self.camera_indicator1: Optional[StatusIndicator] = None
+        self.camera_indicator2: Optional[StatusIndicator] = None
+        self.camera_indicator3: Optional[StatusIndicator] = None
+        self.camera_front_circle: Optional[StatusIndicator] = None
+        self.camera_wrist_circle: Optional[StatusIndicator] = None
+        self.compact_throbber: Optional[CircularProgress] = None
 
         self.camera_preview_timer = QTimer(self)
         self.camera_preview_timer.timeout.connect(self.update_camera_previews)
         
-        # Status circle widget (will be set during init_ui)
-        self.robot_status_circle = None
-        
         self.init_ui()
+        self._update_status_summaries()
         self.validate_config()
         
         # Connect device manager signals if available
@@ -372,8 +383,13 @@ class DashboardTab(QWidget):
         status_bar = QHBoxLayout()
         status_bar.setSpacing(18)
 
+        self.normal_status_container = QWidget()
+        normal_status_layout = QHBoxLayout(self.normal_status_container)
+        normal_status_layout.setSpacing(18)
+        normal_status_layout.setContentsMargins(0, 0, 0, 0)
+
         self.throbber = CircularProgress()
-        status_bar.addWidget(self.throbber)
+        normal_status_layout.addWidget(self.throbber)
 
         robot_group = QHBoxLayout()
         robot_group.setSpacing(6)
@@ -386,7 +402,8 @@ class DashboardTab(QWidget):
         self.robot_indicator2 = StatusIndicator()
         self.robot_indicator2.set_null()
         robot_group.addWidget(self.robot_indicator2)
-        status_bar.addLayout(robot_group)
+        normal_status_layout.addLayout(robot_group)
+
         self.robot_status_circle = self.robot_indicator1
 
         camera_group = QHBoxLayout()
@@ -403,9 +420,33 @@ class DashboardTab(QWidget):
         self.camera_indicator3 = StatusIndicator()
         self.camera_indicator3.set_null()
         camera_group.addWidget(self.camera_indicator3)
-        status_bar.addLayout(camera_group)
+        normal_status_layout.addLayout(camera_group)
+
         self.camera_front_circle = self.camera_indicator1
         self.camera_wrist_circle = self.camera_indicator2
+
+        status_bar.addWidget(self.normal_status_container, stretch=0)
+
+        self.status_summary_container = QWidget()
+        summary_layout = QVBoxLayout(self.status_summary_container)
+        summary_layout.setSpacing(2)
+        summary_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.compact_throbber = CircularProgress()
+        summary_layout.addWidget(self.compact_throbber, alignment=Qt.AlignHCenter)
+
+        self.robot_summary_label = QLabel("R:0/1")
+        self.robot_summary_label.setAlignment(Qt.AlignCenter)
+        self.robot_summary_label.setStyleSheet("color: #a0a0a0; font-size: 11px; font-weight: bold;")
+        summary_layout.addWidget(self.robot_summary_label)
+
+        self.camera_summary_label = QLabel("C:0/0")
+        self.camera_summary_label.setAlignment(Qt.AlignCenter)
+        self.camera_summary_label.setStyleSheet("color: #a0a0a0; font-size: 11px; font-weight: bold;")
+        summary_layout.addWidget(self.camera_summary_label)
+
+        self.status_summary_container.hide()
+        status_bar.addWidget(self.status_summary_container, stretch=0)
 
         self.time_label = QLabel("00:00")
         self.time_label.setStyleSheet("color: #4CAF50; font-size: 12px; font-weight: bold; font-family: monospace;")
@@ -437,6 +478,7 @@ class DashboardTab(QWidget):
         self.camera_toggle_btn = QPushButton("Cameras")
         self.camera_toggle_btn.setCheckable(True)
         self.camera_toggle_btn.setMinimumHeight(85)
+        self.camera_toggle_btn.setMaximumHeight(85)
         self.camera_toggle_btn.setStyleSheet("""
             QPushButton {
                 background-color: #404040;
@@ -445,8 +487,7 @@ class DashboardTab(QWidget):
                 border-radius: 6px;
                 font-size: 18px;
                 font-weight: bold;
-                padding: 0 14px;
-                min-width: 150px;
+                padding: 0 12px;
             }
             QPushButton:hover {
                 background-color: #4a4a4a;
@@ -461,6 +502,9 @@ class DashboardTab(QWidget):
             }
         """)
         self.camera_toggle_btn.toggled.connect(self.on_camera_toggle)
+        self._camera_toggle_default_width = 150
+        self.camera_toggle_btn.setMinimumWidth(self._camera_toggle_default_width)
+        self.camera_toggle_btn.setMaximumWidth(self._camera_toggle_default_width)
         run_layout.addWidget(self.camera_toggle_btn)
         self.camera_toggle_btn.setEnabled(bool(self.camera_order))
 
@@ -774,6 +818,13 @@ class DashboardTab(QWidget):
         self.run_combo.blockSignals(False)
         self.camera_order = list(self.config.get("cameras", {}).keys())
         self.vision_zones = self._load_vision_zones()
+        self._robot_total = 1 if self.config.get("robot") else 0
+        # Sync tracked camera statuses with current configuration
+        for name in list(self._camera_status.keys()):
+            if name not in self.camera_order:
+                self._camera_status.pop(name)
+        for name in self.camera_order:
+            self._camera_status.setdefault(name, "empty")
 
         self._release_preview_caps()
         self._rebuild_camera_panel()
@@ -782,6 +833,7 @@ class DashboardTab(QWidget):
             for name, tile in self.camera_tiles.items():
                 default_state = "idle" if name in self.vision_zones else "no_vision"
                 tile.set_status(default_state)
+        self._update_status_summaries()
 
     def _refresh_loop_button(self):
         if self.loop_enabled:
@@ -849,9 +901,7 @@ class DashboardTab(QWidget):
             except Exception:
                 pass
 
-        if self._speed_initialized:
-            self.log_text.append(f"[info] Speed override set to {aligned}%")
-        else:
+        if not self._speed_initialized:
             self._speed_initialized = True
 
     def _rebuild_camera_panel(self):
@@ -886,7 +936,13 @@ class DashboardTab(QWidget):
 
     def on_camera_toggle(self, checked: bool):
         # Update button text (red with X when open)
-        self.camera_toggle_btn.setText("✕ Close Cameras" if checked else "Cameras")
+        self.camera_toggle_btn.setText("✕" if checked else "Cameras")
+        if checked:
+            self.camera_toggle_btn.setMinimumWidth(85)
+            self.camera_toggle_btn.setMaximumWidth(85)
+        else:
+            self.camera_toggle_btn.setMinimumWidth(self._camera_toggle_default_width)
+            self.camera_toggle_btn.setMaximumWidth(self._camera_toggle_default_width)
         if checked:
             self.enter_camera_mode()
         else:
@@ -900,18 +956,15 @@ class DashboardTab(QWidget):
             self.camera_toggle_btn.blockSignals(True)
             self.camera_toggle_btn.setChecked(False)
             self.camera_toggle_btn.blockSignals(False)
+            self.camera_toggle_btn.setMinimumWidth(self._camera_toggle_default_width)
+            self.camera_toggle_btn.setMaximumWidth(self._camera_toggle_default_width)
             return
         
         # Hide status bar text labels and timer when cameras open
-        self.robot_lbl.hide()
-        self.camera_lbl.hide()
+        self.normal_status_container.hide()
+        self.status_summary_container.show()
         self.time_label.hide()
         self.run_label.hide()
-        
-        # Make status indicators smaller (more compact)
-        for indicator in [self.robot_indicator1, self.robot_indicator2, 
-                          self.camera_indicator1, self.camera_indicator2, self.camera_indicator3]:
-            indicator.setFixedSize(16, 16)
         
         self._rebuild_camera_panel()
         self.camera_panel.setVisible(True)
@@ -928,15 +981,12 @@ class DashboardTab(QWidget):
             return
         
         # Restore status bar text labels and timer
-        self.robot_lbl.show()
-        self.camera_lbl.show()
+        self.status_summary_container.hide()
+        self.normal_status_container.show()
         self.time_label.show()
         self.run_label.show()
-        
-        # Restore status indicators to normal size
-        for indicator in [self.robot_indicator1, self.robot_indicator2, 
-                          self.camera_indicator1, self.camera_indicator2, self.camera_indicator3]:
-            indicator.setFixedSize(20, 20)
+        self.camera_toggle_btn.setMinimumWidth(self._camera_toggle_default_width)
+        self.camera_toggle_btn.setMaximumWidth(self._camera_toggle_default_width)
         
         self.camera_view_active = False
         self.camera_preview_timer.stop()
@@ -946,6 +996,13 @@ class DashboardTab(QWidget):
             tile.update_pixmap(None)
             default_state = "idle" if name in self.vision_zones else "nominal"
             tile.set_status(default_state)
+
+    def close_camera_panel(self):
+        """Close camera preview if it's currently open."""
+        if self.camera_toggle_btn.isChecked():
+            self.camera_toggle_btn.setChecked(False)
+        elif self.camera_view_active:
+            self.exit_camera_mode()
 
     def _load_vision_zones(self) -> Dict[str, List[dict]]:
         zones_map: Dict[str, List[dict]] = {}
@@ -1277,6 +1334,8 @@ class DashboardTab(QWidget):
         if self.throbber_progress > 100:
             self.throbber_progress = 0
         self.throbber.set_progress(self.throbber_progress)
+        if self.compact_throbber:
+            self.compact_throbber.set_progress(self.throbber_progress)
     
     def check_connections_background(self):
         """Check connections - now handled by device_manager"""
@@ -1708,12 +1767,17 @@ class DashboardTab(QWidget):
         Args:
             status: "empty", "online", or "offline"
         """
-        if status == "empty":
-            self.robot_status_circle.set_null()
-        elif status == "online":
-            self.robot_status_circle.set_connected(True)
-        else:  # offline
-            self.robot_status_circle.set_connected(False)
+        if self.robot_indicator1:
+            if status == "empty":
+                self.robot_indicator1.set_null()
+                if self.robot_indicator2:
+                    self.robot_indicator2.set_null()
+            elif status == "online":
+                self.robot_indicator1.set_connected(True)
+            else:
+                self.robot_indicator1.set_connected(False)
+        self._robot_status = status
+        self._update_status_summaries()
     
     def on_camera_status_changed(self, camera_name: str, status: str):
         """Handle camera status change from device manager
@@ -1722,20 +1786,30 @@ class DashboardTab(QWidget):
             camera_name: "front" or "wrist"
             status: "empty", "online", or "offline"
         """
-        if camera_name == "front":
+        if camera_name == "front" and self.camera_front_circle:
             if status == "empty":
                 self.camera_front_circle.set_null()
             elif status == "online":
                 self.camera_front_circle.set_connected(True)
-            else:  # offline
+            else:
                 self.camera_front_circle.set_connected(False)
-        elif camera_name == "wrist":
+        elif camera_name == "wrist" and self.camera_wrist_circle:
             if status == "empty":
                 self.camera_wrist_circle.set_null()
             elif status == "online":
                 self.camera_wrist_circle.set_connected(True)
-            else:  # offline
+            else:
                 self.camera_wrist_circle.set_connected(False)
+        elif self.camera_indicator3 and camera_name not in {"front", "wrist"}:
+            if status == "empty":
+                self.camera_indicator3.set_null()
+            elif status == "online":
+                self.camera_indicator3.set_connected(True)
+            else:
+                self.camera_indicator3.set_connected(False)
+
+        self._camera_status[camera_name] = status
+        self._update_status_summaries()
 
         tile = self.camera_tiles.get(camera_name)
         if tile:
@@ -1749,6 +1823,18 @@ class DashboardTab(QWidget):
             else:
                 tile.set_status("offline")
                 tile.update_pixmap(None)
+
+    def _update_status_summaries(self):
+        """Update compact status summary labels."""
+        if not hasattr(self, "robot_summary_label") or not hasattr(self, "camera_summary_label"):
+            return
+
+        robot_online = 1 if self._robot_status == "online" else 0
+        self.robot_summary_label.setText(f"R:{robot_online}/{self._robot_total}")
+
+        camera_total = len(self._camera_status)
+        camera_online = sum(1 for state in self._camera_status.values() if state == "online")
+        self.camera_summary_label.setText(f"C:{camera_online}/{camera_total}")
     
     def on_discovery_log(self, message: str):
         """Handle discovery log messages from device manager

@@ -208,6 +208,10 @@ class MainWindow(QMainWindow):
     
     def switch_tab(self, index: int):
         """Switch to a different tab"""
+        previous_index = self.content_stack.currentIndex()
+        if previous_index == 0 and index != 0 and hasattr(self, "dashboard_tab"):
+            self.dashboard_tab.close_camera_panel()
+
         self.content_stack.setCurrentIndex(index)
         # Update button states
         if index == 0:
