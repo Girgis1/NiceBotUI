@@ -68,6 +68,16 @@ class ExecutionWorker(QThread):
         self.motor_controller = MotorController(config)
         self.speed_multiplier = config.get("control", {}).get("speed_multiplier", 1.0)
         self.motor_controller.speed_multiplier = self.speed_multiplier
+
+        # Emergency torque hold support (graceful if unavailable)
+        self._emergency_hold_fn = None
+        self._emergency_hold_error = None
+        self._emergency_hold_warned = False
+        try:
+            from HomePos import emergency_catch_and_hold  # pylint: disable=import-error
+            self._emergency_hold_fn = emergency_catch_and_hold
+        except Exception as exc:  # noqa: BLE001 - we want the reason for diagnostics
+            self._emergency_hold_error = str(exc)
         
         # Safety monitoring
         self.safety_monitor: Optional[HandSafetyMonitor] = None
@@ -942,14 +952,14 @@ class ExecutionWorker(QThread):
             if not self.motor_controller.connect():
                 self.log_message.emit('error', "Failed to connect to motors")
                 return
-        
+
         # Get home position from config (rest_position, not home_position!)
         rest_config = self.config.get("rest_position", {})
         home_positions = rest_config.get("positions", [2048, 2048, 2048, 2048, 2048, 2048])
         home_velocity = rest_config.get("velocity", 600)
-        
+
         self.log_message.emit('info', f"Moving to home position: {home_positions}")
-        
+
         try:
             # Move to home position
             self.motor_controller.set_positions(
@@ -958,11 +968,33 @@ class ExecutionWorker(QThread):
                 wait=True,
                 keep_connection=True
             )
-            
+
             self.log_message.emit('info', "✓ Reached home position")
-            
+
         except Exception as e:
             self.log_message.emit('error', f"Failed to reach home: {e}")
+
+    def _stabilize_arm_after_model(self, context: str = "") -> bool:
+        """Re-enable torque and hold current pose after model execution."""
+
+        if not self._emergency_hold_fn:
+            if not self._emergency_hold_warned:
+                details = f" ({self._emergency_hold_error})" if self._emergency_hold_error else ""
+                self.log_message.emit('warning', f"Emergency torque hold unavailable{details}")
+                self._emergency_hold_warned = True
+            return False
+
+        try:
+            success, positions = self._emergency_hold_fn()
+            if success:
+                suffix = f" ({context})" if context else ""
+                self.log_message.emit('info', f"Torque hold engaged after model{suffix}: {positions}")
+            else:
+                self.log_message.emit('warning', "Failed to engage torque hold after model run")
+            return success
+        except Exception as exc:  # noqa: BLE001 - propagate details for diagnostics
+            self.log_message.emit('warning', f"Emergency torque hold failed: {exc}")
+            return False
     
     def _start_policy_server(self, task: str, checkpoint: str):
         """Start policy server and return process (for use in sequences)
@@ -1027,16 +1059,20 @@ class ExecutionWorker(QThread):
         import time
         from pathlib import Path
         
+        robot_process = None
+        model_started = False
+        completed_normally = False
+
         try:
             # Get checkpoint path
             train_dir = Path(self.config["policy"].get("base_path", ""))
             checkpoint_path = train_dir / task / "checkpoints" / checkpoint / "pretrained_model"
-            
+
             # Build robot client command
             robot_cmd = self._build_robot_client_cmd(checkpoint_path)
-            
+
             self.log_message.emit('info', "Starting robot client...")
-            
+
             # Start robot client
             robot_process = subprocess.Popen(
                 robot_cmd,
@@ -1045,17 +1081,18 @@ class ExecutionWorker(QThread):
                 text=True,
                 bufsize=1
             )
-            
+
             # Wait for client to connect
             time.sleep(2)
-            
+
             # Check if client started successfully
             if robot_process.poll() is not None:
                 self.log_message.emit('error', "Robot client failed to start")
                 return
-            
+
+            model_started = True
             self.log_message.emit('info', f"✓ Model running for {duration}s")
-            
+
             # Run for specified duration (check for stop every second)
             start_time = time.time()
             while time.time() - start_time < duration:
@@ -1063,22 +1100,32 @@ class ExecutionWorker(QThread):
                     self.log_message.emit('info', "Model execution stopped by user")
                     break
                 time.sleep(0.5)
-            
-            # Stop robot client (keep policy server running)
-            self.log_message.emit('info', "Stopping robot client...")
-            robot_process.terminate()
-            robot_process.wait(5)
-            
-            # Force kill if still running
-            if robot_process.poll() is None:
-                robot_process.kill()
-            
-            self.log_message.emit('info', "✓ Model execution completed")
-            
+
+            completed_normally = not self._stop_requested
+
         except Exception as e:
             self.log_message.emit('error', f"Model execution failed: {e}")
             import traceback
             traceback.print_exc()
+        finally:
+            if robot_process:
+                try:
+                    robot_process.terminate()
+                    robot_process.wait(5)
+                except subprocess.TimeoutExpired:
+                    self.log_message.emit('warning', "Force killing robot client...")
+                    robot_process.kill()
+                    robot_process.wait()
+                except Exception as exc:  # noqa: BLE001 - ensure cleanup continues
+                    self.log_message.emit('warning', f"Robot client cleanup error: {exc}")
+
+            if model_started:
+                if completed_normally:
+                    self.log_message.emit('info', "✓ Model execution completed")
+                self._stabilize_arm_after_model("policy server client")
+                if not self._stop_requested:
+                    self.log_message.emit('info', "Returning to home position...")
+                    self._execute_home_inline()
     
     def _cleanup_eval_folders(self, verbose: bool = True):
         """Clean up all eval folders to prevent naming conflicts
@@ -1166,19 +1213,22 @@ class ExecutionWorker(QThread):
     
     def _run_single_episode(self, task: str, checkpoint: str, duration: float) -> bool:
         """Run a single episode of model execution
-        
+
         Returns:
             bool: True if successful, False if failed
         """
+        process = None
+        output_thread = None
+
         try:
             # Get checkpoint path
             train_dir = Path(self.config["policy"].get("base_path", ""))
             checkpoint_path = train_dir / task / "checkpoints" / checkpoint / "pretrained_model"
-            
+
             if not checkpoint_path.exists():
                 self.log_message.emit('error', f"Model not found: {checkpoint_path}")
                 return False
-            
+
             # Build camera config string
             robot_config = self.config.get("robot", {})
             cameras = self.config.get("cameras", {})  # Cameras are at TOP LEVEL in config!
@@ -1188,19 +1238,19 @@ class ExecutionWorker(QThread):
                 cam_path = cam_config.get('index_or_path', cam_config.get('path', '/dev/video0'))
                 camera_str += f"{cam_name}: {{type: opencv, index_or_path: {cam_path}, width: {cam_config['width']}, height: {cam_config['height']}, fps: {cam_config['fps']}}}, "
             camera_str = camera_str.rstrip(", ") + " }"
-            
+
             # Get lerobot working directory
             lerobot_dir = Path.home() / "lerobot"
             if not lerobot_dir.exists():
                 lerobot_dir = Path("/home/daniel/lerobot")  # Fallback
-            
+
             # Generate random dataset name to avoid FileExistsError
             # Format: eval_23879584732 (11 random digits)
             random_id = ''.join(random.choices(string.digits, k=11))
             dataset_name = f"local/eval_{random_id}"
-            
+
             self.log_message.emit('info', f"Starting episode (dataset: {dataset_name})")
-            
+
             # Build command using lerobot-record CLI
             # ALWAYS run 1 episode at a time (looping is handled by _execute_model_local)
             cmd = [
@@ -1218,29 +1268,25 @@ class ExecutionWorker(QThread):
                 "--resume=false",
                 f"--policy.path={checkpoint_path}"
             ]
-            
+
             # Check if we have permissions to access the robot port
             robot_port = robot_config.get('port', '/dev/ttyACM0')
             if not Path(robot_port).exists():
                 self.log_message.emit('error', f"Robot port not found: {robot_port}")
                 self.log_message.emit('error', "Make sure the robot is connected")
                 return False
-            
+
             try:
                 # Test if we can access the port
-                test_result = subprocess.run(['test', '-r', robot_port, '-a', '-w', robot_port], 
+                test_result = subprocess.run(['test', '-r', robot_port, '-a', '-w', robot_port],
                                             capture_output=True, timeout=1)
                 if test_result.returncode != 0:
                     self.log_message.emit('warning', f"No permission to access {robot_port}")
                     self.log_message.emit('warning', f"Run: sudo chmod 666 {robot_port}")
                     # Continue anyway - lerobot might handle this
-            except:
+            except Exception:  # noqa: BLE001 - permissions probe best effort
                 pass  # If test fails, continue anyway
-            
-            # Log the actual command for debugging (only first time)
-            # cmd_str = " ".join(cmd)
-            # print(f"[EXEC] Full command:\n{cmd_str}")
-            
+
             # Start process with correct working directory
             process = subprocess.Popen(
                 cmd,
@@ -1250,10 +1296,11 @@ class ExecutionWorker(QThread):
                 bufsize=1,
                 cwd=str(lerobot_dir)  # Run from lerobot directory
             )
-            
+
             # Read and log output in real-time
             # This is CRITICAL - we must consume the pipe or it will block!
             output_lines = []
+
             def read_output():
                 """Read subprocess output line by line"""
                 try:
@@ -1271,19 +1318,19 @@ class ExecutionWorker(QThread):
                                 self.log_message.emit('error', f"[lerobot] {line.split('ERROR')[-1].strip()}")
                             elif 'Traceback' in line:
                                 self.log_message.emit('error', f"[lerobot] {line}")
-                except Exception as e:
-                    self.log_message.emit('warning', f"Output reading error: {e}")
+                except Exception as exc:  # noqa: BLE001 - best effort logging
+                    self.log_message.emit('warning', f"Output reading error: {exc}")
                 finally:
                     if process.stdout:
                         process.stdout.close()
-            
+
             # Start output reader thread
             output_thread = threading.Thread(target=read_output, daemon=True)
             output_thread.start()
-            
+
             # Wait a moment for process to start
             time.sleep(2)
-            
+
             # Check if process started successfully
             if process.poll() is not None:
                 exit_code = process.returncode
@@ -1293,17 +1340,17 @@ class ExecutionWorker(QThread):
                 for line in output_lines[-10:]:
                     print(f"[lerobot] {line}")
                 return False
-            
+
             # Calculate total runtime (1 episode * episode_time + buffer)
             total_time = duration + 10  # 10s buffer for startup/shutdown
-            
+
             # Wait for process to complete or timeout
             start_time = time.time()
             while time.time() - start_time < total_time:
                 if self._stop_requested:
                     self.log_message.emit('warning', "Stopping by user request...")
                     break
-                
+
                 # Check if process finished
                 if process.poll() is not None:
                     exit_code = process.returncode
@@ -1314,13 +1361,11 @@ class ExecutionWorker(QThread):
                         # Print last few lines of output
                         for line in output_lines[-10:]:
                             print(f"[lerobot] {line}")
-                        # Wait for output thread
-                        output_thread.join(timeout=2)
                         return False
                     break
-                
+
                 time.sleep(0.5)
-            
+
             # If still running, terminate it
             if process.poll() is None:
                 self.log_message.emit('info', "Stopping lerobot-record...")
@@ -1331,17 +1376,19 @@ class ExecutionWorker(QThread):
                     self.log_message.emit('warning', "Force killing process...")
                     process.kill()
                     process.wait()
-            
-            # Wait for output thread to finish
-            output_thread.join(timeout=2)
-            
+
             return True  # Success
-            
+
         except Exception as e:
             self.log_message.emit('error', f"Episode failed: {e}")
             import traceback
             traceback.print_exc()
             return False
+        finally:
+            if output_thread and output_thread.is_alive():
+                output_thread.join(timeout=2)
+            if process is not None:
+                self._stabilize_arm_after_model("local episode")
     
     def _execute_model_inline(self, task: str, checkpoint: str, duration: float, num_episodes: int = None):
         """Execute a trained policy model for specified duration
@@ -1366,21 +1413,27 @@ class ExecutionWorker(QThread):
             return
         
         # Otherwise use server mode
+        policy_process = None
+        robot_process = None
+        cleanup_required = False
+        model_started = False
+        completed_normally = False
+
         try:
             # Get checkpoint path
             train_dir = Path(self.config["policy"].get("base_path", ""))
             checkpoint_path = train_dir / task / "checkpoints" / checkpoint / "pretrained_model"
-            
+
             if not checkpoint_path.exists():
                 self.log_message.emit('error', f"Model not found: {checkpoint_path}")
                 return
-            
+
             self.log_message.emit('info', f"Starting policy server: {checkpoint_path}")
-            
+
             # Build commands (similar to RobotWorker)
             policy_cmd = self._build_policy_server_cmd(checkpoint_path)
             robot_cmd = self._build_robot_client_cmd(checkpoint_path)
-            
+
             # Start policy server
             policy_process = subprocess.Popen(
                 policy_cmd,
@@ -1389,17 +1442,17 @@ class ExecutionWorker(QThread):
                 text=True,
                 bufsize=1
             )
-            
+
             # Wait for server to be ready
             time.sleep(2)
-            
+
             # Check if server started successfully
             if policy_process.poll() is not None:
                 self.log_message.emit('error', "Policy server failed to start")
                 return
-            
+
             self.log_message.emit('info', "Starting robot client...")
-            
+
             # Start robot client
             robot_process = subprocess.Popen(
                 robot_cmd,
@@ -1408,20 +1461,26 @@ class ExecutionWorker(QThread):
                 text=True,
                 bufsize=1
             )
-            
+
             # Wait for client to connect
             time.sleep(2)
-            
+
             # Check if client started successfully
             if robot_process.poll() is not None:
                 self.log_message.emit('error', "Robot client failed to start")
-                # Kill policy server
-                policy_process.terminate()
-                policy_process.wait(5)
+                if policy_process and policy_process.poll() is None:
+                    policy_process.terminate()
+                    try:
+                        policy_process.wait(5)
+                    except subprocess.TimeoutExpired:
+                        policy_process.kill()
                 return
-            
+
+            cleanup_required = True
+            model_started = True
+
             self.log_message.emit('info', f"✓ Model running for {duration}s")
-            
+
             # Run for specified duration (check for stop every second)
             start_time = time.time()
             while time.time() - start_time < duration:
@@ -1429,32 +1488,46 @@ class ExecutionWorker(QThread):
                     self.log_message.emit('info', "Model execution stopped by user")
                     break
                 time.sleep(0.5)
-            
-            # Stop processes
-            self.log_message.emit('info', "Stopping model...")
-            robot_process.terminate()
-            policy_process.terminate()
-            
-            # Wait for clean shutdown
-            robot_process.wait(5)
-            policy_process.wait(5)
-            
-            # Force kill if still running
-            if robot_process.poll() is None:
-                robot_process.kill()
-            if policy_process.poll() is None:
-                policy_process.kill()
-            
-            self.log_message.emit('info', "✓ Model execution completed")
-            
-            # Return to home position after model completes
-            self.log_message.emit('info', "Returning to home position...")
-            self._execute_home_inline()
-            
+
+            completed_normally = not self._stop_requested
+
         except Exception as e:
             self.log_message.emit('error', f"Model execution failed: {e}")
             import traceback
             traceback.print_exc()
+        finally:
+            if cleanup_required:
+                self.log_message.emit('info', "Stopping model processes...")
+
+            if robot_process:
+                try:
+                    robot_process.terminate()
+                    robot_process.wait(5)
+                except subprocess.TimeoutExpired:
+                    self.log_message.emit('warning', "Force killing robot client...")
+                    robot_process.kill()
+                    robot_process.wait()
+                except Exception as exc:  # noqa: BLE001 - ensure cleanup continues
+                    self.log_message.emit('warning', f"Robot client cleanup error: {exc}")
+
+            if policy_process:
+                try:
+                    policy_process.terminate()
+                    policy_process.wait(5)
+                except subprocess.TimeoutExpired:
+                    self.log_message.emit('warning', "Force killing policy server...")
+                    policy_process.kill()
+                    policy_process.wait()
+                except Exception as exc:  # noqa: BLE001 - ensure cleanup continues
+                    self.log_message.emit('warning', f"Policy server cleanup error: {exc}")
+
+            if cleanup_required:
+                if completed_normally:
+                    self.log_message.emit('info', "✓ Model execution completed")
+                self._stabilize_arm_after_model("policy server run")
+                if not self._stop_requested:
+                    self.log_message.emit('info', "Returning to home position...")
+                    self._execute_home_inline()
     
     def _build_policy_server_cmd(self, checkpoint_path: Path) -> list:
         """Build command for policy server"""
