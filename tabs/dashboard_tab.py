@@ -152,8 +152,8 @@ class CameraPreviewTile(QFrame):
         self.display_name = display_name
         self.setObjectName(f"camera_tile_{camera_name}")
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedHeight(58)
-        self.setMinimumWidth(140)
+        self.setFixedHeight(68)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
@@ -163,7 +163,7 @@ class CameraPreviewTile(QFrame):
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setStyleSheet("color: #9a9a9a; font-size: 10px;")
         self.preview_label.setScaledContents(True)
-        self.preview_label.setFixedHeight(34)
+        self.preview_label.setFixedHeight(40)
         layout.addWidget(self.preview_label, stretch=1)
 
         self.name_label = QLabel(display_name)
@@ -359,7 +359,7 @@ class DashboardTab(QWidget):
     def init_ui(self):
         """Initialize UI - same as original app.py"""
         layout = QVBoxLayout(self)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
         layout.setContentsMargins(15, 15, 15, 15)
         
         # Compact single-line status bar
@@ -566,12 +566,11 @@ class DashboardTab(QWidget):
         controls_column.setSpacing(15)
 
         controls_row = QHBoxLayout()
-        controls_row.setSpacing(15)
+        controls_row.setSpacing(20)
 
-        # Loop toggle button
         self.loop_button = QPushButton()
         self.loop_button.setCheckable(True)
-        self.loop_button.setMinimumSize(148, 128)
+        self.loop_button.setMinimumSize(160, 150)
         self.loop_button.toggled.connect(self.on_loop_button_toggled)
         controls_row.addWidget(self.loop_button)
         self.loop_button.blockSignals(True)
@@ -580,50 +579,9 @@ class DashboardTab(QWidget):
         self._refresh_loop_button()
 
         # Time - Simple labeled spinbox
-        time_frame = QFrame()
-        time_frame.setStyleSheet("""
-            QFrame {
-                background-color: #2d2d2d;
-                border: 1px solid #404040;
-                border-radius: 6px;
-                padding: 8px;
-            }
-        """)
-        time_layout = QVBoxLayout(time_frame)
-        time_layout.setSpacing(5)
-        time_layout.setContentsMargins(10, 10, 10, 10)
-        
-        time_label = QLabel("Time/Episode (s)")
-        time_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
-        time_label.setAlignment(Qt.AlignCenter)
-        time_layout.addWidget(time_label)
-        
-        self.episode_time_spin = QSpinBox()
-        self.episode_time_spin.setRange(1, 3600)
-        self.episode_time_spin.setValue(self.config.get("episode_time_s", 30))
-        self.episode_time_spin.setMinimumHeight(80)
-        self.episode_time_spin.setButtonSymbols(QSpinBox.NoButtons)
-        self.episode_time_spin.setAlignment(Qt.AlignCenter)
-        self.episode_time_spin.setStyleSheet("""
-            QSpinBox {
-                background-color: #404040;
-                color: #ffffff;
-                border: 2px solid #505050;
-                border-radius: 6px;
-                padding: 8px;
-                font-size: 32px;
-                font-weight: bold;
-            }
-            QSpinBox:focus {
-                border-color: #4CAF50;
-            }
-        """)
-        time_layout.addWidget(self.episode_time_spin)
-        controls_row.addWidget(time_frame)
-        
         # START/STOP button
         self.start_stop_btn = QPushButton("START")
-        self.start_stop_btn.setMinimumHeight(128)
+        self.start_stop_btn.setMinimumHeight(150)
         self.start_stop_btn.setCheckable(True)
         self.start_stop_btn.setStyleSheet("""
             QPushButton {
@@ -686,12 +644,12 @@ class DashboardTab(QWidget):
 
         # Speed slider column
         speed_column = QVBoxLayout()
-        speed_column.setSpacing(10)
+        speed_column.setSpacing(4)
         speed_column.setContentsMargins(0, 0, 0, 0)
 
-        speed_title = QLabel("Speed Override")
-        speed_title.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
+        speed_title = QLabel("S\nP\nE\nE\nD\n\nC\nO\nN\nT\nR\nO\nL")
         speed_title.setAlignment(Qt.AlignCenter)
+        speed_title.setStyleSheet("color: #4CAF50; font-size: 16px; font-weight: bold;")
         speed_column.addWidget(speed_title)
 
         self.speed_value_label = QLabel("")
@@ -708,25 +666,25 @@ class DashboardTab(QWidget):
         self.speed_slider.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
         self.speed_slider.setStyleSheet("""
             QSlider::groove:vertical {
-                border: 1px solid #444444;
-                width: 14px;
+                border: 2px solid #4CAF50;
+                width: 18px;
                 background: #2e2e2e;
-                border-radius: 7px;
+                border-radius: 9px;
             }
             QSlider::sub-page:vertical {
-                background: #4CAF50;
-                border-radius: 7px;
+                background: #1f1f1f;
+                border-radius: 9px;
             }
             QSlider::add-page:vertical {
-                background: #555555;
-                border-radius: 7px;
+                background: #4CAF50;
+                border-radius: 9px;
             }
             QSlider::handle:vertical {
                 background: #ffffff;
-                border: 1px solid #4CAF50;
+                border: 3px solid #4CAF50;
                 height: 32px;
                 width: 32px;
-                margin: 0 -10px;
+                margin: 0 -11px;
                 border-radius: 16px;
             }
         """)
@@ -906,12 +864,11 @@ class DashboardTab(QWidget):
             display_name = name.replace("_", " ").title()
             tile = CameraPreviewTile(name, display_name)
             tile.clicked.connect(self.on_camera_tile_clicked)
-            layout.addWidget(tile)
+            layout.addWidget(tile, stretch=1)
             default_state = "idle" if name in self.vision_zones else "nominal"
             tile.set_status(default_state)
             self.camera_tiles[name] = tile
 
-        layout.addStretch(1)
         return frame
 
     def on_camera_toggle(self, checked: bool):
@@ -1158,10 +1115,12 @@ class DashboardTab(QWidget):
                 self.preview_caps[name] = None
                 continue
 
-            scaled_frame = cv2.resize(frame, (360, 200))
+            tile_width = max(220, tile.width() - 14)
+            tile_height = max(124, int(tile_width * 9 / 16))
+            scaled_frame = cv2.resize(frame, (tile_width, tile_height))
             render_frame, status = self._render_camera_frame(name, scaled_frame.copy())
 
-            display_frame = cv2.resize(render_frame, (200, 112))
+            display_frame = cv2.resize(render_frame, (tile_width, tile_height))
             rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
             height, width, channel = rgb.shape
             image = QImage(rgb.data, width, height, channel * width, QImage.Format_RGB888)
@@ -1344,11 +1303,9 @@ class DashboardTab(QWidget):
                 else:
                     num_episodes = 1
 
-                episode_time = self.episode_time_spin.value()
-                
                 self._start_execution_worker(execution_type, execution_name, {
                     "checkpoint": checkpoint_name,
-                    "duration": episode_time,
+                    "duration": self.config.get("control", {}).get("episode_time_s", 30),
                     "num_episodes": num_episodes
                 })
             else:
