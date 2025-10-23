@@ -1113,7 +1113,7 @@ class ExecutionWorker(QThread):
     
     def _execute_model_local(self, task: str, checkpoint: str, duration: float, num_episodes: int):
         """Execute model using local mode (lerobot-record with policy)
-        
+
         Runs 1 episode at a time, with home return and cleanup between each iteration.
         
         Args:
@@ -1142,14 +1142,17 @@ class ExecutionWorker(QThread):
                 self.log_message.emit('info', f"=== Episode {episode_count}/{num_episodes} ===")
             else:
                 self.log_message.emit('info', f"=== Episode {episode_count} (loop mode) ===")
-            
+
             # Run ONE episode
             success = self._run_single_episode(task, checkpoint, duration)
-            
+
+            # Immediately try to re-enable torque so the arm doesn't drop while lerobot exits
+            self._reactivate_arm_after_model()
+
             if not success and not self._stop_requested:
                 self.log_message.emit('error', f"Episode {episode_count} failed, stopping")
                 break
-            
+
             # After episode: Home and cleanup
             if not self._stop_requested:
                 self.log_message.emit('info', "Returning to home position...")
@@ -1331,17 +1334,17 @@ class ExecutionWorker(QThread):
                     self.log_message.emit('warning', "Force killing process...")
                     process.kill()
                     process.wait()
-            
-            # Wait for output thread to finish
-            output_thread.join(timeout=2)
-            
-            return True  # Success
-            
-        except Exception as e:
-            self.log_message.emit('error', f"Episode failed: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
+
+        # Wait for output thread to finish
+        output_thread.join(timeout=2)
+
+        return True  # Success
+
+    except Exception as e:
+        self.log_message.emit('error', f"Episode failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
     
     def _execute_model_inline(self, task: str, checkpoint: str, duration: float, num_episodes: int = None):
         """Execute a trained policy model for specified duration
@@ -1446,15 +1449,75 @@ class ExecutionWorker(QThread):
                 policy_process.kill()
             
             self.log_message.emit('info', "✓ Model execution completed")
-            
+
             # Return to home position after model completes
+            self._reactivate_arm_after_model()
             self.log_message.emit('info', "Returning to home position...")
             self._execute_home_inline()
-            
+
         except Exception as e:
             self.log_message.emit('error', f"Model execution failed: {e}")
             import traceback
             traceback.print_exc()
+
+    def _reactivate_arm_after_model(self, retries: int = 3, retry_delay: float = 0.3):
+        """Re-enable torque and hold the current pose after a model step.
+
+        lerobot-record/ACT models often release torque when they exit which causes the
+        arm to fall before the next sequence step can run. This helper reconnects to the
+        motors, re-enables torque, and commands the arm to hold its last pose so that
+        subsequent actions (e.g. Home step) start from a controlled state.
+        """
+
+        # Avoid spamming logs if we're already connected
+        if self.motor_controller.bus:
+            bus_ready = True
+        else:
+            bus_ready = False
+            for attempt in range(1, retries + 1):
+                if self.motor_controller.connect():
+                    bus_ready = True
+                    break
+                time.sleep(retry_delay)
+
+        if not bus_ready:
+            self.log_message.emit('warning', "[MODEL] Could not reconnect to motors to re-enable torque")
+            return
+
+        try:
+            # Try to read the current pose directly from the bus
+            positions = self.motor_controller.read_positions_from_bus()
+
+            if not positions:
+                # Fall back to slower read (may still work if bus just connected)
+                try:
+                    positions = self.motor_controller.read_positions()
+                except Exception:
+                    positions = []
+
+            if not positions:
+                # Use configured rest position as a safe fallback
+                default_rest = self.config.get("rest_position", {}).get("positions", [2048] * len(self.motor_controller.motor_names))
+                positions = list(default_rest)
+
+            # Ensure we have one value per motor
+            if len(positions) < len(self.motor_controller.motor_names):
+                default_rest = self.config.get("rest_position", {}).get("positions", [2048] * len(self.motor_controller.motor_names))
+                padded = list(default_rest)
+                for idx, value in enumerate(positions):
+                    if idx < len(padded):
+                        padded[idx] = value
+                positions = padded[:len(self.motor_controller.motor_names)]
+
+            for idx, motor_name in enumerate(self.motor_controller.motor_names):
+                self.motor_controller.bus.write("Torque_Enable", motor_name, 1, normalize=False)
+                if idx < len(positions):
+                    self.motor_controller.bus.write("Goal_Position", motor_name, positions[idx], normalize=False)
+
+            self.log_message.emit('info', "[MODEL] Torque re-enabled after model run")
+
+        except Exception as e:
+            self.log_message.emit('warning', f"[MODEL] Failed to re-enable torque: {e}")
     
     def _build_policy_server_cmd(self, checkpoint_path: Path) -> list:
         """Build command for policy server"""
