@@ -1316,12 +1316,40 @@ class SettingsTab(QWidget):
         framesize_row.addStretch()
         layout.addLayout(framesize_row)
 
-        # Use MediaPipe toggle
-        self.hand_safety_use_mediapipe_check = QCheckBox("Use MediaPipe (recommended - most reliable)")
-        self.hand_safety_use_mediapipe_check.setChecked(True)
-        self.hand_safety_use_mediapipe_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px; }")
-        self.hand_safety_use_mediapipe_check.setToolTip("MediaPipe is more reliable. Disable to use HSV skin-tone fallback.")
-        layout.addWidget(self.hand_safety_use_mediapipe_check)
+        # Detection method selection
+        method_row = QHBoxLayout()
+        method_label = QLabel("Detection method:")
+        method_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 220px; }")
+        method_row.addWidget(method_label)
+
+        self.hand_safety_method_combo = QComboBox()
+        self.hand_safety_method_combo.addItem("YOLOv8 (Fast & Reliable)", "yolo")
+        self.hand_safety_method_combo.addItem("MediaPipe Hands", "mediapipe")
+        self.hand_safety_method_combo.addItem("HSV Skin Tone (Fallback)", "hsv")
+        self.hand_safety_method_combo.setMinimumHeight(45)
+        self.hand_safety_method_combo.setToolTip("YOLO recommended: 2-3x faster than MediaPipe, more reliable")
+        self.hand_safety_method_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 8px;
+                font-size: 15px;
+            }
+            QComboBox:focus {
+                border-color: #FF5722;
+                background-color: #555555;
+            }
+            QComboBox QListView {
+                background-color: #3a3a3a;
+                color: #ffffff;
+                padding: 4px;
+            }
+        """)
+        method_row.addWidget(self.hand_safety_method_combo)
+        method_row.addStretch()
+        layout.addLayout(method_row)
 
         # Test button
         hand_button_row = QHBoxLayout()
@@ -1509,10 +1537,17 @@ class SettingsTab(QWidget):
             index = 0
         self.hand_safety_camera_combo.setCurrentIndex(index)
         self.hand_safety_fps_spin.setValue(safety_cfg.get("detection_fps", 8.0))
-        self.hand_safety_confidence_spin.setValue(safety_cfg.get("detection_confidence", 0.45))
+        self.hand_safety_confidence_spin.setValue(safety_cfg.get("detection_confidence", 0.4))
         self.hand_safety_resume_delay_spin.setValue(safety_cfg.get("resume_delay_s", 1.0))
         self.hand_safety_frame_width_spin.setValue(safety_cfg.get("frame_width", 320))
-        self.hand_safety_use_mediapipe_check.setChecked(safety_cfg.get("use_mediapipe", True))
+        
+        # Load detection method
+        detection_method = safety_cfg.get("detection_method", "yolo")
+        method_index = self.hand_safety_method_combo.findData(detection_method)
+        if method_index >= 0:
+            self.hand_safety_method_combo.setCurrentIndex(method_index)
+        else:
+            self.hand_safety_method_combo.setCurrentIndex(0)  # Default to YOLO
     
     def save_settings(self):
         """Save settings to config file"""
@@ -1586,7 +1621,8 @@ class SettingsTab(QWidget):
         self.config["safety"]["frame_width"] = self.hand_safety_frame_width_spin.value()
         self.config["safety"]["frame_height"] = int(self.hand_safety_frame_width_spin.value() * 0.75)  # 4:3 aspect
         self.config["safety"]["skin_threshold"] = 0.045  # Fixed value for HSV fallback
-        self.config["safety"]["use_mediapipe"] = self.hand_safety_use_mediapipe_check.isChecked()
+        self.config["safety"]["detection_method"] = self.hand_safety_method_combo.currentData()
+        self.config["safety"]["yolo_model"] = "yolov8n.pt"  # Use nano model for speed
         
         # Write to file
         try:

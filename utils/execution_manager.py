@@ -129,11 +129,12 @@ class ExecutionWorker(QThread):
                 detection_fps=safety_config.get("detection_fps", 8.0),
                 frame_width=safety_config.get("frame_width", 320),
                 frame_height=safety_config.get("frame_height", 240),
-                detection_confidence=safety_config.get("detection_confidence", 0.45),
+                detection_confidence=safety_config.get("detection_confidence", 0.4),
                 tracking_confidence=safety_config.get("tracking_confidence", 0.35),
                 resume_delay_s=safety_config.get("resume_delay_s", 1.0),
                 skin_threshold=safety_config.get("skin_threshold", 0.045),
-                use_mediapipe=safety_config.get("use_mediapipe", True),
+                detection_method=safety_config.get("detection_method", "yolo"),
+                yolo_model=safety_config.get("yolo_model", "yolov8n.pt"),
             )
             
             # Create safety monitor
