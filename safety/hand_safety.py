@@ -6,8 +6,7 @@ workspace and EMERGENCY STOPS the robot to prevent injury.
 
 Key Features:
 - YOLOv8 hand detection (primary, fast and reliable)
-- MediaPipe hand detection (secondary option)
-- HSV skin tone fallback (when others unavailable)
+- MediaPipe hand detection (fallback option)
 - Configurable FPS (default 8 FPS for lightweight operation)
 - Multi-camera support
 - Automatic camera recovery
@@ -67,8 +66,7 @@ class SafetyConfig:
     detection_confidence: float = 0.4  # YOLO/MediaPipe confidence threshold
     tracking_confidence: float = 0.35  # MediaPipe tracking threshold
     resume_delay_s: float = 1.0  # Delay before resuming after hand cleared
-    skin_threshold: float = 0.045  # HSV fallback threshold
-    detection_method: str = "yolo"  # "yolo", "mediapipe", or "hsv"
+    detection_method: str = "yolo"  # "yolo" or "mediapipe"
     yolo_model: str = "yolov8n.pt"  # YOLO model to use
     
     def __post_init__(self):
@@ -84,7 +82,7 @@ class SafetyEvent:
     confidence: float
     camera_label: str
     timestamp: float
-    detection_method: str  # "yolo", "mediapipe", or "hsv"
+    detection_method: str  # "yolo" or "mediapipe"
 
 
 class HandSafetyMonitor:
@@ -150,7 +148,7 @@ class HandSafetyMonitor:
                 self._log("info", "[SAFETY] Using YOLO person detection - much faster and more reliable!")
                 return
             except Exception as e:
-                self._log("warning", f"[SAFETY] Failed to initialize YOLO: {e}, trying MediaPipe...")
+                self._log("error", f"[SAFETY] Failed to initialize YOLO: {e}, trying MediaPipe...")
         
         # Fall back to MediaPipe if YOLO unavailable or requested
         if (requested_method in ("mediapipe", "yolo")) and HAVE_MEDIAPIPE:
@@ -166,12 +164,13 @@ class HandSafetyMonitor:
                 self._log("info", "[SAFETY] Initialized MediaPipe hand detection (LIGHTWEIGHT MODE)")
                 return
             except Exception as e:
-                self._log("warning", f"[SAFETY] Failed to initialize MediaPipe: {e}, falling back to HSV")
+                self._log("error", f"[SAFETY] CRITICAL - Failed to initialize MediaPipe: {e}")
         
-        # Final fallback to HSV
-        self._detector = None
-        self._detection_method = "hsv"
-        self._log("warning", "[SAFETY] Using HSV skin-tone detection (YOLO/MediaPipe not available)")
+        # No detection available - raise error
+        raise RuntimeError(
+            "[SAFETY] CRITICAL ERROR: No hand detection method available! "
+            "Install ultralytics (YOLO) or mediapipe to use safety monitoring."
+        )
     
     def start(self):
         """Start the safety monitoring thread."""
@@ -337,7 +336,8 @@ class HandSafetyMonitor:
         elif self._detection_method == "mediapipe" and self._detector:
             return self._detect_mediapipe(frame)
         else:
-            return self._detect_hsv(frame)
+            self._log("error", "[SAFETY] No valid detection method available!")
+            return False, 0.0
     
     def _detect_yolo(self, frame) -> Tuple[bool, float]:
         """Detect hands/person using YOLOv8."""
@@ -398,36 +398,6 @@ class HandSafetyMonitor:
             self._log("warning", f"[SAFETY] MediaPipe detection error: {e}")
         
         return False, 0.0
-    
-    def _detect_hsv(self, frame) -> Tuple[bool, float]:
-        """Detect hands using HSV skin-tone heuristic (fallback method)."""
-        try:
-            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            
-            # Skin tone ranges (optimized for various lighting conditions)
-            lower_a = np.array([0, 40, 60], dtype=np.uint8)
-            upper_a = np.array([20, 150, 255], dtype=np.uint8)
-            lower_b = np.array([170, 40, 60], dtype=np.uint8)
-            upper_b = np.array([180, 150, 255], dtype=np.uint8)
-            
-            # Create masks
-            mask_a = cv2.inRange(hsv, lower_a, upper_a)
-            mask_b = cv2.inRange(hsv, lower_b, upper_b)
-            mask = cv2.bitwise_or(mask_a, mask_b)
-            
-            # Noise reduction
-            mask = cv2.GaussianBlur(mask, (5, 5), 0)
-            mask = cv2.erode(mask, np.ones((3, 3), np.uint8), iterations=1)
-            mask = cv2.dilate(mask, np.ones((3, 3), np.uint8), iterations=1)
-            
-            # Calculate skin pixel ratio
-            ratio = float(np.count_nonzero(mask)) / float(mask.size)
-            detected = ratio >= self.config.skin_threshold
-            
-            return detected, ratio
-        except Exception as e:
-            self._log("warning", f"[SAFETY] HSV detection error: {e}")
-            return False, 0.0
     
     def _open_cameras(self):
         """Open all configured cameras."""

@@ -132,7 +132,6 @@ class ExecutionWorker(QThread):
                 detection_confidence=safety_config.get("detection_confidence", 0.4),
                 tracking_confidence=safety_config.get("tracking_confidence", 0.35),
                 resume_delay_s=safety_config.get("resume_delay_s", 1.0),
-                skin_threshold=safety_config.get("skin_threshold", 0.045),
                 detection_method=safety_config.get("detection_method", "yolo"),
                 yolo_model=safety_config.get("yolo_model", "yolov8n.pt"),
             )

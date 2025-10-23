@@ -24,13 +24,18 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     np = None
 
+try:
+    from ultralytics import YOLO  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    YOLO = None
+
 
 class HandDetectionTestDialog(QDialog):
-    """Live camera preview with lightweight hand detection overlay."""
+    """Live camera preview with YOLOv8 hand detection overlay."""
 
     def __init__(self, camera_sources: List[Tuple[str, Union[int, str]]], parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Hand Detection Test")
+        self.setWindowTitle("YOLOv8 Hand Detection Test")
         self.setModal(True)
         self.resize(900, 600)
 
@@ -42,16 +47,26 @@ class HandDetectionTestDialog(QDialog):
         self.timer.timeout.connect(self._update_frame)
 
         self.last_detection: Optional[bool] = None
-        self.last_ratio: float = 0.0
+        self.last_confidence: float = 0.0
         self.detected_any = False
         self.error_message: Optional[str] = None
         self.result_summary = "Camera preview not started."
+        
+        # Initialize YOLO detector
+        self.yolo_model = None
+        if YOLO is not None:
+            try:
+                self.yolo_model = YOLO("yolov8n.pt")
+                self.yolo_model.overrides['verbose'] = False
+            except Exception as e:
+                self.error_message = f"Failed to load YOLO: {e}"
+                print(f"[SAFETY] YOLO initialization error: {e}")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
-        info_label = QLabel("Live feed with simple skin-tone heuristic. Move your hand into view to verify detection.")
+        info_label = QLabel("Live feed with YOLOv8 person detection. Move into view to verify detection.")
         info_label.setWordWrap(True)
         info_label.setStyleSheet("color: #e0e0e0; font-size: 14px;")
         layout.addWidget(info_label)
@@ -97,6 +112,12 @@ class HandDetectionTestDialog(QDialog):
             self.error_message = "OpenCV and NumPy are required for hand detection tests."
             self.status_label.setText("❌ OpenCV/NumPy not available. Install requirements first.")
             print("[SAFETY] Hand detection test unavailable — missing OpenCV/NumPy.")
+            return
+
+        if YOLO is None or self.yolo_model is None:  # pragma: no cover - requires optional deps
+            self.error_message = "YOLO is required for hand detection tests."
+            self.status_label.setText("❌ YOLO not available. Install ultralytics package first.")
+            print("[SAFETY] Hand detection test unavailable — missing YOLO.")
             return
 
         if not camera_sources:
@@ -159,20 +180,21 @@ class HandDetectionTestDialog(QDialog):
             self.result_summary = "Frame capture failed."
             return
 
-        detected, ratio, annotated = self._detect_hand(frame)
+        detected, confidence, annotated = self._detect_hand(frame)
 
         if self.last_detection is None or detected != self.last_detection:
             camera_label = self.camera_sources[self.current_source_index][0] if self.current_source_index is not None else "camera"
             state = "DETECTED" if detected else "clear"
-            print(f"[SAFETY] Hand {state} on {camera_label} (ratio {ratio:.2%}).")
+            print(f"[SAFETY] Person {state} on {camera_label} (confidence {confidence:.2%}).")
 
         self.last_detection = detected
-        self.last_ratio = ratio
+        self.last_confidence = confidence
         if detected:
             self.detected_any = True
 
-        state_text = "Hand detected ✅" if detected else "No hand detected"
-        self.status_label.setText(f"{state_text} — skin-like pixels {ratio:.1%}")
+        state_text = "Person detected ✅" if detected else "No person detected"
+        conf_text = f"confidence {confidence:.1%}" if detected else "waiting..."
+        self.status_label.setText(f"{state_text} — {conf_text}")
         self.result_summary = self.status_label.text()
 
         rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
@@ -182,41 +204,64 @@ class HandDetectionTestDialog(QDialog):
         self.video_label.setPixmap(QPixmap.fromImage(image))
 
     def _detect_hand(self, frame):
-        """Return (detected, ratio, annotated_frame)."""
+        """Return (detected, confidence, annotated_frame) using YOLOv8."""
         if cv2 is None or np is None:  # pragma: no cover - handled earlier
             return False, 0.0, frame
+        
+        if self.yolo_model is None:
+            return False, 0.0, frame
 
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        lower_a = np.array([0, 30, 60], dtype=np.uint8)
-        upper_a = np.array([20, 150, 255], dtype=np.uint8)
-        lower_b = np.array([170, 30, 60], dtype=np.uint8)
-        upper_b = np.array([180, 150, 255], dtype=np.uint8)
+        annotated = frame.copy()
+        detected = False
+        best_confidence = 0.0
 
-        mask_a = cv2.inRange(hsv, lower_a, upper_a)
-        mask_b = cv2.inRange(hsv, lower_b, upper_b)
-        mask = cv2.bitwise_or(mask_a, mask_b)
-        mask = cv2.GaussianBlur(mask, (7, 7), 0)
-        mask = cv2.erode(mask, np.ones((3, 3), np.uint8), iterations=1)
-        mask = cv2.dilate(mask, np.ones((5, 5), np.uint8), iterations=1)
+        try:
+            # Run YOLO detection
+            results = self.yolo_model(frame, conf=0.4, verbose=False)
+            
+            if results and len(results) > 0:
+                for result in results:
+                    if result.boxes is None or len(result.boxes) == 0:
+                        continue
+                    
+                    for box in result.boxes:
+                        cls = int(box.cls[0])
+                        conf = float(box.conf[0])
+                        
+                        # Class 0 is 'person' in COCO dataset
+                        if cls == 0:
+                            detected = True
+                            best_confidence = max(best_confidence, conf)
+                            
+                            # Draw bounding box
+                            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+                            
+                            # Draw red box for detection
+                            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 0, 255), 3)
+                            
+                            # Draw label
+                            label = f"Person {conf:.2f}"
+                            label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+                            cv2.rectangle(annotated, (x1, y1 - label_size[1] - 10), 
+                                        (x1 + label_size[0], y1), (0, 0, 255), -1)
+                            cv2.putText(annotated, label, (x1, y1 - 5), 
+                                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            
+            # Overall status text
+            status_text = f"YOLO: {'PERSON DETECTED' if detected else 'Clear'}"
+            if detected:
+                status_text += f" (conf: {best_confidence:.2f})"
+            
+            cv2.putText(annotated, status_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 
+                       0.8, (0, 255, 0) if not detected else (0, 0, 255), 2, cv2.LINE_AA)
+            
+        except Exception as e:
+            print(f"[SAFETY] YOLO detection error: {e}")
+            cv2.putText(annotated, f"Error: {str(e)[:50]}", (10, 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
-        ratio = float(cv2.countNonZero(mask)) / float(mask.size)
-        detected = ratio >= 0.04
-
-        overlay = frame.copy()
-        overlay[mask > 0] = (0, 0, 255)
-        annotated = cv2.addWeighted(overlay, 0.4, frame, 0.6, 0)
-        cv2.putText(
-            annotated,
-            f"Hand: {'YES' if detected else 'NO'}  ({ratio*100:.1f}% skin)",
-            (10, 28),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (255, 255, 255),
-            2,
-            cv2.LINE_AA
-        )
-
-        return detected, ratio, annotated
+        return detected, best_confidence, annotated
 
     def _release_camera(self):
         if self.cap:
@@ -1323,11 +1368,10 @@ class SettingsTab(QWidget):
         method_row.addWidget(method_label)
 
         self.hand_safety_method_combo = QComboBox()
-        self.hand_safety_method_combo.addItem("YOLOv8 (Fast & Reliable)", "yolo")
+        self.hand_safety_method_combo.addItem("YOLOv8 (Recommended)", "yolo")
         self.hand_safety_method_combo.addItem("MediaPipe Hands", "mediapipe")
-        self.hand_safety_method_combo.addItem("HSV Skin Tone (Fallback)", "hsv")
         self.hand_safety_method_combo.setMinimumHeight(45)
-        self.hand_safety_method_combo.setToolTip("YOLO recommended: 2-3x faster than MediaPipe, more reliable")
+        self.hand_safety_method_combo.setToolTip("YOLO is 2-3x faster and more reliable than MediaPipe")
         self.hand_safety_method_combo.setStyleSheet("""
             QComboBox {
                 background-color: #505050;
@@ -1616,11 +1660,10 @@ class SettingsTab(QWidget):
         self.config["safety"]["cameras"] = self.hand_safety_camera_combo.currentData()
         self.config["safety"]["detection_fps"] = self.hand_safety_fps_spin.value()
         self.config["safety"]["detection_confidence"] = self.hand_safety_confidence_spin.value()
-        self.config["safety"]["tracking_confidence"] = 0.35  # Fixed value
+        self.config["safety"]["tracking_confidence"] = 0.35  # Fixed value for MediaPipe
         self.config["safety"]["resume_delay_s"] = self.hand_safety_resume_delay_spin.value()
         self.config["safety"]["frame_width"] = self.hand_safety_frame_width_spin.value()
         self.config["safety"]["frame_height"] = int(self.hand_safety_frame_width_spin.value() * 0.75)  # 4:3 aspect
-        self.config["safety"]["skin_threshold"] = 0.045  # Fixed value for HSV fallback
         self.config["safety"]["detection_method"] = self.hand_safety_method_combo.currentData()
         self.config["safety"]["yolo_model"] = "yolov8n.pt"  # Use nano model for speed
         
