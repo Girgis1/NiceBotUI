@@ -1177,6 +1177,10 @@ class SettingsTab(QWidget):
         self.hand_hold_position_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px; }")
         layout.addWidget(self.hand_hold_position_check)
 
+        self.hand_detection_test_mode_check = QCheckBox("Test mode (monitor without pausing)")
+        self.hand_detection_test_mode_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px; }")
+        layout.addWidget(self.hand_detection_test_mode_check)
+
         hand_button_row = QHBoxLayout()
         hand_button_row.addStretch()
         self.hand_detection_test_btn = QPushButton("Run Hand Detection Test")
@@ -1363,6 +1367,7 @@ class SettingsTab(QWidget):
         self.hand_detection_model_edit.setText(safety_cfg.get("hand_detection_model", "nicebot/hand-detection-large"))
         self.hand_resume_delay_spin.setValue(safety_cfg.get("hand_resume_delay_s", 0.5))
         self.hand_hold_position_check.setChecked(safety_cfg.get("hand_hold_position", True))
+        self.hand_detection_test_mode_check.setChecked(safety_cfg.get("hand_detection_test_mode", False))
     
     def save_settings(self):
         """Save settings to config file"""
@@ -1431,6 +1436,7 @@ class SettingsTab(QWidget):
         self.config["safety"]["hand_detection_model"] = self.hand_detection_model_edit.text()
         self.config["safety"]["hand_resume_delay_s"] = self.hand_resume_delay_spin.value()
         self.config["safety"]["hand_hold_position"] = self.hand_hold_position_check.isChecked()
+        self.config["safety"]["hand_detection_test_mode"] = self.hand_detection_test_mode_check.isChecked()
         
         # Write to file
         try:
@@ -1483,6 +1489,7 @@ class SettingsTab(QWidget):
         self.hand_detection_model_edit.setText("nicebot/hand-detection-large")
         self.hand_resume_delay_spin.setValue(0.5)
         self.hand_hold_position_check.setChecked(True)
+        self.hand_detection_test_mode_check.setChecked(False)
         
         self.status_label.setText("⚠️ Defaults loaded. Click Save to apply.")
         self.status_label.setStyleSheet("QLabel { color: #FF9800; font-size: 15px; padding: 8px; }")
