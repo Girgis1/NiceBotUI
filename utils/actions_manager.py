@@ -77,6 +77,37 @@ class ActionsManager:
             print(f"[ERROR] Failed to list recordings: {e}")
             return []
 
+    def list_live_recordings(self) -> List[str]:
+        """List recordings that contain at least one live recording step.
+
+        This inspects only ``manifest.json`` for each recording so it can run
+        frequently (e.g. when refreshing UI selectors) without loading the full
+        component payloads into memory.
+        """
+
+        live_recordings: List[str] = []
+
+        for item in self.recordings_dir.iterdir():
+            if not item.is_dir():
+                continue
+
+            manifest_path = item / "manifest.json"
+            if not manifest_path.exists():
+                continue
+
+            try:
+                with open(manifest_path, "r") as handle:
+                    manifest = json.load(handle)
+            except Exception as exc:
+                print(f"[WARN] Skipping manifest for {item.name}: {exc}")
+                continue
+
+            steps = manifest.get("steps", [])
+            if any(step.get("type") == "live_recording" for step in steps):
+                live_recordings.append(manifest.get("name", item.name))
+
+        return sorted(live_recordings)
+
     def load_all(self) -> Dict[str, Dict]:
         """Load all recordings that can be deserialised.
 

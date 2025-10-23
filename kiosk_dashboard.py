@@ -81,12 +81,13 @@ class KioskDashboard(QWidget):
     def __init__(self, config: dict, parent=None):
         super().__init__(parent)
         self.config = config
-        
+
         # State
         self.is_running = False
         self.worker = None
         self.start_time = None
         self.elapsed_seconds = 0
+        self._camera_caps = {}
         
         # Initialize UI
         self.init_ui()
@@ -323,16 +324,11 @@ class KioskDashboard(QWidget):
         try:
             from utils.actions_manager import ActionsManager
             actions_mgr = ActionsManager()
-            actions = actions_mgr.load_all()
-            
-            for name, data in actions.items():
-                # Check if any position is a live recording
-                positions = data.get("positions", [])
-                if positions and any(p.get("type") == "live_recording" for p in positions):
-                    self.run_combo.addItem(f"🔴 Recording: {name}")
+            for name in actions_mgr.list_live_recordings():
+                self.run_combo.addItem(f"🔴 Recording: {name}")
         except Exception as e:
             print(f"[WARN] Failed to scan recordings: {e}")
-        
+
         self.run_combo.blockSignals(False)
     
     def on_run_selection_changed(self, text):
@@ -369,28 +365,79 @@ class KioskDashboard(QWidget):
             import cv2
             cameras = self.config.get("cameras", {})
             camera_indices = []
-            
+
             for cam_name, cam_config in cameras.items():
                 idx = cam_config.get("index_or_path", 0)
                 camera_indices.append(idx)
-            
-            # Test up to 3 cameras
-            for i, dot in enumerate([self.camera_dot1, self.camera_dot2, self.camera_dot3]):
-                if i < len(camera_indices):
+
+            active_indices = camera_indices[:3]
+
+            # Release handles for cameras no longer monitored
+            for key in list(self._camera_caps.keys()):
+                if key not in active_indices:
                     try:
-                        cap = cv2.VideoCapture(camera_indices[i])
-                        if cap.isOpened():
-                            dot.set_connected(True)
-                            cap.release()
-                        else:
-                            dot.set_connected(False)
-                    except:
+                        self._camera_caps[key].release()
+                    except Exception:
+                        pass
+                    self._camera_caps.pop(key, None)
+
+            # Test up to 3 cameras using persistent capture handles
+            for dot, cam_identifier in zip(
+                [self.camera_dot1, self.camera_dot2, self.camera_dot3],
+                active_indices + [None] * (3 - len(active_indices))
+            ):
+                if cam_identifier is None:
+                    dot.set_disabled()
+                    continue
+
+                try:
+                    cap = self._camera_caps.get(cam_identifier)
+                    if cap is None or not cap.isOpened():
+                        if cap is not None:
+                            try:
+                                cap.release()
+                            except Exception:
+                                pass
+                        cap = cv2.VideoCapture(cam_identifier)
+                        self._camera_caps[cam_identifier] = cap
+
+                    if cap.isOpened():
+                        dot.set_connected(True)
+                    else:
                         dot.set_connected(False)
-                else:
+                        try:
+                            cap.release()
+                        except Exception:
+                            pass
+                        self._camera_caps.pop(cam_identifier, None)
+                except Exception:
+                    dot.set_connected(False)
+                    cap = self._camera_caps.pop(cam_identifier, None)
+                    if cap is not None:
+                        try:
+                            cap.release()
+                        except Exception:
+                            pass
+
+            # Disable dots for any remaining unused indicators
+            if len(active_indices) < 3:
+                for dot in [self.camera_dot1, self.camera_dot2, self.camera_dot3][len(active_indices):]:
                     dot.set_disabled()
         except ImportError:
             # OpenCV not available
             pass
+
+    def _release_camera_handles(self):
+        for cap in list(self._camera_caps.values()):
+            try:
+                cap.release()
+            except Exception:
+                pass
+        self._camera_caps.clear()
+
+    def closeEvent(self, event):
+        self._release_camera_handles()
+        super().closeEvent(event)
     
     def toggle_start_stop(self):
         """Toggle START/STOP - ALWAYS RESPONSIVE"""
