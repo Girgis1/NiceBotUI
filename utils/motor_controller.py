@@ -44,15 +44,19 @@ class MotorController:
     
     def read_positions(self) -> list[int]:
         """Read current motor positions
-        
+
         Returns:
             List of 6 motor positions [shoulder_pan, shoulder_lift, ...]
         """
         if not MOTOR_CONTROL_AVAILABLE:
             raise RuntimeError("Motor control not available")
-        
+
+        if self.bus:
+            positions = self.read_positions_from_bus()
+            return positions if positions else []
+
         try:
-            positions = read_current_position()
+            positions = read_current_position(verbose=False)
             return positions if positions else []
         except Exception as e:
             print(f"Error reading positions: {e}")

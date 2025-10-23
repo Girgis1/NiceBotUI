@@ -176,29 +176,32 @@ def go_to_rest(disable_torque=None):
         return False
 
 
-def read_current_position():
+def read_current_position(verbose: bool = True):
     """Read current joint positions from robot"""
     cfg = read_config()
     port = cfg["robot"]["port"]
-    
-    print(f"[rest_pos] Reading current position from {port}")
-    
+
+    if verbose:
+        print(f"[rest_pos] Reading current position from {port}")
+
     try:
         # Connect to motors
         bus = create_motor_bus(port)
-        
+
         # Read positions from each motor
-        print("Reading positions...")
+        if verbose:
+            print("Reading positions...")
         position_list = []
         for name in MOTOR_NAMES:
             pos = bus.read("Present_Position", name, normalize=False)
             pos = int(pos)
             position_list.append(pos)
-            print(f"  {name}: {pos}")
-        
+            if verbose:
+                print(f"  {name}: {pos}")
+
         # Disconnect
         bus.disconnect()
-        
+
         return position_list
         
     except Exception as e:
