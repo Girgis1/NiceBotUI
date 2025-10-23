@@ -323,13 +323,23 @@ class KioskDashboard(QWidget):
         try:
             from utils.actions_manager import ActionsManager
             actions_mgr = ActionsManager()
-            actions = actions_mgr.load_all()
-            
-            for name, data in actions.items():
-                # Check if any position is a live recording
-                positions = data.get("positions", [])
-                if positions and any(p.get("type") == "live_recording" for p in positions):
-                    self.run_combo.addItem(f"🔴 Recording: {name}")
+
+            for recording_name in actions_mgr.list_actions():
+                manifest = actions_mgr.load_manifest(recording_name)
+                if not manifest:
+                    continue
+
+                steps = manifest.get("steps", [])
+                has_live = any(
+                    isinstance(step, dict)
+                    and step.get("type") == "live_recording"
+                    and step.get("enabled", True)
+                    for step in steps
+                )
+
+                if has_live:
+                    display_name = manifest.get("name", recording_name)
+                    self.run_combo.addItem(f"🔴 Recording: {display_name}")
         except Exception as e:
             print(f"[WARN] Failed to scan recordings: {e}")
         
@@ -377,15 +387,18 @@ class KioskDashboard(QWidget):
             # Test up to 3 cameras
             for i, dot in enumerate([self.camera_dot1, self.camera_dot2, self.camera_dot3]):
                 if i < len(camera_indices):
+                    cap = None
                     try:
                         cap = cv2.VideoCapture(camera_indices[i])
                         if cap.isOpened():
                             dot.set_connected(True)
-                            cap.release()
                         else:
                             dot.set_connected(False)
-                    except:
+                    except Exception:
                         dot.set_connected(False)
+                    finally:
+                        if cap is not None:
+                            cap.release()
                 else:
                     dot.set_disabled()
         except ImportError:

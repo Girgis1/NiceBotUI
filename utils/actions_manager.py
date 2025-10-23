@@ -103,7 +103,30 @@ class ActionsManager:
                 loaded[recording_name] = action
 
         return loaded
-    
+
+    def load_manifest(self, name: str) -> Optional[Dict]:
+        """Load the manifest for a recording without expanding components.
+
+        This reads ``manifest.json`` directly which is substantially lighter
+        than ``load_action`` because it avoids loading large live-recording
+        payloads into memory.  The method is intended for UI selectors where
+        only metadata (e.g. available step types) is required.
+        """
+
+        try:
+            temp = CompositeRecording(name, self.recordings_dir)
+            manifest_path = temp.manifest_path
+
+            if not manifest_path.exists():
+                return None
+
+            with open(manifest_path, "r") as handle:
+                return json.load(handle)
+
+        except Exception as exc:
+            print(f"[ERROR] Failed to load manifest for recording '{name}': {exc}")
+            return None
+
     def load_action(self, name: str) -> Optional[Dict]:
         """Load a recording and return execution-ready data
         
