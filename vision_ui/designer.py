@@ -7,6 +7,7 @@ touch-friendly polygon editing and live preview feedback.
 
 from __future__ import annotations
 
+import json
 import sys
 import uuid
 from copy import deepcopy
@@ -14,31 +15,31 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import platform
+from pathlib import Path
 
 import cv2
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPolygonF
+from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QApplication,
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDialog,
     QDoubleSpinBox,
     QFormLayout,
     QFrame,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
     QSlider,
-    QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -55,13 +56,16 @@ def create_default_vision_config() -> Dict:
         "name": "Detection Zone",
         "camera": {
             "index": 0,
-            "label": "Camera 0",
+            "label": "Unassigned Camera",
             "resolution": [640, 480],
             "source_id": "camera:0",
+            "config_key": None,
+            "index_or_path": 0,
         },
         "trigger": {
             "display_name": "Detection Zone",
             "mode": "presence",
+            "vision_type": "basic_detection",
             "settings": {
                 "metric": "intensity",
                 "threshold": 0.55,
@@ -76,6 +80,19 @@ def create_default_vision_config() -> Dict:
             },
         },
     }
+
+
+def _load_system_config() -> Dict:
+    """Load the kiosk config (if available) to expose camera names."""
+    root = Path(__file__).resolve().parent.parent
+    config_path = root / "config.json"
+    try:
+        if config_path.exists():
+            with config_path.open("r", encoding="utf-8") as handle:
+                return json.load(handle)
+    except Exception as exc:
+        print(f"[VISION][WARN] Unable to load kiosk config: {exc}")
+    return {}
 
 
 def _generate_zone_name(existing: List[str]) -> str:
@@ -136,32 +153,78 @@ def _pixels_to_normalized(polygon: List[Tuple[int, int]], width: int, height: in
 class CameraSource:
     source_id: str
     label: str
-    kind: str  # "camera" | "virtual"
-    index: int = 0
+    kind: str  # "camera" | "virtual" | "system"
+    index: Optional[int] = None
     available: bool = True
+    config_key: Optional[str] = None
+    path: Optional[str] = None
 
 
 class CameraStream:
     """Manage a camera or virtual feed."""
 
-    def __init__(self):
+    def __init__(self, system_cameras: Optional[Dict[str, Dict]] = None):
         self.cap: Optional[cv2.VideoCapture] = None
         self.active_source: Optional[CameraSource] = None
         self._virtual_tick = 0
+        self.system_cameras = system_cameras or {}
 
     def list_sources(self, max_devices: int = 5) -> List[CameraSource]:
         sources: List[CameraSource] = []
 
-        system = platform.system()
+        # First, prefer cameras that were configured in kiosk settings.
+        for key, cam_cfg in self.system_cameras.items():
+            label = cam_cfg.get("label") or cam_cfg.get("name") or key.replace("_", " ").title()
+            index_or_path = cam_cfg.get("index_or_path", cam_cfg.get("index", 0))
+            index: Optional[int] = None
+            path: Optional[str] = None
+            capture: Optional[cv2.VideoCapture] = None
+            available = False
 
+            try:
+                if isinstance(index_or_path, int):
+                    index = index_or_path
+                    capture = cv2.VideoCapture(index)
+                else:
+                    path = str(index_or_path)
+                    capture = cv2.VideoCapture(path)
+                available = bool(capture and capture.isOpened())
+            except Exception:
+                available = False
+            finally:
+                if capture:
+                    capture.release()
+
+            if not available:
+                offline_label = f"{label} (offline)"
+            else:
+                offline_label = label
+
+            sources.append(
+                CameraSource(
+                    source_id=f"system:{key}",
+                    label=offline_label,
+                    kind="system",
+                    index=index,
+                    available=available,
+                    config_key=key,
+                    path=path,
+                )
+            )
+
+        # Also include a small set of direct device indices for ad-hoc testing.
+        system_name = platform.system()
         for idx in range(max_devices):
             source_id = f"camera:{idx}"
+            if any(src.source_id == source_id for src in sources):
+                continue
+
             label = f"Camera {idx}"
             available = False
             capture = None
 
             try:
-                if system == "Windows":
+                if system_name == "Windows":
                     capture = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
                     if not capture or not capture.isOpened():
                         if capture:
@@ -180,10 +243,10 @@ class CameraStream:
             if not available:
                 label = f"{label} (offline)"
 
-            sources.append(CameraSource(source_id, label, "camera", idx, available))
+            sources.append(CameraSource(source_id, label, "camera", index=idx, available=available))
 
         # Add demo virtual feed
-        sources.append(CameraSource("virtual:demo", "Demo Feed", "virtual", -1, True))
+        sources.append(CameraSource("virtual:demo", "Demo Feed", "virtual", index=-1, available=True))
         return sources
 
     def open(self, source: CameraSource):
@@ -194,17 +257,18 @@ class CameraStream:
         self.active_source = source
         self._virtual_tick = 0
 
-        if source.kind == "camera":
+        if source.kind in ("camera", "system"):
             if not source.available:
                 self.cap = None
-                self.active_source = CameraSource("virtual:demo", "Demo Feed", "virtual", -1, True)
+                self.active_source = CameraSource("virtual:demo", "Demo Feed", "virtual", index=-1, available=True)
                 return
 
-            cap = cv2.VideoCapture(source.index)
+            capture_target = source.path if source.path is not None else source.index
+            cap = cv2.VideoCapture(capture_target)
             if not cap or not cap.isOpened():
                 self.cap = None
-                print(f"[VISION][WARN] Camera {source.index} unavailable. Falling back to demo feed.")
-                self.active_source = CameraSource("virtual:demo", "Demo Feed", "virtual", -1, True)
+                print("[VISION][WARN] Camera %s unavailable. Falling back to demo feed." % (capture_target,))
+                self.active_source = CameraSource("virtual:demo", "Demo Feed", "virtual", index=-1, available=True)
             else:
                 self.cap = cap
 
@@ -512,7 +576,12 @@ class VisionDesignerWidget(QWidget):
 
     state_changed = Signal(str, dict)
 
-    def __init__(self, parent=None, config: Optional[Dict] = None):
+    def __init__(
+        self,
+        parent=None,
+        config: Optional[Dict] = None,
+        system_config: Optional[Dict] = None,
+    ):
         super().__init__(parent)
         self.setMinimumSize(960, 540)
 
@@ -520,12 +589,17 @@ class VisionDesignerWidget(QWidget):
         self._config = deepcopy(self._config)
         trigger_cfg = self._config.setdefault("trigger", {})
         trigger_cfg.setdefault("idle_mode", {"enabled": False, "interval_seconds": 2.0})
+        trigger_cfg.setdefault("vision_type", "basic_detection")
 
-        self.camera_stream = CameraStream()
+        self.system_config = deepcopy(system_config) if system_config else {}
+        self.system_cameras = deepcopy(self.system_config.get("cameras", {}))
+
+        self.camera_stream = CameraStream(self.system_cameras)
         self.available_sources = self.camera_stream.list_sources()
 
         self.active_zone_id: Optional[str] = None
         self._current_detection_summary: Dict[str, bool] = {}
+        self._last_frame: Optional[np.ndarray] = None
         self._current_state = "watching"
         self._last_state_signature: Optional[Tuple[str, str]] = None
         self.controls_scroll: Optional[QScrollArea] = None
@@ -617,18 +691,12 @@ class VisionDesignerWidget(QWidget):
         controls_layout.setContentsMargins(12, 8, 24, 8)
         controls_layout.setSpacing(12)
 
-        # Vision state banner
-        self.state_button = QPushButton("Live Mode")
-        self.state_button.setEnabled(False)
-        self.state_button.setMinimumHeight(52)
-        self.state_button.setStyleSheet("QPushButton { font-size: 18px; font-weight: bold; border-radius: 12px; }")
-        controls_layout.addWidget(self.state_button)
-        self._apply_state_button_style("watching")
-
-        controls_layout.addWidget(self._build_camera_group())
-        controls_layout.addWidget(self._build_trigger_group())
-        controls_layout.addWidget(self._build_zone_group())
-        controls_layout.addWidget(self._build_detection_group())
+        controls_layout.addWidget(self._build_state_card())
+        controls_layout.addWidget(self._build_camera_step())
+        controls_layout.addWidget(self._build_idle_step())
+        controls_layout.addWidget(self._build_vision_type_step())
+        controls_layout.addWidget(self._build_zone_step())
+        controls_layout.addWidget(self._build_settings_step())
         controls_layout.addStretch()
 
         self.controls_scroll.setWidget(controls_panel)
@@ -655,7 +723,7 @@ class VisionDesignerWidget(QWidget):
         main_layout.addLayout(controls_stack, stretch=1)
         self._configure_scroll_buttons()
 
-        self._refresh_zone_list()
+        self._refresh_zone_table()
 
     def _configure_scroll_buttons(self):
         """Configure scroll controls for touch interaction."""
@@ -675,6 +743,334 @@ class VisionDesignerWidget(QWidget):
         bar = self.controls_scroll.verticalScrollBar()
         bar.setValue(bar.value() + delta)
 
+    def _create_step_container(self, number: int, title: str, description: str) -> Tuple[QFrame, QVBoxLayout]:
+        frame = QFrame()
+        frame.setStyleSheet(
+            """
+            QFrame {
+                background-color: #2b2b2b;
+                border-radius: 12px;
+                border: 1px solid #3d3d3d;
+            }
+            """
+        )
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(10)
+
+        header = QLabel(f"{number}. {title}")
+        header.setStyleSheet("color: #ffffff; font-size: 16px; font-weight: bold;")
+        layout.addWidget(header)
+
+        desc_label = QLabel(description)
+        desc_label.setWordWrap(True)
+        desc_label.setStyleSheet("color: #bbbbbb; font-size: 12px;")
+        layout.addWidget(desc_label)
+
+        return frame, layout
+
+    def _build_state_card(self) -> QFrame:
+        card = QFrame()
+        card.setStyleSheet(
+            """
+            QFrame {
+                background-color: #252525;
+                border-radius: 14px;
+                border: 1px solid #333333;
+            }
+            """
+        )
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        title = QLabel("Vision Status")
+        title.setStyleSheet("color: #f0f0f0; font-size: 15px; font-weight: bold;")
+        layout.addWidget(title)
+
+        self.state_chip = QLabel("FALSE")
+        self.state_chip.setAlignment(Qt.AlignCenter)
+        self.state_chip.setMinimumHeight(38)
+        self.state_chip.setStyleSheet("border-radius: 10px; font-size: 16px; font-weight: bold;")
+        layout.addWidget(self.state_chip)
+
+        self.detection_status = QLabel("Watching for triggers")
+        self.detection_status.setWordWrap(True)
+        self.detection_status.setStyleSheet("color: #cccccc; font-size: 13px;")
+        layout.addWidget(self.detection_status)
+
+        self.metric_label = QLabel("Metric: N/A")
+        self.metric_label.setStyleSheet("color: #999999; font-size: 12px;")
+        layout.addWidget(self.metric_label)
+
+        self._apply_state_chip("false")
+        return card
+
+    def _build_camera_step(self) -> QFrame:
+        frame, layout = self._create_step_container(
+            1,
+            "Select Camera",
+            "Choose which named camera from Settings should power this vision step.",
+        )
+
+        self.camera_combo = QComboBox()
+        self.camera_combo.setMinimumHeight(48)
+        self.camera_combo.setStyleSheet(
+            """
+            QComboBox {
+                background-color: #404040;
+                color: white;
+                border: 2px solid #505050;
+                border-radius: 6px;
+                padding: 12px;
+                font-size: 15px;
+            }
+            """
+        )
+        self._populate_camera_combo()
+        self.camera_combo.currentIndexChanged.connect(self._on_camera_changed)
+        layout.addWidget(self.camera_combo)
+
+        row = QHBoxLayout()
+        self.camera_status = QLabel("Status: Not connected")
+        self.camera_status.setStyleSheet("color: #bbbbbb; font-size: 12px;")
+        row.addWidget(self.camera_status)
+
+        self.rescan_btn = QPushButton("Rescan")
+        self.rescan_btn.setMinimumHeight(36)
+        self.rescan_btn.setMaximumWidth(120)
+        self.rescan_btn.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #505050;
+                color: #ffffff;
+                border-radius: 8px;
+                padding: 6px 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #5e5e5e; }
+            """
+        )
+        self.rescan_btn.clicked.connect(self._rescan_cameras)
+        row.addWidget(self.rescan_btn, alignment=Qt.AlignRight)
+        layout.addLayout(row)
+
+        return frame
+
+    def _build_idle_step(self) -> QFrame:
+        frame, layout = self._create_step_container(
+            2,
+            "Idle Mode",
+            "Pause the camera between checks to save power. Idle keeps watching every few seconds until a detection flips the state to True.",
+        )
+
+        controls = QHBoxLayout()
+        controls.setSpacing(10)
+
+        self.idle_toggle = QPushButton("Idle Off")
+        self.idle_toggle.setCheckable(True)
+        self.idle_toggle.setMinimumHeight(44)
+        self.idle_toggle.setStyleSheet("border-radius: 10px; font-size: 14px; font-weight: bold;")
+        self.idle_toggle.toggled.connect(self._on_idle_toggle_changed)
+        controls.addWidget(self.idle_toggle)
+
+        spin_container = QHBoxLayout()
+        spin_container.setSpacing(6)
+        seconds_label = QLabel("Seconds:")
+        seconds_label.setStyleSheet("color: #dddddd; font-size: 13px;")
+        spin_container.addWidget(seconds_label)
+
+        self.idle_interval_spin = QDoubleSpinBox()
+        self.idle_interval_spin.setRange(0.5, 60.0)
+        self.idle_interval_spin.setSingleStep(0.5)
+        self.idle_interval_spin.setDecimals(2)
+        self.idle_interval_spin.setValue(self._config["trigger"].get("idle_mode", {}).get("interval_seconds", 2.0))
+        self.idle_interval_spin.valueChanged.connect(self._on_idle_interval_changed)
+        self.idle_interval_spin.setEnabled(False)
+        spin_container.addWidget(self.idle_interval_spin)
+        spin_container.addStretch()
+
+        controls.addLayout(spin_container)
+        layout.addLayout(controls)
+
+        self._apply_idle_toggle_style(self._config["trigger"].get("idle_mode", {}).get("enabled", False))
+
+        return frame
+
+    def _build_vision_type_step(self) -> QFrame:
+        frame, layout = self._create_step_container(
+            3,
+            "Vision Type",
+            "Pick the detection model to run. More options will appear here as we add advanced vision modes.",
+        )
+
+        self.vision_type_combo = QComboBox()
+        self.vision_type_combo.setMinimumHeight(44)
+        self.vision_type_combo.setStyleSheet(
+            """
+            QComboBox {
+                background-color: #404040;
+                color: white;
+                border: 2px solid #505050;
+                border-radius: 6px;
+                padding: 10px;
+                font-size: 15px;
+            }
+            """
+        )
+        self.vision_type_combo.addItem("Basic Vision Detection", "basic_detection")
+        current_type = self._config["trigger"].get("vision_type", "basic_detection")
+        idx = self.vision_type_combo.findData(current_type)
+        if idx >= 0:
+            self.vision_type_combo.setCurrentIndex(idx)
+        self.vision_type_combo.currentIndexChanged.connect(self._on_vision_type_changed)
+        layout.addWidget(self.vision_type_combo)
+
+        return frame
+
+    def _build_zone_step(self) -> QFrame:
+        frame, layout = self._create_step_container(
+            4,
+            "Draw Area",
+            "Trace the detection zone on the preview. We'll store a single polygon now and expand to multiples later.",
+        )
+
+        self.zones_table = QTableWidget(0, 3)
+        self.zones_table.setHorizontalHeaderLabels(["Area", "Points", "Actions"])
+        self.zones_table.horizontalHeader().setStretchLastSection(True)
+        self.zones_table.horizontalHeader().setStyleSheet("color: #dddddd; font-size: 12px;")
+        self.zones_table.verticalHeader().setVisible(False)
+        self.zones_table.setShowGrid(False)
+        self.zones_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.zones_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.zones_table.setFocusPolicy(Qt.NoFocus)
+        self.zones_table.setStyleSheet(
+            """
+            QTableWidget {
+                background-color: #2f2f2f;
+                border: 1px solid #3e3e3e;
+                border-radius: 10px;
+            }
+            QTableWidget::item {
+                color: #f0f0f0;
+                font-size: 13px;
+                padding: 8px;
+            }
+            """
+        )
+        layout.addWidget(self.zones_table)
+
+        self.add_zone_btn = QPushButton("➕ Add Area")
+        self.add_zone_btn.setMinimumHeight(40)
+        self.add_zone_btn.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border-radius: 10px;
+                font-weight: bold;
+            }
+            QPushButton:disabled { background-color: #2f5f33; color: #aaaaaa; }
+            """
+        )
+        self.add_zone_btn.clicked.connect(self._create_zone)
+        layout.addWidget(self.add_zone_btn, alignment=Qt.AlignRight)
+
+        self._zone_action_buttons: Dict[str, QPushButton] = {}
+        self._editing_zone_id: Optional[str] = None
+
+        return frame
+
+    def _build_settings_step(self) -> QFrame:
+        frame, layout = self._create_step_container(
+            5,
+            "Detection Settings",
+            "Tune how the basic detector behaves. Adjust the display name, metric, and threshold to set when the state flips to True (green).",
+        )
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignLeft)
+        form.setFormAlignment(Qt.AlignTop)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(10)
+
+        self.trigger_name_edit = QLineEdit(self._config["trigger"].get("display_name", "Detection Zone"))
+        self.trigger_name_edit.setClearButtonEnabled(True)
+        self.trigger_name_edit.textChanged.connect(self._on_trigger_name_changed)
+        self.trigger_name_edit.setMinimumHeight(38)
+        form.addRow("Display Name", self.trigger_name_edit)
+
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(["presence", "absence", "edge", "custom"])
+        current_mode = self._config["trigger"].get("mode", "presence")
+        idx = self.mode_combo.findText(current_mode)
+        if idx >= 0:
+            self.mode_combo.setCurrentIndex(idx)
+        self.mode_combo.currentTextChanged.connect(self._on_mode_changed)
+        form.addRow("Trigger Mode", self.mode_combo)
+
+        self.metric_combo = QComboBox()
+        self.metric_combo.addItems(["intensity", "green_channel", "edge_density"])
+        current_metric = self._config["trigger"]["settings"].get("metric", "intensity")
+        metric_idx = self.metric_combo.findText(current_metric)
+        if metric_idx >= 0:
+            self.metric_combo.setCurrentIndex(metric_idx)
+        self.metric_combo.currentTextChanged.connect(self._on_metric_changed)
+        form.addRow("Detection Metric", self.metric_combo)
+
+        self.threshold_slider = QSlider(Qt.Horizontal)
+        self.threshold_slider.setRange(0, 100)
+        self.threshold_slider.setValue(int(self._config["trigger"]["settings"].get("threshold", 0.55) * 100))
+        self.threshold_slider.valueChanged.connect(self._on_threshold_changed)
+        form.addRow("Threshold", self.threshold_slider)
+
+        self.sensitivity_spin = QDoubleSpinBox()
+        self.sensitivity_spin.setRange(0.1, 1.0)
+        self.sensitivity_spin.setSingleStep(0.05)
+        self.sensitivity_spin.setValue(self._config["trigger"]["settings"].get("sensitivity", 0.6))
+        self.sensitivity_spin.valueChanged.connect(self._on_sensitivity_changed)
+        form.addRow("Sensitivity", self.sensitivity_spin)
+
+        self.invert_checkbox = QCheckBox("Invert trigger (detect when metric below threshold)")
+        self.invert_checkbox.setChecked(self._config["trigger"]["settings"].get("invert", False))
+        self.invert_checkbox.toggled.connect(self._on_invert_toggled)
+        form.addRow(self.invert_checkbox)
+
+        self.hold_spin = QDoubleSpinBox()
+        self.hold_spin.setRange(0.0, 5.0)
+        self.hold_spin.setSingleStep(0.1)
+        self.hold_spin.setValue(self._config["trigger"]["settings"].get("hold_time", 0.0))
+        self.hold_spin.valueChanged.connect(self._on_hold_changed)
+        form.addRow("Hold Time (s)", self.hold_spin)
+
+        layout.addLayout(form)
+
+        debug_row = QVBoxLayout()
+        debug_row.setSpacing(6)
+        self.debug_toggle = QCheckBox("Show debug preview (camera + metrics overlay)")
+        self.debug_toggle.setStyleSheet("color: #dddddd; font-size: 12px;")
+        self.debug_toggle.toggled.connect(self._on_debug_toggled)
+        debug_row.addWidget(self.debug_toggle)
+
+        self.debug_preview_label = QLabel("Enable debug preview to visualize threshold checks.")
+        self.debug_preview_label.setAlignment(Qt.AlignCenter)
+        self.debug_preview_label.setMinimumHeight(120)
+        self.debug_preview_label.setStyleSheet(
+            "color: #aaaaaa; font-size: 12px; border: 1px dashed #444444; border-radius: 10px; padding: 6px;"
+        )
+        debug_row.addWidget(self.debug_preview_label)
+
+        layout.addLayout(debug_row)
+
+        return frame
+
+    def _populate_camera_combo(self):
+        self.camera_combo.blockSignals(True)
+        self.camera_combo.clear()
+        for source in self.available_sources:
+            self.camera_combo.addItem(source.label, source.source_id)
+        self.camera_combo.blockSignals(False)
+
     def _set_camera_combo(self, source_id: str):
         idx = self.camera_combo.findData(source_id)
         if idx >= 0:
@@ -685,221 +1081,274 @@ class VisionDesignerWidget(QWidget):
     def _use_virtual_feed(self, status_message: str):
         virtual_source = next((s for s in self.available_sources if s.source_id == "virtual:demo"), None)
         if virtual_source is None:
-            virtual_source = CameraSource("virtual:demo", "Demo Feed", "virtual", -1, True)
+            virtual_source = CameraSource("virtual:demo", "Demo Feed", "virtual", index=-1, available=True)
             self.available_sources.append(virtual_source)
             self.camera_combo.addItem(virtual_source.label, virtual_source.source_id)
         self.camera_stream.open(virtual_source)
         self._set_camera_combo(virtual_source.source_id)
         self.camera_status.setText(status_message)
-        self._config["camera"]["index"] = virtual_source.index
-        self._config["camera"]["label"] = virtual_source.label
-        self._config["camera"]["source_id"] = virtual_source.source_id
+        camera_cfg = self._config.setdefault("camera", {})
+        camera_cfg.update(
+            {
+                "index": virtual_source.index,
+                "label": virtual_source.label,
+                "source_id": virtual_source.source_id,
+                "config_key": None,
+                "index_or_path": virtual_source.index,
+            }
+        )
         if self._current_state != "triggered":
             self._update_state("watching", {"message": "Using demo feed"})
 
-    def _apply_state_button_style(self, state: str):
+    def _apply_state_chip(self, state: str):
         palette = {
-            "triggered": ("#4CAF50", "#ffffff"),
-            "idle": ("#FFB300", "#1e1e1e"),
-            "watching": ("#616161", "#ffffff"),
+            "true": ("#2e7d32", "TRUE"),
+            "false": ("#c62828", "FALSE"),
+            "idle": ("#ff9800", "IDLE"),
         }
-        background, foreground = palette.get(state, palette["watching"])
-        self.state_button.setStyleSheet(
+        background, label = palette.get(state, palette["false"])
+        self.state_chip.setText(label)
+        self.state_chip.setStyleSheet(
             f"""
-            QPushButton {{
-                font-size: 16px;
-                font-weight: bold;
-                border-radius: 8px;
+            QLabel {{
                 background-color: {background};
-                color: {foreground};
-                border: none;
-                padding: 6px 12px;
+                color: #ffffff;
+                border-radius: 10px;
+                font-weight: bold;
             }}
             """
         )
+
+    def _apply_idle_toggle_style(self, enabled: bool):
+        if enabled:
+            self.idle_toggle.setText("Idle On")
+            self.idle_toggle.setChecked(True)
+            self.idle_toggle.setStyleSheet(
+                """
+                QPushButton {
+                    background-color: #ff9800;
+                    color: #1e1e1e;
+                    border-radius: 10px;
+                    font-weight: bold;
+                }
+                QPushButton:checked {
+                    background-color: #ffb74d;
+                    color: #1e1e1e;
+                }
+                """
+            )
+            self.idle_interval_spin.setEnabled(True)
+        else:
+            self.idle_toggle.blockSignals(True)
+            self.idle_toggle.setChecked(False)
+            self.idle_toggle.blockSignals(False)
+            self.idle_toggle.setText("Idle Off")
+            self.idle_toggle.setStyleSheet(
+                """
+                QPushButton {
+                    background-color: #424242;
+                    color: #f5f5f5;
+                    border-radius: 10px;
+                    font-weight: bold;
+                }
+                QPushButton:hover { background-color: #4c4c4c; }
+                """
+            )
+            self.idle_interval_spin.setEnabled(False)
+
+    def _refresh_zone_table(self):
+        zones = self._config["trigger"].get("zones", [])
+        self.zones_table.blockSignals(True)
+        self.zones_table.setRowCount(len(zones))
+        self._zone_action_buttons.clear()
+
+        for row, zone in enumerate(zones):
+            zone_id = zone.get("zone_id")
+            name = zone.get("name", f"Zone {row + 1}")
+            points_count = len(zone.get("polygon", []))
+
+            name_item = QTableWidgetItem(name)
+            name_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            points_item = QTableWidgetItem(f"{points_count} pts")
+            points_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+
+            self.zones_table.setItem(row, 0, name_item)
+            self.zones_table.setItem(row, 1, points_item)
+
+            action_widget = QWidget()
+            action_layout = QHBoxLayout(action_widget)
+            action_layout.setContentsMargins(0, 0, 0, 0)
+            action_layout.setSpacing(6)
+
+            edit_btn = QPushButton("Edit")
+            edit_btn.setMinimumHeight(32)
+            edit_btn.setStyleSheet(
+                """
+                QPushButton {
+                    background-color: #4a90e2;
+                    color: white;
+                    border-radius: 8px;
+                    font-weight: bold;
+                    padding: 4px 10px;
+                }
+                QPushButton:hover { background-color: #5aa0f0; }
+                """
+            )
+            edit_btn.clicked.connect(lambda _, zid=zone_id: self._toggle_zone_edit(zid))
+
+            delete_btn = QPushButton("Delete")
+            delete_btn.setMinimumHeight(32)
+            delete_btn.setStyleSheet(
+                """
+                QPushButton {
+                    background-color: #c62828;
+                    color: white;
+                    border-radius: 8px;
+                    font-weight: bold;
+                    padding: 4px 10px;
+                }
+                QPushButton:hover { background-color: #d84343; }
+                """
+            )
+            delete_btn.clicked.connect(lambda _, zid=zone_id: self._delete_zone(zid))
+
+            if self._editing_zone_id == zone_id:
+                edit_btn.setText("Done")
+                edit_btn.setStyleSheet(
+                    """
+                    QPushButton {
+                        background-color: #43a047;
+                        color: white;
+                        border-radius: 8px;
+                        font-weight: bold;
+                        padding: 4px 10px;
+                    }
+                    QPushButton:hover { background-color: #4caf50; }
+                    """
+                )
+
+            action_layout.addWidget(edit_btn)
+            action_layout.addWidget(delete_btn)
+            action_layout.addStretch()
+            self.zones_table.setCellWidget(row, 2, action_widget)
+            if zone_id:
+                self._zone_action_buttons[zone_id] = edit_btn
+
+        self.zones_table.blockSignals(False)
+        self.add_zone_btn.setEnabled(len(zones) < 1)
+        self.canvas.set_zones(zones, self.active_zone_id)
+        self._highlight_zone_row(self.active_zone_id)
+
+    def _highlight_zone_row(self, zone_id: Optional[str]):
+        if zone_id is None:
+            self.zones_table.clearSelection()
+            return
+        zones = self._config["trigger"].get("zones", [])
+        for row, zone in enumerate(zones):
+            if zone.get("zone_id") == zone_id:
+                self.zones_table.selectRow(row)
+                break
+
+    def _create_zone(self):
+        zones = self._config["trigger"].setdefault("zones", [])
+        if len(zones) >= 1:
+            QMessageBox.information(self, "Draw Area", "Only one area is supported right now.")
+            return
+
+        existing_names = [zone.get("name", "") for zone in zones]
+        zone_name = _generate_zone_name(existing_names)
+        zone_id = _uuid("zone")
+        new_zone = {
+            "zone_id": zone_id,
+            "name": zone_name,
+            "polygon": [],
+            "enabled": True,
+            "color": "#33FF99",
+        }
+        zones.append(new_zone)
+        self.active_zone_id = zone_id
+        self._editing_zone_id = zone_id
+        self.canvas.start_drawing(zone_id)
+        self._refresh_zone_table()
+
+    def _toggle_zone_edit(self, zone_id: Optional[str]):
+        if zone_id is None:
+            return
+        if self._editing_zone_id == zone_id:
+            self._editing_zone_id = None
+            self.canvas.cancel_temporary_edit()
+        else:
+            self._editing_zone_id = zone_id
+            self.active_zone_id = zone_id
+            zone = self._zone_by_id(zone_id)
+            if zone and zone.get("polygon"):
+                self.canvas.edit_zone(zone_id)
+            else:
+                self.canvas.start_drawing(zone_id)
+        self._refresh_zone_table()
+
+    def _delete_zone(self, zone_id: Optional[str]):
+        if not zone_id:
+            return
+        zones = self._config["trigger"].get("zones", [])
+        self._config["trigger"]["zones"] = [zone for zone in zones if zone.get("zone_id") != zone_id]
+        if self.active_zone_id == zone_id:
+            self.active_zone_id = None
+        if self._editing_zone_id == zone_id:
+            self._editing_zone_id = None
+            self.canvas.cancel_temporary_edit()
+        self._refresh_zone_table()
+
+    def _on_zone_tapped(self, zone_id: str):
+        self.active_zone_id = zone_id
+        self._highlight_zone_row(zone_id)
+        self.canvas.set_zones(self._config["trigger"].get("zones", []), self.active_zone_id)
+
+    def _on_polygon_updated(self, zone_id: str, points: List[Tuple[float, float]]):
+        zone = self._zone_by_id(zone_id)
+        if not zone:
+            return
+        zone["polygon"] = points
+        self._refresh_zone_table()
+
+    def _on_polygon_finished(self, zone_id: str, points: List[Tuple[float, float]]):
+        zone = self._zone_by_id(zone_id)
+        if not zone:
+            return
+        zone["polygon"] = points
+        self.canvas.cancel_temporary_edit()
+        if self._editing_zone_id == zone_id:
+            self._editing_zone_id = None
+        self._refresh_zone_table()
+
+    def _zone_by_id(self, zone_id: str) -> Optional[Dict]:
+        for zone in self._config.get("trigger", {}).get("zones", []):
+            if zone.get("zone_id") == zone_id:
+                return zone
+        return None
 
     def _update_state(self, state: str, payload: Optional[Dict] = None):
         payload = payload or {}
         message = payload.get("message", "Watching for triggers")
         signature = (state, message)
-        self._apply_state_button_style(state)
+        self._current_state = state
 
         if state == "triggered":
-            self.state_button.setText("Triggered")
+            self._apply_state_chip("true")
+            self.detection_status.setText(message)
+            self.detection_status.setStyleSheet("color: #4CAF50; font-size: 13px;")
         elif state == "idle":
-            self.state_button.setText("Idle Mode")
+            self._apply_state_chip("idle")
+            self.detection_status.setText(message)
+            self.detection_status.setStyleSheet("color: #FFB300; font-size: 13px;")
         else:
-            self.state_button.setText("Live Mode")
+            self._apply_state_chip("false")
+            self.detection_status.setText(message)
+            self.detection_status.setStyleSheet("color: #e57373; font-size: 13px;")
 
-        self._current_state = state
         if signature != self._last_state_signature:
             self._last_state_signature = signature
             self.state_changed.emit(state, payload)
-
-    def _build_camera_group(self) -> QGroupBox:
-        group = QGroupBox("Camera Source")
-        group.setStyleSheet("QGroupBox { font-size: 16px; font-weight: bold; }")
-        layout = QVBoxLayout(group)
-
-        self.camera_combo = QComboBox()
-        for source in self.available_sources:
-            self.camera_combo.addItem(source.label, source.source_id)
-        self.camera_combo.currentIndexChanged.connect(self._on_camera_changed)
-        self.camera_combo.setMinimumHeight(48)
-        self.camera_combo.setStyleSheet("""
-            QComboBox {
-                background-color: #404040;
-                color: white;
-                border: 2px solid #505050;
-                border-radius: 6px;
-                padding: 12px;
-                font-size: 16px;
-            }
-        """)
-
-        layout.addWidget(self.camera_combo)
-
-        self.camera_status = QLabel("Status: Not connected")
-        self.camera_status.setStyleSheet("color: #cccccc; font-size: 13px;")
-        layout.addWidget(self.camera_status)
-
-        refresh_btn = QPushButton("🔄 Rescan Cameras")
-        refresh_btn.setMinimumHeight(36)
-        refresh_btn.clicked.connect(self._rescan_cameras)
-        layout.addWidget(refresh_btn)
-
-        return group
-
-    def _build_trigger_group(self) -> QGroupBox:
-        group = QGroupBox("Trigger Settings")
-        group.setStyleSheet("QGroupBox { font-size: 16px; font-weight: bold; }")
-
-        layout = QFormLayout(group)
-        layout.setLabelAlignment(Qt.AlignLeft)
-        layout.setFormAlignment(Qt.AlignTop)
-
-        self.trigger_name_edit = QLineEdit(self._config["trigger"].get("display_name", "Detection Zone"))
-        self.trigger_name_edit.setClearButtonEnabled(True)
-        self.trigger_name_edit.textChanged.connect(self._on_trigger_name_changed)
-        self.trigger_name_edit.setMinimumHeight(38)
-        layout.addRow("Display Name", self.trigger_name_edit)
-
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["presence", "absence", "edge", "custom"])
-        current_mode = self._config["trigger"].get("mode", "presence")
-        idx = self.mode_combo.findText(current_mode)
-        if idx >= 0:
-            self.mode_combo.setCurrentIndex(idx)
-        self.mode_combo.currentTextChanged.connect(self._on_mode_changed)
-        layout.addRow("Trigger Mode", self.mode_combo)
-
-        self.metric_combo = QComboBox()
-        self.metric_combo.addItems(["intensity", "green_channel", "edge_density"])
-        current_metric = self._config["trigger"]["settings"].get("metric", "intensity")
-        metric_idx = self.metric_combo.findText(current_metric)
-        if metric_idx >= 0:
-            self.metric_combo.setCurrentIndex(metric_idx)
-        self.metric_combo.currentTextChanged.connect(self._on_metric_changed)
-        layout.addRow("Detection Metric", self.metric_combo)
-
-        self.threshold_slider = QSlider(Qt.Horizontal)
-        self.threshold_slider.setRange(0, 100)
-        self.threshold_slider.setValue(int(self._config["trigger"]["settings"].get("threshold", 0.55) * 100))
-        self.threshold_slider.valueChanged.connect(self._on_threshold_changed)
-        layout.addRow("Threshold", self.threshold_slider)
-
-        self.sensitivity_spin = QDoubleSpinBox()
-        self.sensitivity_spin.setRange(0.1, 1.0)
-        self.sensitivity_spin.setSingleStep(0.05)
-        self.sensitivity_spin.setValue(self._config["trigger"]["settings"].get("sensitivity", 0.6))
-        self.sensitivity_spin.valueChanged.connect(self._on_sensitivity_changed)
-        layout.addRow("Sensitivity", self.sensitivity_spin)
-
-        self.invert_checkbox = QCheckBox("Invert trigger (detect when metric below threshold)")
-        self.invert_checkbox.setChecked(self._config["trigger"]["settings"].get("invert", False))
-        self.invert_checkbox.toggled.connect(self._on_invert_toggled)
-        layout.addRow(self.invert_checkbox)
-
-        self.hold_spin = QDoubleSpinBox()
-        self.hold_spin.setRange(0.0, 5.0)
-        self.hold_spin.setSingleStep(0.1)
-        self.hold_spin.setValue(self._config["trigger"]["settings"].get("hold_time", 0.0))
-        self.hold_spin.valueChanged.connect(self._on_hold_changed)
-        layout.addRow("Hold Time (s)", self.hold_spin)
-
-        idle_cfg = self._config["trigger"].get("idle_mode", {})
-        self.idle_checkbox = QCheckBox("Enable Idle Mode (standby)")
-        self.idle_checkbox.setChecked(idle_cfg.get("enabled", False))
-        self.idle_checkbox.toggled.connect(self._on_idle_toggled)
-        layout.addRow(self.idle_checkbox)
-
-        self.idle_interval_spin = QDoubleSpinBox()
-        self.idle_interval_spin.setRange(0.5, 60.0)
-        self.idle_interval_spin.setSingleStep(0.5)
-        self.idle_interval_spin.setValue(idle_cfg.get("interval_seconds", 2.0))
-        self.idle_interval_spin.valueChanged.connect(self._on_idle_interval_changed)
-        self.idle_interval_spin.setEnabled(self.idle_checkbox.isChecked())
-        layout.addRow("Check interval (s)", self.idle_interval_spin)
-
-        return group
-
-    def _build_zone_group(self) -> QGroupBox:
-        group = QGroupBox("Zones")
-        group.setStyleSheet("QGroupBox { font-size: 16px; font-weight: bold; }")
-        layout = QVBoxLayout(group)
-
-        self.zone_list = QListWidget()
-        self.zone_list.setMinimumHeight(100)
-        self.zone_list.setMaximumHeight(220)
-        self.zone_list.itemSelectionChanged.connect(self._on_zone_selected)
-        layout.addWidget(self.zone_list)
-
-        btn_row = QHBoxLayout()
-        self.new_zone_btn = QPushButton("➕ New Zone")
-        self.new_zone_btn.setMinimumHeight(40)
-        self.new_zone_btn.clicked.connect(self._create_zone)
-        btn_row.addWidget(self.new_zone_btn)
-
-        self.edit_zone_btn = QPushButton("✏️ Edit Zone")
-        self.edit_zone_btn.setMinimumHeight(40)
-        self.edit_zone_btn.clicked.connect(self._edit_selected_zone)
-        btn_row.addWidget(self.edit_zone_btn)
-
-        layout.addLayout(btn_row)
-
-        second_row = QHBoxLayout()
-        self.clear_zone_btn = QPushButton("🗑️ Remove")
-        self.clear_zone_btn.setMinimumHeight(40)
-        self.clear_zone_btn.clicked.connect(self._delete_selected_zone)
-        second_row.addWidget(self.clear_zone_btn)
-
-        self.finish_edit_btn = QPushButton("✅ Finish Editing")
-        self.finish_edit_btn.setMinimumHeight(40)
-        self.finish_edit_btn.clicked.connect(self._finish_zone_editing)
-        second_row.addWidget(self.finish_edit_btn)
-
-        layout.addLayout(second_row)
-
-        return group
-
-    def _build_detection_group(self) -> QGroupBox:
-        group = QGroupBox("Live Detection")
-        group.setStyleSheet("QGroupBox { font-size: 16px; font-weight: bold; }")
-        group.setMaximumHeight(150)
-        layout = QVBoxLayout(group)
-
-        self.detection_status = QLabel("Waiting for camera...")
-        self.detection_status.setAlignment(Qt.AlignCenter)
-        self.detection_status.setWordWrap(True)
-        self.detection_status.setStyleSheet("color: #cccccc; font-size: 14px; padding: 10px;")
-        layout.addWidget(self.detection_status)
-
-        self.metric_label = QLabel("Metric: N/A")
-        self.metric_label.setAlignment(Qt.AlignCenter)
-        self.metric_label.setStyleSheet("color: #bbbbbb; font-size: 13px;")
-        layout.addWidget(self.metric_label)
-
-        return group
 
     # ------------------------------------------------------------------
     # Configuration management
@@ -922,12 +1371,27 @@ class VisionDesignerWidget(QWidget):
         self.hold_spin.setValue(self._config["trigger"]["settings"].get("hold_time", 0.0))
         self.sensitivity_spin.setValue(self._config["trigger"]["settings"].get("sensitivity", 0.6))
         idle_cfg = self._config["trigger"].setdefault("idle_mode", {"enabled": False, "interval_seconds": 2.0})
-        self.idle_checkbox.setChecked(idle_cfg.get("enabled", False))
-        self.idle_interval_spin.setValue(idle_cfg.get("interval_seconds", 2.0))
-        self.idle_interval_spin.setEnabled(self.idle_checkbox.isChecked())
+        enabled = idle_cfg.get("enabled", False)
+        interval = idle_cfg.get("interval_seconds", 2.0)
+        self.idle_toggle.blockSignals(True)
+        self.idle_toggle.setChecked(enabled)
+        self.idle_toggle.blockSignals(False)
+        self._apply_idle_toggle_style(enabled)
+        self.idle_interval_spin.setValue(interval)
+        self.idle_interval_spin.setEnabled(enabled)
+        vision_type = self._config["trigger"].get("vision_type", "basic_detection")
+        idx = self.vision_type_combo.findData(vision_type)
+        if idx >= 0:
+            self.vision_type_combo.setCurrentIndex(idx)
         if not self._config.get("name"):
             self._config["name"] = self._config["trigger"].get("display_name", "Vision Trigger")
-        self._refresh_zone_list()
+        self._refresh_zone_table()
+        current_source_id = self._config.get("camera", {}).get("source_id")
+        self.available_sources = self.camera_stream.list_sources()
+        self._populate_camera_combo()
+        if current_source_id:
+            self._set_camera_combo(current_source_id)
+        self._sync_camera_selection()
 
     # ------------------------------------------------------------------
     # Camera handling
@@ -935,12 +1399,19 @@ class VisionDesignerWidget(QWidget):
         source_id = self._config["camera"].get("source_id", "camera:0")
         source = self._source_by_id(source_id)
 
-        if source and source.kind == "camera" and source.available:
+        if source and source.kind in {"camera", "system"} and source.available:
             self._set_camera_combo(source.source_id)
             self.camera_stream.open(source)
-            self._config["camera"]["index"] = source.index
-            self._config["camera"]["label"] = source.label
-            self._config["camera"]["source_id"] = source.source_id
+            camera_cfg = self._config.setdefault("camera", {})
+            camera_cfg.update(
+                {
+                    "index": source.index if source.index is not None else 0,
+                    "label": source.label,
+                    "source_id": source.source_id,
+                    "config_key": source.config_key,
+                    "index_or_path": source.path if source.path is not None else source.index,
+                }
+            )
             self.camera_status.setText("Status: Connected")
             if self._current_state != "triggered":
                 self._update_state("watching", {"message": "Watching for triggers"})
@@ -954,14 +1425,26 @@ class VisionDesignerWidget(QWidget):
                 self._update_state("watching", {"message": "Using demo feed"})
             return
 
-        available_camera = next((s for s in self.available_sources if s.kind == "camera" and s.available), None)
+        available_camera = next(
+            (s for s in self.available_sources if s.kind in {"camera", "system"} and s.available),
+            None,
+        )
 
         if available_camera:
             self._set_camera_combo(available_camera.source_id)
             self.camera_stream.open(available_camera)
-            self._config["camera"]["index"] = available_camera.index
-            self._config["camera"]["label"] = available_camera.label
-            self._config["camera"]["source_id"] = available_camera.source_id
+            camera_cfg = self._config.setdefault("camera", {})
+            camera_cfg.update(
+                {
+                    "index": available_camera.index if available_camera.index is not None else 0,
+                    "label": available_camera.label,
+                    "source_id": available_camera.source_id,
+                    "config_key": available_camera.config_key,
+                    "index_or_path": available_camera.path
+                    if available_camera.path is not None
+                    else available_camera.index,
+                }
+            )
             self.camera_status.setText("Status: Connected")
             if self._current_state != "triggered":
                 self._update_state("watching", {"message": "Watching for triggers"})
@@ -981,9 +1464,16 @@ class VisionDesignerWidget(QWidget):
             return
         if source.kind == "virtual":
             self.camera_stream.open(source)
-            self._config["camera"]["index"] = source.index
-            self._config["camera"]["label"] = source.label
-            self._config["camera"]["source_id"] = source.source_id
+            camera_cfg = self._config.setdefault("camera", {})
+            camera_cfg.update(
+                {
+                    "index": source.index if source.index is not None else 0,
+                    "label": source.label,
+                    "source_id": source.source_id,
+                    "config_key": None,
+                    "index_or_path": source.index,
+                }
+            )
             self.camera_status.setText("Status: Demo feed")
             if self._current_state != "triggered":
                 self._update_state("watching", {"message": "Using demo feed"})
@@ -995,9 +1485,16 @@ class VisionDesignerWidget(QWidget):
             return
 
         self.camera_stream.open(source)
-        self._config["camera"]["index"] = source.index
-        self._config["camera"]["label"] = source.label
-        self._config["camera"]["source_id"] = source.source_id
+        camera_cfg = self._config.setdefault("camera", {})
+        camera_cfg.update(
+            {
+                "index": source.index if source.index is not None else 0,
+                "label": source.label,
+                "source_id": source.source_id,
+                "config_key": source.config_key,
+                "index_or_path": source.path if source.path is not None else source.index,
+            }
+        )
         self.camera_status.setText("Status: Connected")
         if self._current_state != "triggered":
             self._update_state("watching", {"message": "Watching for triggers"})
@@ -1006,11 +1503,7 @@ class VisionDesignerWidget(QWidget):
         self.available_sources = self.camera_stream.list_sources()
         current_source = self._config["camera"].get("source_id", "camera:0")
 
-        self.camera_combo.blockSignals(True)
-        self.camera_combo.clear()
-        for source in self.available_sources:
-            self.camera_combo.addItem(source.label, source.source_id)
-        self.camera_combo.blockSignals(False)
+        self._populate_camera_combo()
 
         if current_source:
             self._set_camera_combo(current_source)
@@ -1020,15 +1513,17 @@ class VisionDesignerWidget(QWidget):
     def _update_frame(self):
         frame = self.camera_stream.read()
         if frame is None:
+            self._last_frame = None
             self.canvas.set_frame(QImage(), (0, 0))
-            self.detection_status.setStyleSheet("color: #cccccc; font-size: 14px; padding: 10px;")
             self.detection_status.setText("Waiting for camera...")
             self.metric_label.setText("Metric: N/A")
+            self._update_debug_preview(None, {})
             self._update_state("watching", {"message": "Waiting for camera feed"})
             return
 
         height, width = frame.shape[:2]
         self._config["camera"]["resolution"] = [width, height]
+        self._last_frame = frame.copy()
 
         # Compute detection metric
         detection_summary = self._evaluate_detection(frame)
@@ -1050,18 +1545,12 @@ class VisionDesignerWidget(QWidget):
 
         if triggered_zones:
             message = "Triggered • " + ", ".join(triggered_zones)
-            self.detection_status.setStyleSheet("color: #4CAF50; font-size: 15px; padding: 8px;")
-            self.detection_status.setText(message)
             state = "triggered"
         elif idle_cfg.get("enabled", False):
             message = f"Idle mode • checking every {interval:.1f}s"
-            self.detection_status.setStyleSheet("color: #FFB300; font-size: 15px; padding: 8px;")
-            self.detection_status.setText(message)
             state = "idle"
         else:
             message = "Watching for triggers"
-            self.detection_status.setStyleSheet("color: #cccccc; font-size: 15px; padding: 8px;")
-            self.detection_status.setText(message)
             state = "watching"
 
         metric_value = self._latest_metric_value(detection_summary)
@@ -1072,6 +1561,8 @@ class VisionDesignerWidget(QWidget):
 
         self.canvas.set_frame(_to_qimage(frame), (width, height))
         self.canvas.set_zones(zones, self.active_zone_id)
+        self._update_debug_preview(self._last_frame, detection_summary)
+        self.detection_status.setText(message)
 
         payload = {
             "message": message,
@@ -1147,6 +1638,12 @@ class VisionDesignerWidget(QWidget):
     def _on_metric_changed(self, metric: str):
         self._config["trigger"]["settings"]["metric"] = metric
 
+    def _on_vision_type_changed(self, index: int):
+        value = self.vision_type_combo.itemData(index)
+        if value is None:
+            value = "basic_detection"
+        self._config["trigger"]["vision_type"] = value
+
     def _on_threshold_changed(self, value: int):
         self._config["trigger"]["settings"]["threshold"] = value / 100.0
 
@@ -1159,12 +1656,13 @@ class VisionDesignerWidget(QWidget):
     def _on_hold_changed(self, value: float):
         self._config["trigger"]["settings"]["hold_time"] = value
 
-    def _on_idle_toggled(self, checked: bool):
+    def _on_idle_toggle_changed(self, checked: bool):
         idle_cfg = self._config["trigger"].setdefault("idle_mode", {})
         idle_cfg["enabled"] = checked
         if not idle_cfg.get("interval_seconds"):
             idle_cfg["interval_seconds"] = 2.0
         self.idle_interval_spin.setEnabled(checked)
+        self._apply_idle_toggle_style(checked)
         interval = idle_cfg.get("interval_seconds", 2.0)
         message = "Idle mode" if checked else "Watching for triggers"
         if self._current_state != "triggered":
@@ -1182,117 +1680,63 @@ class VisionDesignerWidget(QWidget):
                 "interval_seconds": value,
             })
 
+    def _on_debug_toggled(self, checked: bool):
+        if not checked:
+            self.debug_preview_label.setPixmap(QPixmap())
+            self.debug_preview_label.setText("Enable debug preview to visualize threshold checks.")
+            return
+        self._update_debug_preview(self._last_frame, self._current_detection_summary)
+
+    def _update_debug_preview(self, frame: Optional[np.ndarray], detection_summary: Dict[str, float]):
+        if not self.debug_toggle.isChecked():
+            return
+        if frame is None:
+            self.debug_preview_label.setPixmap(QPixmap())
+            self.debug_preview_label.setText("Waiting for camera frame...")
+            return
+        zones = self._config["trigger"].get("zones", [])
+        if not zones:
+            self.debug_preview_label.setPixmap(QPixmap())
+            self.debug_preview_label.setText("Add a draw area to view debug preview.")
+            return
+
+        overlay = frame.copy()
+        height, width = overlay.shape[:2]
+        threshold = _clamp(self._config["trigger"]["settings"].get("threshold", 0.55))
+
+        for zone in zones:
+            polygon = zone.get("polygon", [])
+            if len(polygon) < 3:
+                continue
+            pts = _normalized_polygon_to_pixels(polygon, width, height)
+            if pts.size == 0:
+                continue
+            triggered = detection_summary.get(zone.get("zone_id", ""), False)
+            metric = detection_summary.get(f"{zone.get('zone_id')}_metric")
+            color = (67, 160, 71) if triggered else (198, 40, 40)
+
+            mask = np.zeros_like(overlay)
+            cv2.fillPoly(mask, [pts], color)
+            overlay = cv2.addWeighted(overlay, 1.0, mask, 0.32, 0)
+            cv2.polylines(overlay, [pts], True, color, 2)
+
+            if metric is not None:
+                comparator = "≥" if triggered else "<"
+                text = f"{metric:.2f} {comparator} {threshold:.2f}"
+            else:
+                text = f"Threshold {threshold:.2f}"
+            text_start = (max(0, pts[0][0] + 6), max(22, pts[0][1] + 18))
+            cv2.putText(overlay, text, text_start, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+
+        pixmap = QPixmap.fromImage(_to_qimage(overlay))
+        target_width = max(20, self.debug_preview_label.width() - 12)
+        target_height = max(20, self.debug_preview_label.height() - 12)
+        pixmap = pixmap.scaled(target_width, target_height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.debug_preview_label.setPixmap(pixmap)
+        self.debug_preview_label.setText("")
+
     # ------------------------------------------------------------------
     # Zone management
-    def _refresh_zone_list(self):
-        self.zone_list.blockSignals(True)
-        self.zone_list.clear()
-
-        zone_count = len(self._config["trigger"]["zones"])
-        dynamic_height = max(100, min(220, 80 + zone_count * 48))
-        self.zone_list.setFixedHeight(dynamic_height)
-
-        for zone in self._config["trigger"]["zones"]:
-            item = QListWidgetItem(f"{zone.get('name', 'Zone')} • {len(zone.get('polygon', []))} pts")
-            item.setData(Qt.UserRole, zone["zone_id"])
-            self.zone_list.addItem(item)
-            if zone["zone_id"] == self.active_zone_id:
-                self.zone_list.setCurrentItem(item)
-
-        self.zone_list.blockSignals(False)
-        self.canvas.set_zones(self._config["trigger"]["zones"], self.active_zone_id)
-
-    def _create_zone(self):
-        existing_names = [zone["name"] for zone in self._config["trigger"]["zones"]]
-        zone_name = _generate_zone_name(existing_names)
-        zone_id = _uuid("zone")
-        new_zone = {
-            "zone_id": zone_id,
-            "name": zone_name,
-            "polygon": [],
-            "enabled": True,
-            "notes": "",
-            "color": "#33FF99",
-        }
-        self._config["trigger"]["zones"].append(new_zone)
-        self.active_zone_id = zone_id
-        self._refresh_zone_list()
-        self.canvas.start_drawing(zone_id)
-        self._update_zone_buttons()
-
-    def _edit_selected_zone(self):
-        item = self.zone_list.currentItem()
-        if not item:
-            QMessageBox.information(self, "Select Zone", "Pick a zone to edit.")
-            return
-        zone_id = item.data(Qt.UserRole)
-        self.active_zone_id = zone_id
-        self.canvas.edit_zone(zone_id)
-        self._update_zone_buttons()
-
-    def _finish_zone_editing(self):
-        self.canvas.cancel_temporary_edit()
-        self._update_zone_buttons()
-
-    def _delete_selected_zone(self):
-        item = self.zone_list.currentItem()
-        if not item:
-            QMessageBox.information(self, "Select Zone", "Pick a zone to remove.")
-            return
-        zone_id = item.data(Qt.UserRole)
-        self._config["trigger"]["zones"] = [
-            zone for zone in self._config["trigger"]["zones"] if zone["zone_id"] != zone_id
-        ]
-        if self.active_zone_id == zone_id:
-            self.active_zone_id = None
-        self.canvas.cancel_temporary_edit()
-        self._refresh_zone_list()
-        self._update_zone_buttons()
-
-    def _on_zone_selected(self):
-        item = self.zone_list.currentItem()
-        if not item:
-            self.active_zone_id = None
-        else:
-            self.active_zone_id = item.data(Qt.UserRole)
-        self.canvas.set_zones(self._config["trigger"]["zones"], self.active_zone_id)
-        self._update_zone_buttons()
-
-    def _on_zone_tapped(self, zone_id: str):
-        # Select zone in UI when tapped on canvas
-        for idx in range(self.zone_list.count()):
-            item = self.zone_list.item(idx)
-            if item.data(Qt.UserRole) == zone_id:
-                self.zone_list.setCurrentItem(item)
-                break
-
-    def _on_polygon_updated(self, zone_id: str, points: List[Tuple[float, float]]):
-        zone = self._zone_by_id(zone_id)
-        if not zone:
-            return
-        zone["polygon"] = points
-        self._refresh_zone_list()
-
-    def _on_polygon_finished(self, zone_id: str, points: List[Tuple[float, float]]):
-        zone = self._zone_by_id(zone_id)
-        if not zone:
-            return
-        zone["polygon"] = points
-        self.canvas.cancel_temporary_edit()
-        self._refresh_zone_list()
-        self._update_zone_buttons()
-
-    def _zone_by_id(self, zone_id: str) -> Optional[Dict]:
-        for zone in self._config["trigger"]["zones"]:
-            if zone["zone_id"] == zone_id:
-                return zone
-        return None
-
-    def _update_zone_buttons(self):
-        any_zone = bool(self._config["trigger"]["zones"])
-        self.edit_zone_btn.setEnabled(any_zone)
-        self.clear_zone_btn.setEnabled(any_zone)
-        self.finish_edit_btn.setEnabled(any_zone)
 
     # ------------------------------------------------------------------
     # Lifecycle helpers
@@ -1315,13 +1759,23 @@ class VisionConfigDialog(QDialog):
 
     state_changed = Signal(str, dict)
 
-    def __init__(self, parent=None, step_data: Optional[Dict] = None):
+    def __init__(
+        self,
+        parent=None,
+        step_data: Optional[Dict] = None,
+        system_config: Optional[Dict] = None,
+    ):
         super().__init__(parent)
         self.setWindowTitle("Configure Vision Trigger")
         self.setModal(True)
         self.setFixedSize(1024, 600)
 
-        self.designer = VisionDesignerWidget(self, step_data or create_default_vision_config())
+        config_source = system_config if system_config is not None else _load_system_config()
+        self.designer = VisionDesignerWidget(
+            self,
+            step_data or create_default_vision_config(),
+            config_source,
+        )
         self.designer.state_changed.connect(self.state_changed)
 
         layout = QVBoxLayout(self)
@@ -1358,7 +1812,11 @@ class VisionConfigDialog(QDialog):
 class VisionDesignerWindow(QWidget):
     """Standalone window to test the designer without loading full app."""
 
-    def __init__(self, step_data: Optional[Dict] = None):
+    def __init__(
+        self,
+        step_data: Optional[Dict] = None,
+        system_config: Optional[Dict] = None,
+    ):
         super().__init__()
         self.setWindowTitle("Vision Trigger Designer")
         self.setFixedSize(1024, 600)
@@ -1371,7 +1829,8 @@ class VisionDesignerWindow(QWidget):
         self.header.setStyleSheet("font-size: 20px; font-weight: bold; color: #ffffff; padding: 4px;")
         layout.addWidget(self.header)
 
-        self.designer = VisionDesignerWidget(self, step_data or create_default_vision_config())
+        config_source = system_config if system_config is not None else _load_system_config()
+        self.designer = VisionDesignerWidget(self, step_data or create_default_vision_config(), config_source)
         self.designer.setMinimumHeight(520)
         layout.addWidget(self.designer, stretch=1)
 
