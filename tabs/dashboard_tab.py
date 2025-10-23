@@ -788,8 +788,11 @@ class DashboardTab(QWidget):
         self._refresh_active_camera_label()
 
         # Welcome message
-        self.log_text.append("=== NICE LABS Robotics ===")
-        self.log_text.append("Dashboard ready. Select Record or Sequence tabs to get started.")
+        self._append_log_entry("welcome", "Welcome to NiceBot!")
+        self._append_log_entry(
+            "info",
+            "Select a Model, Action, or Sequence to get started, or visit the Record tab to make a new one.",
+        )
 
         # Populate run selector
         self.refresh_run_selector()
@@ -859,6 +862,35 @@ class DashboardTab(QWidget):
 
         self._update_status_summaries()
 
+    def _append_log_entry(self, category: str, message: str):
+        """Add a styled message to the dashboard log and auto-scroll."""
+        icon_map = {
+            "welcome": "👋",
+            "info": "ℹ️",
+            "warning": "⚠️",
+            "error": "❌",
+            "success": "✅",
+            "action": "▶️",
+            "speed": "🚀",
+            "stop": "⏹️",
+            "vision": "👀",
+            "system": "🛠️",
+        }
+        label_map = {
+            "vision": "Vision",
+            "system": "System",
+        }
+
+        key = (category or "info").lower()
+        icon = icon_map.get(key, icon_map["info"])
+        label = label_map.get(key)
+
+        entry = f"{icon} {message}" if not label else f"{icon} {label}: {message}"
+        self.log_text.append(entry.strip())
+        self.log_text.verticalScrollBar().setValue(
+            self.log_text.verticalScrollBar().maximum()
+        )
+
     def _refresh_loop_button(self):
         if self.loop_enabled:
             text = "Loop\nON"
@@ -898,8 +930,16 @@ class DashboardTab(QWidget):
         self._refresh_loop_button()
         control_cfg = self.config.setdefault("control", {})
         control_cfg["loop_enabled"] = checked
-        state_text = "Loop enabled" if checked else "Loop disabled"
-        self.log_text.append(f"[info] {state_text}")
+        if checked:
+            self._append_log_entry(
+                "info",
+                "Loop mode is ON. The run will repeat until you press Stop.",
+            )
+        else:
+            self._append_log_entry(
+                "info",
+                "Loop mode is OFF. The run will finish after one pass.",
+            )
 
     def on_speed_slider_changed(self, value: int):
         aligned = max(10, min(120, 5 * round(value / 5)))
@@ -978,7 +1018,10 @@ class DashboardTab(QWidget):
         if self.camera_view_active:
             return
         if cv2 is None:
-            self.log_text.append("[warning] Camera preview unavailable (OpenCV missing)")
+            self._append_log_entry(
+                "warning",
+                "Camera preview is unavailable on this station. Please ask your technician to install the camera viewer add-on.",
+            )
             self.camera_toggle_btn.blockSignals(True)
             self.camera_toggle_btn.setChecked(False)
             self.camera_toggle_btn.blockSignals(False)
@@ -1347,7 +1390,10 @@ class DashboardTab(QWidget):
     def start_run(self):
         """Start robot run - unified execution for models, recordings, and sequences"""
         if self.is_running:
-            self.log_text.append("[warning] Already running")
+            self._append_log_entry(
+                "warning",
+                "A run is already active. Press Stop before starting another.",
+            )
             return
 
         # Get selected item
@@ -1361,7 +1407,10 @@ class DashboardTab(QWidget):
             self.update_camera_previews(force=True)
         
         if selected.startswith("--"):
-            self.log_text.append("[warning] No item selected")
+            self._append_log_entry(
+                "warning",
+                "Choose something to run from the list first.",
+            )
             self.start_stop_btn.setChecked(False)
             return
         
@@ -1369,7 +1418,10 @@ class DashboardTab(QWidget):
         execution_type, execution_name = self._parse_run_selection(selected)
         
         if not execution_type or not execution_name:
-            self.log_text.append("[error] Invalid selection")
+            self._append_log_entry(
+                "error",
+                "We couldn't load that option. Pick a model, sequence, or action from the list.",
+            )
             self.start_stop_btn.setChecked(False)
             return
         
@@ -1379,8 +1431,19 @@ class DashboardTab(QWidget):
         self.start_time = datetime.now()
         self.timer.start(1000)  # Update elapsed time every second
         
-        self.log_text.append(f"[info] Starting {execution_type}: {execution_name}")
-        self.log_text.append(f"[info] Speed override {int(self.master_speed * 100)}%")
+        type_label = {
+            "model": "Model",
+            "sequence": "Sequence",
+            "recording": "Action",
+        }.get(execution_type, "Run")
+        self._append_log_entry(
+            "action",
+            f"Starting {type_label} “{execution_name}”.",
+        )
+        self._append_log_entry(
+            "speed",
+            f"Robot speed set to {int(self.master_speed * 100)}%.",
+        )
         self.action_label.setText(f"Starting {execution_type}...")
         
         # Handle models based on execution mode
@@ -1389,13 +1452,19 @@ class DashboardTab(QWidget):
             
             if local_mode:
                 # Local mode: Use ExecutionWorker (which uses lerobot-record)
-                self.log_text.append("[info] Using local mode (lerobot-record)")
+                self._append_log_entry(
+                    "system",
+                    "Running directly on this computer.",
+                )
                 # Get checkpoint and episode settings from UI
                 checkpoint_name = self.checkpoint_combo.currentData() if self.checkpoint_combo.isVisible() else "last"
                 
                 if self.loop_enabled:
                     num_episodes = -1  # Infinite loop
-                    self.log_text.append("[info] Loop mode enabled (∞ episodes)")
+                    self._append_log_entry(
+                        "info",
+                        "Loop mode is ON — the robot will repeat until you stop it.",
+                    )
                 else:
                     num_episodes = 1
 
@@ -1406,7 +1475,10 @@ class DashboardTab(QWidget):
                 })
             else:
                 # Server mode: Use RobotWorker (async inference)
-                self.log_text.append("[info] Using server mode (async inference)")
+                self._append_log_entry(
+                    "system",
+                    "Connecting to the NiceBot server for this run.",
+                )
                 self._start_model_execution(execution_name)
         else:
             # For recordings and sequences, use ExecutionWorker
@@ -1427,11 +1499,18 @@ class DashboardTab(QWidget):
             model_config.setdefault("control", {})["speed_multiplier"] = self.master_speed
             model_config["policy"]["path"] = str(checkpoint_path)
             
-            self.log_text.append(f"[info] Loading model: {checkpoint_path}")
+            checkpoint_display = checkpoint_name if isinstance(checkpoint_name, str) else str(checkpoint_name)
+            self._append_log_entry(
+                "action",
+                f"Loading model “{model_name}” ({checkpoint_display}). This may take a moment.",
+            )
             
             # Stop any existing worker first
             if self.worker and self.worker.isRunning():
-                self.log_text.append("[warning] Stopping previous worker...")
+                self._append_log_entry(
+                    "system",
+                    "Stopping the previous run before starting a new one…",
+                )
                 self.worker.stop()
                 self.worker.wait(2000)
             
@@ -1450,8 +1529,16 @@ class DashboardTab(QWidget):
             
         except Exception as e:
             import traceback
-            self.log_text.append(f"[error] Failed to start model: {e}")
-            self.log_text.append(f"[error] Traceback: {traceback.format_exc()}")
+            self._append_log_entry(
+                "error",
+                f"Could not start model “{model_name}”. Please confirm the model files exist and try again.",
+            )
+            print("Model start failed:", e)
+            traceback.print_exc()
+            self._append_log_entry(
+                "system",
+                "Technical details were printed to the terminal.",
+            )
             self._reset_ui_after_run()
     
     def _start_execution_worker(self, execution_type: str, execution_name: str, options: dict = None):
@@ -1488,10 +1575,17 @@ class DashboardTab(QWidget):
             loop: Whether to loop the sequence
         """
         if self.is_running:
-            self.log_text.append("[warning] Already running, please stop first")
+            self._append_log_entry(
+                "warning",
+                "A run is already active. Press Stop before starting another.",
+            )
             return
-        
-        self.log_text.append(f"[info] Starting sequence: {sequence_name} (loop={loop})")
+
+        loop_note = " with repeat" if loop else ""
+        self._append_log_entry(
+            "action",
+            f"Starting sequence “{sequence_name}”{loop_note}.",
+        )
 
         # Update UI state
         self.is_running = True
@@ -1509,7 +1603,7 @@ class DashboardTab(QWidget):
         if not self.is_running:
             return
         
-        self.log_text.append("[info] Stopping...")
+        self._append_log_entry("stop", "Stopping the current run…")
         self.action_label.setText("Stopping...")
         
         # Stop execution worker (for recordings/sequences)
@@ -1579,16 +1673,23 @@ class DashboardTab(QWidget):
 
         self.action_label.setText(message)
 
-        signature = (state, countdown, tuple(zones))
+        signature = (state, detail, tuple(zones))
         if signature != self._last_vision_signature:
-            log_message = message
+            extra_bits = []
+            if countdown is not None:
+                if state in {"idle", "watching"}:
+                    extra_bits.append(f"next check in {countdown}s")
+                elif state == "triggered":
+                    extra_bits.append(f"{countdown}s remaining")
+            if metric is not None and state == "triggered":
+                extra_bits.append(f"match score {metric:.2f}")
+            log_message = detail
+            if extra_bits:
+                log_message = f"{detail} ({', '.join(extra_bits)})"
             if zones:
                 zone_list = ", ".join(zones)
-                log_message = f"{message} [{zone_list}]"
-            self.log_text.append(f"[vision] {log_message}")
-            self.log_text.verticalScrollBar().setValue(
-                self.log_text.verticalScrollBar().maximum()
-            )
+                log_message = f"{log_message} — Zones: {zone_list}"
+            self._append_log_entry("vision", log_message)
             self._last_vision_signature = signature
 
     def _on_status_update(self, status: str):
@@ -1600,11 +1701,14 @@ class DashboardTab(QWidget):
 
     def _on_log_message(self, level: str, message: str):
         """Handle log message from worker"""
-        self.log_text.append(f"[{level}] {message}")
-        # Auto-scroll to bottom
-        self.log_text.verticalScrollBar().setValue(
-            self.log_text.verticalScrollBar().maximum()
-        )
+        level_key = (level or "info").lower()
+        category = {
+            "info": "info",
+            "warning": "warning",
+            "error": "error",
+            "success": "success",
+        }.get(level_key, "system")
+        self._append_log_entry(category, message)
     
     def _on_progress_update(self, current: int, total: int):
         """Handle progress update from worker"""
@@ -1638,7 +1742,13 @@ class DashboardTab(QWidget):
     
     def _on_execution_completed(self, success: bool, summary: str):
         """Handle execution completion (for recordings/sequences)"""
-        self.log_text.append(f"[info] {'✓' if success else '✗'} {summary}")
+        if success:
+            self._append_log_entry("success", f"Run complete: {summary}.")
+        else:
+            self._append_log_entry(
+                "error",
+                f"Run stopped early: {summary}. Check the terminal for more details.",
+            )
         
         if success:
             self.action_label.setText("✓ Completed")
@@ -1654,16 +1764,28 @@ class DashboardTab(QWidget):
     def _on_model_completed(self, success: bool, summary: str):
         """Handle model execution completion"""
         try:
-            self.log_text.append(f"[info] {'✓' if success else '✗'} {summary}")
+            if success:
+                self._append_log_entry("success", f"Run complete: {summary}.")
+            else:
+                self._append_log_entry(
+                    "error",
+                    f"Run stopped early: {summary}. Check the terminal for more details.",
+                )
             
             if success:
                 self.action_label.setText("✓ Model completed")
             else:
                 self.action_label.setText("✗ Model failed")
                 # Show user-friendly message
-                self.log_text.append("[info] Check robot connection and policy path")
+                self._append_log_entry(
+                    "warning",
+                    "Make sure the robot is connected and the correct policy file is selected in Settings.",
+                )
         except Exception as e:
-            self.log_text.append(f"[error] Error handling completion: {e}")
+            self._append_log_entry(
+                "error",
+                f"We hit a problem finishing the run ({e}). Please restart the dashboard if it continues.",
+            )
         finally:
             # Always reset UI, even if there's an error
             self._reset_ui_after_run()
@@ -1679,12 +1801,13 @@ class DashboardTab(QWidget):
     def _on_worker_thread_finished(self):
         """Handle worker thread finished (cleanup)"""
         try:
-            self.log_text.append("[debug] Worker thread finished")
-            # Give worker time to clean up
             if self.worker:
                 self.worker.deleteLater()
         except Exception as e:
-            self.log_text.append(f"[error] Error in thread cleanup: {e}")
+            self._append_log_entry(
+                "error",
+                f"We could not finish cleaning up the last run ({e}). Please restart the dashboard if controls stop responding.",
+            )
     
     def _reset_ui_after_run(self):
         """Reset UI state after run completes or stops"""
@@ -1721,17 +1844,26 @@ class DashboardTab(QWidget):
                     # Let Qt handle the cleanup
                     self.worker.deleteLater()
                 except Exception as e:
-                    self.log_text.append(f"[warning] Worker cleanup: {e}")
+                    self._append_log_entry(
+                        "warning",
+                        f"Cleanup took longer than expected ({e}). If the dashboard feels stuck, try restarting it.",
+                    )
                 finally:
                     self.worker = None
         except Exception as e:
-            self.log_text.append(f"[error] Error resetting UI: {e}")
+            self._append_log_entry(
+                "error",
+                f"We couldn't reset the dashboard ({e}). Please restart the app.",
+            )
     
     def go_home(self):
         """Go to home position"""
         self.action_label.setText("Moving to home...")
-        self.log_text.append("[info] Moving to home position...")
-        self.log_text.append(f"[info] Speed override {int(self.master_speed * 100)}%")
+        self._append_log_entry("action", "Sending the robot to its home position…")
+        self._append_log_entry(
+            "speed",
+            f"Robot speed set to {int(self.master_speed * 100)}% for this move.",
+        )
 
         try:
             env = os.environ.copy()
@@ -1746,13 +1878,19 @@ class DashboardTab(QWidget):
             
             if result.returncode == 0:
                 self.action_label.setText("✓ At home position")
-                self.log_text.append("[info] ✓ Home position reached")
+                self._append_log_entry("success", "Home position reached.")
             else:
                 self.action_label.setText("⚠️ Home failed")
-                self.log_text.append(f"[error] Home failed: {result.stderr}")
+                self._append_log_entry(
+                    "error",
+                    "Home move did not finish. Confirm the robot is powered on and the path is clear, then try again.",
+                )
         except Exception as e:
             self.action_label.setText("⚠️ Home error")
-            self.log_text.append(f"[error] Home error: {e}")
+            self._append_log_entry(
+                "error",
+                f"Could not complete the home move ({e}). Please check the robot connection and try again.",
+            )
     
     def run_from_dashboard(self):
         """Execute the selected RUN item (same as pressing START)"""
@@ -1842,4 +1980,4 @@ class DashboardTab(QWidget):
         Args:
             message: Log message to display
         """
-        self.log_text.append(f"[info] {message}")
+        self._append_log_entry("system", message)
