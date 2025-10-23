@@ -63,7 +63,9 @@ class ExecutionWorker(QThread):
         self.actions_mgr = ActionsManager()
         self.sequences_mgr = SequencesManager()
         self.motor_controller = MotorController(config)
-    
+        self.speed_multiplier = config.get("control", {}).get("speed_multiplier", 1.0)
+        self.motor_controller.speed_multiplier = self.speed_multiplier
+
     def run(self):
         """Main execution thread
         
@@ -84,6 +86,11 @@ class ExecutionWorker(QThread):
         except Exception as e:
             self.log_message.emit('error', f"Execution error: {e}")
             self.execution_completed.emit(False, f"Failed: {e}")
+
+    def set_speed_multiplier(self, multiplier: float):
+        self.speed_multiplier = multiplier
+        self.motor_controller.speed_multiplier = multiplier
+        self.options["speed_multiplier"] = multiplier
     
     def _execute_model(self):
         """Execute a model directly (for Dashboard model runs)"""
@@ -118,6 +125,9 @@ class ExecutionWorker(QThread):
             self.execution_completed.emit(False, "Recording not found")
             return
         
+        # Apply latest speed override and connect to motors
+        self.motor_controller.speed_multiplier = self.speed_multiplier
+
         # Connect to motors
         self.log_message.emit('info', "Connecting to motors...")
         self.status_update.emit("Connecting to motors...")
@@ -391,6 +401,8 @@ class ExecutionWorker(QThread):
             self.log_message.emit('error', f"Sequence not found: {self.execution_name}")
             self.execution_completed.emit(False, "Sequence not found")
             return
+
+        self.motor_controller.speed_multiplier = self.speed_multiplier
         
         steps = sequence.get("steps", [])
         loop = self.options.get("loop", sequence.get("loop", False))
@@ -729,7 +741,9 @@ class ExecutionWorker(QThread):
         if not recording:
             self.log_message.emit('error', f"Recording not found: {recording_name}")
             return
-        
+
+        self.motor_controller.speed_multiplier = self.speed_multiplier
+
         # Connect if not already connected
         if not self.motor_controller.bus:
             if not self.motor_controller.connect():
