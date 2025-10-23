@@ -144,7 +144,8 @@ class ExecutionWorker(QThread):
                 config=config_obj,
                 on_hand_detected=self._on_hand_detected,
                 on_hand_cleared=self._on_hand_cleared,
-                log_callback=self._safety_log
+                log_callback=self._safety_log,
+                camera_hub=self.camera_hub,
             )
             
             self.log_message.emit('info', "[SAFETY] Safety monitor initialized")

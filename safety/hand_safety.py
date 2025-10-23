@@ -18,8 +18,10 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Callable, List, Optional, Tuple, Union
+from typing import Callable, List, Optional, Tuple, Union, Set, TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from utils.camera_hub import CameraStreamHub
 
 try:
     import cv2
@@ -90,6 +92,7 @@ class HandSafetyMonitor:
         on_hand_detected: Callable[[SafetyEvent], None],
         on_hand_cleared: Callable[[SafetyEvent], None],
         log_callback: Optional[Callable[[str, str], None]] = None,
+        camera_hub: Optional["CameraStreamHub"] = None,
     ):
         """
         Initialize the hand safety monitor.
@@ -115,22 +118,29 @@ class HandSafetyMonitor:
         self._stop_event = threading.Event()
         self._hand_active = False
         self._last_detection_time = 0.0
+        self._camera_hub = camera_hub
         self._captures: List[Tuple[str, CameraIdentifier, cv2.VideoCapture]] = []
         self._capture_lock = threading.Lock()
-        
+
         # Initialize hand detector
-        self._detector = None
+        self._detector: Optional[Any] = None
         self._detection_method = "none"
-        self._init_detector()
+        self._missing_streams: Set[str] = set()
     
-    def _init_detector(self):
+    def _init_detector(self) -> bool:
         """Initialize YOLOv8 detection backend."""
+        if self._detector is not None:
+            return True
+
         if not HAVE_YOLO:
-            raise RuntimeError(
-                "[SAFETY] CRITICAL ERROR: YOLOv8 not available! "
-                "Install ultralytics: pip install ultralytics>=8.0.0"
+            self._log(
+                "error",
+                "[SAFETY] YOLOv8 not available - safety monitoring disabled. "
+                "Install ultralytics: pip install ultralytics>=8.0.0",
             )
-        
+            self._detection_method = "none"
+            return False
+
         try:
             # Load YOLO model (can be yolov8n.pt for person detection or custom hand model)
             self._detector = YOLO(self.config.yolo_model)
@@ -138,8 +148,12 @@ class HandSafetyMonitor:
             self._detection_method = "yolo"
             self._log("info", f"[SAFETY] ✓ Initialized YOLOv8 detection (MODEL: {self.config.yolo_model})")
             self._log("info", "[SAFETY] Detection active - monitoring for hands/person in workspace")
+            return True
         except Exception as e:
-            raise RuntimeError(f"[SAFETY] CRITICAL - Failed to initialize YOLO: {e}")
+            self._detector = None
+            self._detection_method = "none"
+            self._log("error", f"[SAFETY] CRITICAL - Failed to initialize YOLO: {e}")
+            return False
     
     def start(self):
         """Start the safety monitoring thread."""
@@ -154,8 +168,12 @@ class HandSafetyMonitor:
         if not self.config.cameras:
             self._log("warning", "[SAFETY] No cameras configured for monitoring")
             return
-        
+
+        if not self._init_detector():
+            return
+
         self._stop_event.clear()
+        self._missing_streams.clear()
         self._thread = threading.Thread(target=self._run_monitor, name="HandSafetyMonitor", daemon=True)
         self._thread.start()
         
@@ -189,10 +207,11 @@ class HandSafetyMonitor:
         was_running = self._thread and self._thread.is_alive()
         if was_running:
             self.stop()
-        
+
         self.config = config
-        self._init_detector()
-        
+        self._detector = None
+        self._detection_method = "none"
+
         if was_running and config.enabled:
             self.start()
     
@@ -200,13 +219,13 @@ class HandSafetyMonitor:
         """Main monitoring loop (runs in background thread)."""
         try:
             self._open_cameras()
-            
-            if not self._captures:
+
+            if not self._has_active_sources():
                 self._log("error", "[SAFETY] ❌ NO CAMERAS AVAILABLE - SAFETY MONITORING DISABLED!")
                 return
-            
+
             detection_interval = 1.0 / self.config.detection_fps
-            
+
             while not self._stop_event.is_set():
                 loop_start = time.time()
                 
@@ -256,36 +275,68 @@ class HandSafetyMonitor:
         best_confidence = 0.0
         best_camera = "none"
         detected_any = False
-        
-        with self._capture_lock:
-            for idx, (label, identifier, cap) in enumerate(list(self._captures)):
-                ret, frame = cap.read()
-                
-                if not ret or frame is None:
-                    # Try to recover camera
-                    self._log("warning", f"[SAFETY] Camera '{label}' failed, attempting recovery...")
-                    cap.release()
-                    new_cap = self._open_single_camera(identifier)
-                    if new_cap:
-                        self._captures[idx] = (label, identifier, new_cap)
+        event_timestamp = time.time()
+
+        if self._camera_hub is not None:
+            for label, _ in self.config.cameras:
+                stream = self._camera_hub.get_stream(label)
+                if stream is None:
+                    if label not in self._missing_streams:
+                        self._log("warning", f"[SAFETY] Camera '{label}' unavailable via hub")
+                        self._missing_streams.add(label)
+                    continue
+
+                if label in self._missing_streams:
+                    self._log("info", f"[SAFETY] Camera '{label}' restored via hub")
+                    self._missing_streams.discard(label)
+
+                frame, frame_ts = self._camera_hub.get_frame_with_timestamp(label, preview=True)
+                if frame is None:
+                    frame, frame_ts = self._camera_hub.get_frame_with_timestamp(label, preview=False)
+                    if frame is None:
                         continue
-                    else:
-                        self._captures.pop(idx)
-                        continue
-                
-                # Detect hands in frame
+
                 detected, confidence = self._detect_hand(frame)
-                
+
                 if detected and confidence > best_confidence:
                     detected_any = True
                     best_confidence = confidence
                     best_camera = label
-        
+                    if frame_ts:
+                        event_timestamp = frame_ts
+                    else:
+                        event_timestamp = time.time()
+        else:
+            with self._capture_lock:
+                for idx, (label, identifier, cap) in enumerate(list(self._captures)):
+                    ret, frame = cap.read()
+
+                    if not ret or frame is None:
+                        # Try to recover camera
+                        self._log("warning", f"[SAFETY] Camera '{label}' failed, attempting recovery...")
+                        cap.release()
+                        new_cap = self._open_single_camera(identifier)
+                        if new_cap:
+                            self._captures[idx] = (label, identifier, new_cap)
+                            continue
+                        else:
+                            self._captures.pop(idx)
+                            continue
+
+                    # Detect hands in frame
+                    detected, confidence = self._detect_hand(frame)
+
+                    if detected and confidence > best_confidence:
+                        detected_any = True
+                        best_confidence = confidence
+                        best_camera = label
+                        event_timestamp = time.time()
+
         return SafetyEvent(
             detected=detected_any,
             confidence=best_confidence,
             camera_label=best_camera,
-            timestamp=time.time(),
+            timestamp=event_timestamp,
             detection_method=self._detection_method
         )
     
@@ -341,7 +392,15 @@ class HandSafetyMonitor:
     def _open_cameras(self):
         """Open all configured cameras."""
         self._release_cameras()
-        
+
+        if self._camera_hub is not None:
+            self._log("info", "[SAFETY] Using shared camera hub for frame access")
+            for label, _ in self.config.cameras:
+                stream = self._camera_hub.get_stream(label)
+                if stream is None:
+                    self._log("warning", f"[SAFETY] Camera '{label}' unavailable via hub")
+            return
+
         with self._capture_lock:
             for label, identifier in self.config.cameras:
                 cap = self._open_single_camera(identifier)
@@ -380,6 +439,14 @@ class HandSafetyMonitor:
                 except:
                     pass
             self._captures.clear()
+
+    def _has_active_sources(self) -> bool:
+        if self._camera_hub is not None:
+            for label, _ in self.config.cameras:
+                if self._camera_hub.get_stream(label):
+                    return True
+            return False
+        return bool(self._captures)
 
 
 def build_camera_sources_from_config(config: dict, camera_selection: str = "front") -> List[CameraSource]:
