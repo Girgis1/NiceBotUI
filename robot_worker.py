@@ -38,7 +38,7 @@ class RobotWorker(QThread):
         
         try:
             # Step 1: Start policy server
-            self.log_message.emit('info', "Starting policy server...")
+            self.log_message.emit('info', "Starting the policy server...")
             self.status_update.emit("Starting policy server...")
 
             server_args = self._build_server_command()
@@ -55,14 +55,15 @@ class RobotWorker(QThread):
 
             # Wait for server to be ready (fail fast if it crashes)
             self._wait_for_server_ready(server_host, server_port)
-            self.log_message.emit('info', "Policy server ready")
+            self.log_message.emit('info', "Policy server is ready.")
 
             # Step 2: Start robot client
-            self.log_message.emit('info', "Starting robot client...")
+            self.log_message.emit('info', "Starting the robot control app...")
             self.status_update.emit("Connecting to robot...")
 
             client_args = self._build_client_command()
-            self.log_message.emit('info', f"Launching client: {' '.join(client_args)}")
+            self.log_message.emit('info', "Launching the robot control app.")
+            print("Robot client command:", " ".join(client_args))
 
             self.client_proc = subprocess.Popen(
                 client_args,
@@ -214,9 +215,15 @@ class RobotWorker(QThread):
                 # Prevent unbounded memory growth - keep latest 1000 lines
                 if len(output_buffer) > 1000:
                     output_buffer.pop(0)
-                    
 
-                self.log_message.emit('info', line)
+                # Send raw output to terminal for advanced diagnostics
+                print(line)
+
+                lower_line = line.lower()
+                if any(keyword in lower_line for keyword in ("error", "failed", "exception")):
+                    self.log_message.emit('error', f"Robot control app message: {line}")
+                elif "warning" in lower_line:
+                    self.log_message.emit('warning', f"Robot control app warning: {line}")
                 
                 # Parse for episode progress
                 episode_match = re.search(r'episode[:\s]+(\d+)', line, re.IGNORECASE)
@@ -238,23 +245,21 @@ class RobotWorker(QThread):
             
             # Check results
             if self._stop_requested:
-                self.log_message.emit('warning', "Stopped by user")
+                self.log_message.emit('warning', "Run stopped by user.")
                 self.run_completed.emit(False, "Stopped by user")
             elif return_code == 0:
-                self.log_message.emit('info', "✓ Run completed successfully")
+                self.log_message.emit('info', "Run completed successfully.")
                 self.run_completed.emit(True, f"Completed {total_episodes} episodes")
             else:
                 # Parse errors from captured output
                 output_text = '\n'.join(output_buffer)
                 error_key, context = self._parse_error(output_text, return_code)
                 self.error_occurred.emit(error_key, context)
-                self.log_message.emit('error', f"Process exited with code {return_code}")
-                if output_text:
-                    self.log_message.emit('error', output_text)
+                self.log_message.emit('error', f"Robot control app closed with code {return_code}. Check the terminal log for details.")
                 self.run_completed.emit(False, f"Failed with code {return_code}")
-                
+
         except Exception as e:
-            self.log_message.emit('error', f"Monitor error: {e}")
+            self.log_message.emit('error', f"The robot control app stopped unexpectedly: {e}")
             self.run_completed.emit(False, str(e))
         finally:
             if self.client_proc and self.client_proc.stdout:

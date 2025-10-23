@@ -100,8 +100,9 @@ class ExecutionWorker(QThread):
                 raise ValueError(f"Unsupported execution type: {self.execution_type}")
                 
         except Exception as e:
-            self.log_message.emit('error', f"Execution error: {e}")
-            self.execution_completed.emit(False, f"Failed: {e}")
+            friendly_error = f"We ran into a problem while running this action: {e}"
+            self.log_message.emit('error', friendly_error)
+            self.execution_completed.emit(False, friendly_error)
         finally:
             # Always stop safety monitoring when execution ends
             self.stop_safety_monitoring()
@@ -116,7 +117,7 @@ class ExecutionWorker(QThread):
         try:
             safety_config = self.config.get("safety", {})
             if not safety_config.get("enabled", False):
-                self.log_message.emit('info', "[SAFETY] Safety monitoring disabled in config")
+                self.log_message.emit('info', "Safety monitor is turned off in settings. The robot will not auto-stop for safety.")
                 return
             
             # Build camera sources from config
@@ -124,7 +125,7 @@ class ExecutionWorker(QThread):
             camera_sources = build_camera_sources_from_config(self.config, camera_selection)
             
             if not camera_sources:
-                self.log_message.emit('warning', "[SAFETY] No cameras configured for safety monitoring")
+                self.log_message.emit('warning', "Safety monitor needs a camera. Add a safety camera in Settings to enable it.")
                 return
             
             # Create safety configuration (YOLO-only)
@@ -147,10 +148,10 @@ class ExecutionWorker(QThread):
                 log_callback=self._safety_log
             )
             
-            self.log_message.emit('info', "[SAFETY] Safety monitor initialized")
+            self.log_message.emit('info', "Safety monitor is on and watching for hands.")
             
         except Exception as e:
-            self.log_message.emit('error', f"[SAFETY] Failed to initialize safety monitor: {e}")
+            self.log_message.emit('error', f"Safety monitor could not start: {e}. Check the safety camera settings and try again.")
             self.safety_monitor = None
     
     def _on_hand_detected(self, event: SafetyEvent):
@@ -165,9 +166,9 @@ class ExecutionWorker(QThread):
         try:
             if self.motor_controller and self.motor_controller.motors:
                 self.motor_controller.motors.write("Torque_Enable", [0] * 6)
-                self.log_message.emit('critical', "[SAFETY] 🚨 EMERGENCY STOP - Motors disabled!")
+                self.log_message.emit('critical', "🚨 Emergency stop: A hand was detected. Motors are now off.")
         except Exception as e:
-            self.log_message.emit('error', f"[SAFETY] Emergency motor stop failed: {e}")
+            self.log_message.emit('error', f"Emergency stop did not disable the motors automatically: {e}. Turn off power and check connections.")
         
         # Emit safety alert to UI
         self.safety_alert.emit("hand_detected", {
@@ -185,7 +186,7 @@ class ExecutionWorker(QThread):
         self.safety_alert.emit("hand_cleared", {
             "timestamp": event.timestamp
         })
-        self.log_message.emit('info', "[SAFETY] Workspace clear - Manual restart required")
+        self.log_message.emit('info', "Workspace is clear. Press Start when you're ready to continue.")
     
     def _safety_log(self, level: str, message: str):
         """Forward safety logs to UI."""
@@ -197,7 +198,7 @@ class ExecutionWorker(QThread):
             try:
                 self.safety_monitor.start()
             except Exception as e:
-                self.log_message.emit('error', f"[SAFETY] Failed to start monitor: {e}")
+                self.log_message.emit('error', f"Safety monitor could not start: {e}. Restart the safety service from Settings.")
     
     def stop_safety_monitoring(self):
         """Stop safety monitoring (called when execution ends)."""
@@ -205,11 +206,11 @@ class ExecutionWorker(QThread):
             try:
                 self.safety_monitor.stop()
             except Exception as e:
-                self.log_message.emit('error', f"[SAFETY] Failed to stop monitor: {e}")
+                self.log_message.emit('error', f"Safety monitor did not shut down cleanly: {e}. If it persists, reboot the system.")
     
     def _execute_model(self):
         """Execute a model directly (for Dashboard model runs)"""
-        self.log_message.emit('info', f"Loading model: {self.execution_name}")
+        self.log_message.emit('info', f"Preparing model '{self.execution_name}'...")
         self.status_update.emit("Starting model...")
         
         # Get options
@@ -222,21 +223,21 @@ class ExecutionWorker(QThread):
         
         # Completion
         if not self._stop_requested:
-            self.log_message.emit('info', f"✓ Model execution completed")
+            self.log_message.emit('info', "Model run finished successfully.")
             self.execution_completed.emit(True, "Model completed")
         else:
-            self.log_message.emit('warning', "Model execution stopped by user")
+            self.log_message.emit('warning', "Model run stopped by user.")
             self.execution_completed.emit(False, "Stopped by user")
     
     def _execute_recording(self):
         """Execute a single recording"""
-        self.log_message.emit('info', f"Loading recording: {self.execution_name}")
+        self.log_message.emit('info', f"Opening recording '{self.execution_name}'...")
         self.status_update.emit(f"Loading recording...")
         
         # Load recording
         recording = self.actions_mgr.load_action(self.execution_name)
         if not recording:
-            self.log_message.emit('error', f"Recording not found: {self.execution_name}")
+            self.log_message.emit('error', f"Recording '{self.execution_name}' is missing. Please choose another recording or reinstall it.")
             self.execution_completed.emit(False, "Recording not found")
             return
         
@@ -244,11 +245,11 @@ class ExecutionWorker(QThread):
         self.motor_controller.speed_multiplier = self.speed_multiplier
 
         # Connect to motors
-        self.log_message.emit('info', "Connecting to motors...")
+        self.log_message.emit('info', "Connecting to the robot motors...")
         self.status_update.emit("Connecting to motors...")
         
         if not self.motor_controller.connect():
-            self.log_message.emit('error', "Failed to connect to motors")
+            self.log_message.emit('error', "Could not reach the robot motors. Confirm the robot is powered and the USB cable is connected.")
             self.execution_completed.emit(False, "Motor connection failed")
             return
         
@@ -268,10 +269,10 @@ class ExecutionWorker(QThread):
             
             # Success
             if not self._stop_requested:
-                self.log_message.emit('info', "✓ Recording completed successfully")
+                self.log_message.emit('info', "Recording finished successfully.")
                 self.execution_completed.emit(True, "Recording completed")
             else:
-                self.log_message.emit('warning', "Recording stopped by user")
+                self.log_message.emit('warning', "Recording stopped by user.")
                 self.execution_completed.emit(False, "Stopped by user")
                 
         finally:
@@ -286,8 +287,8 @@ class ExecutionWorker(QThread):
         steps = recording.get("steps", [])
         total_steps = len(steps)
         
-        self.log_message.emit('info', f"Executing composite recording: {recording.get('name', 'Unknown')}")
-        self.log_message.emit('info', f"Total steps: {total_steps}")
+        self.log_message.emit('info', f"Starting recording '{recording.get('name', 'Unknown')}' with {total_steps} step(s).")
+        self.log_message.emit('info', "We'll let you know before each step begins.")
         
         for step_idx, step in enumerate(steps):
             if self._stop_requested:
@@ -295,7 +296,7 @@ class ExecutionWorker(QThread):
             
             # Check if step is enabled
             if not step.get('enabled', True):
-                self.log_message.emit('info', f"[{step_idx+1}/{total_steps}] Skipping disabled step: {step['name']}")
+                self.log_message.emit('info', f"Skipped Step {step_idx+1}: {step['name']} (disabled in settings).")
                 continue
             
             step_name = step.get('name', f'Step {step_idx + 1}')
@@ -304,18 +305,18 @@ class ExecutionWorker(QThread):
             delay_before = step.get('delay_before', 0.0)
             delay_after = step.get('delay_after', 0.0)
             
-            self.log_message.emit('info', f"\n[{step_idx+1}/{total_steps}] === {step_name} ({step_type}) ===")
+            self.log_message.emit('info', f"Step {step_idx+1} of {total_steps}: {step_name} ({step_type}).")
             self.status_update.emit(f"Step {step_idx+1}/{total_steps}: {step_name}")
             
             # Delay before step
             if delay_before > 0:
-                self.log_message.emit('info', f"⏱ Waiting {delay_before}s before step...")
+                self.log_message.emit('info', f"Waiting {delay_before}s before starting the next move...")
                 time.sleep(delay_before)
             
             # Get component data
             component_data = step.get('component_data', {})
             if not component_data:
-                self.log_message.emit('warning', f"No component data for step: {step_name}")
+                self.log_message.emit('warning', f"Step '{step_name}' has no data to play. Check the recording setup and try again.")
                 continue
             
             # Execute step based on type
@@ -325,32 +326,32 @@ class ExecutionWorker(QThread):
                 elif step_type == 'position_set':
                     self._execute_position_component(component_data, step_speed)
                 else:
-                    self.log_message.emit('error', f"Unknown step type: {step_type}")
+                    self.log_message.emit('error', f"Step type '{step_type}' is not supported yet. Edit the recording to use a supported action.")
             except Exception as e:
-                self.log_message.emit('error', f"Failed to execute step {step_name}: {e}")
+                self.log_message.emit('error', f"Step '{step_name}' could not finish: {e}. Review the step settings and retry.")
                 if not self._stop_requested:
                     continue  # Try next step
             
             # Delay after step
             if delay_after > 0:
-                self.log_message.emit('info', f"⏱ Waiting {delay_after}s after step...")
+                self.log_message.emit('info', f"Waiting {delay_after}s before the next step...")
                 time.sleep(delay_after)
             
             # Update overall progress
             progress_pct = int(((step_idx + 1) / total_steps) * 100)
             self.progress_update.emit(step_idx + 1, total_steps)
-            self.log_message.emit('info', f"✓ Step complete ({progress_pct}% overall)")
+            self.log_message.emit('info', f"Step {step_idx+1} finished. Overall progress: {progress_pct}%.")
     
     def _execute_live_component(self, component: dict, speed_override: int):
         """Execute a live recording component with speed override"""
         recorded_data = component.get("recorded_data", [])
         
         if not recorded_data:
-            self.log_message.emit('warning', "No recorded data in component")
+            self.log_message.emit('warning', "This step has no recorded motion. Record it again and retry.")
             return
         
         total_points = len(recorded_data)
-        self.log_message.emit('info', f"Playing {total_points} recorded points at {speed_override}% speed")
+        self.log_message.emit('info', f"Playing the recording at {speed_override}% speed.")
         
         # Time-based playback
         start_time = time.time()
@@ -372,7 +373,7 @@ class ExecutionWorker(QThread):
             # Update progress (every 10 points to avoid spam)
             if idx % 10 == 0:
                 progress = int((idx / total_points) * 100)
-                self.log_message.emit('info', f"  → Point {idx}/{total_points} ({progress}%)")
+                self.log_message.emit('info', f"Recording playback is {progress}% complete.")
             
             # Send position command
             self.motor_controller.set_positions(
@@ -387,11 +388,11 @@ class ExecutionWorker(QThread):
         positions_list = component.get("positions", [])
         
         if not positions_list:
-            self.log_message.emit('warning', "No positions in component")
+            self.log_message.emit('warning', "This step has no saved positions. Record positions before running it again.")
             return
-        
+
         total_positions = len(positions_list)
-        self.log_message.emit('info', f"Moving through {total_positions} waypoints at {speed_override}% speed")
+        self.log_message.emit('info', f"Moving through {total_positions} saved positions at {speed_override}% speed.")
         
         for idx, pos_data in enumerate(positions_list):
             if self._stop_requested:
@@ -407,7 +408,7 @@ class ExecutionWorker(QThread):
             velocity = int(velocity * (speed_override / 100.0))
             
             # Move to position
-            self.log_message.emit('info', f"  → {pos_name}: {motor_positions[:3]}... @ {velocity} vel")
+            self.log_message.emit('info', f"Moving to {pos_name} (speed setting: {velocity}).")
             self.motor_controller.set_positions(
                 motor_positions,
                 velocity=velocity,
@@ -416,7 +417,7 @@ class ExecutionWorker(QThread):
             )
             
             progress = int(((idx + 1) / total_positions) * 100)
-            self.log_message.emit('info', f"  ✓ Reached {pos_name} ({progress}%)")
+            self.log_message.emit('info', f"Reached {pos_name}. Step progress: {progress}%.")
     
     def _playback_position_recording(self, recording: dict):
         """Play back a simple position recording"""
@@ -425,7 +426,7 @@ class ExecutionWorker(QThread):
         delays = recording.get("delays", {})
         
         total_steps = len(positions_list)
-        self.log_message.emit('info', f"Playing {total_steps} positions at {speed}% speed")
+        self.log_message.emit('info', f"Playing {total_steps} saved positions at {speed}% speed.")
         
         for idx, pos_data in enumerate(positions_list):
             if self._stop_requested:
@@ -447,7 +448,7 @@ class ExecutionWorker(QThread):
             self.status_update.emit(f"Position {idx+1}/{total_steps}")
             
             # Move to position
-            self.log_message.emit('info', f"→ Position {idx+1}: {positions[:3]}... @ {velocity} vel")
+            self.log_message.emit('info', f"Moving to position {idx+1} of {total_steps} (speed setting: {velocity}).")
             self.motor_controller.set_positions(
                 positions,
                 velocity=velocity,
@@ -458,7 +459,7 @@ class ExecutionWorker(QThread):
             # Apply delay if specified
             delay = delays.get(str(idx), 0)
             if delay > 0:
-                self.log_message.emit('info', f"Delay: {delay}s")
+                self.log_message.emit('info', f"Holding position for {delay}s.")
                 time.sleep(delay)
     
     def _playback_live_recording(self, recording: dict):
@@ -467,11 +468,11 @@ class ExecutionWorker(QThread):
         speed = recording.get("speed", 100)
         
         if not recorded_data:
-            self.log_message.emit('warning', "No recorded data found")
+            self.log_message.emit('warning', "This recording has no motion data. Record the motion again and retry.")
             return
         
         total_points = len(recorded_data)
-        self.log_message.emit('info', f"Playing {total_points} recorded points at {speed}% speed")
+        self.log_message.emit('info', f"Playing the recording at {speed}% speed.")
         
         # Time-based playback
         start_time = time.time()
@@ -495,7 +496,7 @@ class ExecutionWorker(QThread):
                 progress = int((idx / total_points) * 100)
                 self.progress_update.emit(idx, total_points)
                 self.status_update.emit(f"Playing: {progress}%")
-                self.log_message.emit('info', f"→ Point {idx}/{total_points} ({progress}%)")
+                self.log_message.emit('info', f"Recording playback is {progress}% complete.")
             
             # Send position command
             self.motor_controller.set_positions(
@@ -507,13 +508,13 @@ class ExecutionWorker(QThread):
     
     def _execute_sequence(self):
         """Execute a sequence of steps with optimized policy server management"""
-        self.log_message.emit('info', f"Loading sequence: {self.execution_name}")
+        self.log_message.emit('info', f"Opening sequence '{self.execution_name}'...")
         self.status_update.emit("Loading sequence...")
         
         # Load sequence
         sequence = self.sequences_mgr.load_sequence(self.execution_name)
         if not sequence:
-            self.log_message.emit('error', f"Sequence not found: {self.execution_name}")
+            self.log_message.emit('error', f"Sequence '{self.execution_name}' is missing. Select another sequence or reinstall it.")
             self.execution_completed.emit(False, "Sequence not found")
             return
 
@@ -523,18 +524,19 @@ class ExecutionWorker(QThread):
         loop = self.options.get("loop", sequence.get("loop", False))
         
         total_steps = len(steps)
-        self.log_message.emit('info', f"Executing {total_steps} steps (loop={loop})")
+        loop_text = "on" if loop else "off"
+        self.log_message.emit('info', f"This sequence has {total_steps} step(s). Loop mode is {loop_text}.")
         
         # Debug: Log step types
         step_types = [s.get("type", "unknown") for s in steps]
-        self.log_message.emit('info', f"Step types: {step_types}")
+        self.log_message.emit('info', f"Sequence includes these step types: {', '.join(step_types)}.")
         
         # Pre-scan for model steps and start policy server if needed (SERVER MODE ONLY)
         model_steps = [s for s in steps if s.get("type") == "model"]
         policy_server_process = None
         local_mode = self.config.get("policy", {}).get("local_mode", True)
         
-        self.log_message.emit('info', f"Found {len(model_steps)} model step(s)")
+        self.log_message.emit('info', f"Sequence contains {len(model_steps)} model step(s).")
         
         if model_steps and not local_mode:
             # Only pre-start server in SERVER MODE
@@ -543,13 +545,13 @@ class ExecutionWorker(QThread):
             task = first_model.get("task", "")
             checkpoint = first_model.get("checkpoint", "last")
             
-            self.log_message.emit('info', f"🚀 Pre-starting policy server for {task} (used by {len(model_steps)} step(s))")
+            self.log_message.emit('info', f"Starting the policy server for model '{task}' to support {len(model_steps)} step(s).")
             policy_server_process = self._start_policy_server(task, checkpoint)
             
             if not policy_server_process:
-                self.log_message.emit('error', "Failed to start policy server - model steps will be skipped")
+                self.log_message.emit('error', "Policy server did not start. Model steps will be skipped—check the model path and try again.")
         elif model_steps and local_mode:
-            self.log_message.emit('info', f"Using local mode - model steps will execute directly (no server)")
+            self.log_message.emit('info', "Running model steps directly on this device (no server needed).")
         
         # Execute steps
         iteration = 0
@@ -567,7 +569,7 @@ class ExecutionWorker(QThread):
                     
                     self.progress_update.emit(idx + 1, total_steps)
                     self.status_update.emit(f"Step {idx+1}/{total_steps}: {step_label}")
-                    self.log_message.emit('info', f"→ {step_label}")
+                    self.log_message.emit('info', f"Starting: {step_label}")
                     self.sequence_step_started.emit(idx, total_steps, step)
                     
                     if step_type == "action":
@@ -592,46 +594,46 @@ class ExecutionWorker(QThread):
                         
                         if local_mode:
                             # Local mode: Direct execution with lerobot-record
-                            self.log_message.emit('info', f"→ Executing model: {task} for {duration}s (local mode)")
+                            self.log_message.emit('info', f"Running model '{task}' for {duration}s (local mode).")
                             self._execute_model_inline(task, checkpoint, duration)
                         elif policy_server_process and policy_server_process.poll() is None:
                             # Server mode: Use pre-started server
                             self._execute_model_with_server(policy_server_process, task, checkpoint, duration)
                         else:
-                            self.log_message.emit('warning', f"→ Skipping model {task} - policy server not running")
+                            self.log_message.emit('warning', f"Skipping model '{task}' because the policy server is offline. Restart the server and try again.")
                     
                     elif step_type == "vision":
                         if not self._execute_vision_step(step, idx, total_steps):
                             if self._stop_requested:
                                 break
-                            self.log_message.emit('warning', "Vision step skipped due to error")
-                    
+                            self.log_message.emit('warning', "Vision step skipped due to an error. Review the vision settings and retry.")
+
                     else:
-                        self.log_message.emit('warning', f"Unknown step type: {step_type}")
+                        self.log_message.emit('warning', f"Step type '{step_type}' is not recognized. Update the sequence to use supported steps.")
                     
                     self.sequence_step_completed.emit(idx, total_steps, step)
                 
                 if self._stop_requested or not loop:
                     break
                 
-                self.log_message.emit('info', f"Loop iteration {iteration} completed, repeating...")
+                self.log_message.emit('info', f"Finished loop {iteration}. Restarting the sequence...")
         
         finally:
             # Clean up policy server
             if policy_server_process:
-                self.log_message.emit('info', "Shutting down policy server...")
+                self.log_message.emit('info', "Stopping the policy server...")
                 policy_server_process.terminate()
                 policy_server_process.wait(5)
                 if policy_server_process.poll() is None:
                     policy_server_process.kill()
-                self.log_message.emit('info', "✓ Policy server stopped")
+                self.log_message.emit('info', "Policy server stopped.")
         
         # Success
         if not self._stop_requested:
-            self.log_message.emit('info', f"✓ Sequence completed ({iteration} iterations)")
-            self.execution_completed.emit(True, f"Sequence completed ({iteration} iterations)")
+            self.log_message.emit('info', f"Sequence completed after {iteration} run(s).")
+            self.execution_completed.emit(True, f"Sequence completed ({iteration} run(s))")
         else:
-            self.log_message.emit('warning', "Sequence stopped by user")
+            self.log_message.emit('warning', "Sequence stopped by user.")
             self.execution_completed.emit(False, "Stopped by user")
         self._reset_vision_tracking()
 
@@ -639,21 +641,21 @@ class ExecutionWorker(QThread):
         """Readable label for a sequence step."""
         step_type = (step_type or "unknown").lower()
         if step_type == "action":
-            return f"ACTION • {step.get('name', 'Action')}"
+            return f"Action – {step.get('name', 'Action')}"
         if step_type == "delay":
             duration = step.get("duration", 0.0)
-            return f"DELAY • {duration:.1f}s"
+            return f"Delay – {duration:.1f}s"
         if step_type == "home":
-            return "HOME • Return to rest"
+            return "Return to home"
         if step_type == "model":
             task = step.get("task", "Model")
             duration = step.get("duration", 0.0)
-            return f"MODEL • {task} ({duration:.0f}s)"
+            return f"Model – {task} ({duration:.0f}s)"
         if step_type == "vision":
             trigger = step.get("trigger", {})
-            name = trigger.get("display_name") or step.get("name") or "Vision Trigger"
-            return f"VISION • {name}"
-        return f"{step_type.upper()}"
+            name = trigger.get("display_name") or step.get("name") or "Vision trigger"
+            return f"Vision – {name}"
+        return step_type.capitalize()
 
     def _reset_vision_tracking(self):
         self._last_vision_state_signature = None
@@ -778,7 +780,7 @@ class ExecutionWorker(QThread):
         zones = trigger_cfg.get("zones", [])
 
         if not zones:
-            self.log_message.emit('warning', "Vision step has no zones configured")
+            self.log_message.emit('warning', "Vision step has no zones set up. Draw a zone in the vision settings before running again.")
             return True
 
         camera_cfg = step.get("camera", {})
@@ -798,19 +800,19 @@ class ExecutionWorker(QThread):
         if use_hub:
             frame, _ = self.camera_hub.get_frame_with_timestamp(camera_name, preview=False)
             if frame is None:
-                self.log_message.emit('warning', f"Vision step: camera '{camera_name}' unavailable in hub.")
+                self.log_message.emit('warning', f"Camera '{camera_name}' is offline. Check the cable or choose a different camera in settings.")
                 self.vision_state_update.emit(
                     "error",
-                    {"message": f"Camera {camera_name} unavailable", "camera_name": camera_name},
+                    {"message": f"Camera {camera_name} is offline. Check the connection and settings.", "camera_name": camera_name},
                 )
                 self._reset_vision_tracking()
                 return False
         else:
             cap = cv2.VideoCapture(camera_index)
             if not cap or not cap.isOpened():
-                self.log_message.emit('warning', f"Vision step: camera {camera_index} unavailable, switching to demo feed")
+                self.log_message.emit('warning', f"Camera {camera_index} is offline. The demo video will play instead. Check the USB cable or camera selection.")
                 self.vision_state_update.emit(
-                    "error", {"message": f"Camera {camera_index} unavailable", "camera_name": camera_name or str(camera_index)}
+                    "error", {"message": f"Camera {camera_index} is offline. Check the cable or assign a different camera.", "camera_name": camera_name or str(camera_index)}
                 )
                 self._reset_vision_tracking()
                 return False
@@ -821,10 +823,10 @@ class ExecutionWorker(QThread):
                 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, resolution[1])
 
         camera_label = camera_name or f"camera {camera_index}"
-        self.log_message.emit('info', f"Waiting for vision trigger ({camera_label})")
+        self.log_message.emit('info', f"Waiting for the camera '{camera_label}' to spot the target area.")
         self._reset_vision_tracking()
         self._emit_vision_state("watching", {
-            "message": "Watching for triggers",
+            "message": "Watching the highlighted zones for activity...",
             "zones": zone_names,
             "step_index": step_index,
             "total_steps": total_steps,
@@ -844,7 +846,7 @@ class ExecutionWorker(QThread):
                     remaining = max(0.0, interval - (now - last_check))
                     countdown = int(math.ceil(remaining))
                     self._emit_vision_state("idle", {
-                        "message": "IDLE • waiting for next check",
+                        "message": "Camera is resting. Next check in a moment...",
                         "countdown": countdown,
                         "interval_seconds": interval,
                         "zones": zone_names,
@@ -858,7 +860,7 @@ class ExecutionWorker(QThread):
                     frame, frame_ts = self.camera_hub.get_frame_with_timestamp(camera_name, preview=False)
                     if frame is None:
                         self._emit_vision_state("watching", {
-                            "message": "Camera feed unavailable",
+                            "message": "Camera feed is missing. Check the connection.",
                             "zones": zone_names,
                             "camera_name": camera_name or str(camera_index),
                             "zone_polygons": zone_payload,
@@ -873,7 +875,7 @@ class ExecutionWorker(QThread):
                     ret, frame = cap.read()
                     if not ret or frame is None:
                         self._emit_vision_state("watching", {
-                            "message": "Camera read failed",
+                            "message": "Camera paused unexpectedly. Check the cable and try again.",
                             "zones": zone_names,
                             "camera_name": camera_name or str(camera_index),
                             "zone_polygons": zone_payload,
@@ -896,19 +898,19 @@ class ExecutionWorker(QThread):
 
                     if hold_time <= 0 or elapsed >= hold_time:
                         self._emit_vision_state("triggered", {
-                            "message": f"Triggered • {', '.join(triggered_zones) if triggered_zones else 'Zone detected'}",
+                            "message": f"Great! {', '.join(triggered_zones) if triggered_zones else 'The zone'} was detected.",
                             "zones": triggered_zones or zone_names,
                             "metric": round(best_metric, 3),
                             "camera_name": camera_name or str(camera_index),
                             "zone_polygons": zone_payload,
                         })
-                        self.log_message.emit('info', f"Vision trigger confirmed after {elapsed:.2f}s")
+                        self.log_message.emit('info', f"Vision trigger confirmed after {elapsed:.2f}s. Moving on.")
                         success = True
                         break
                     else:
                         countdown = int(math.ceil(remaining_hold))
                         self._emit_vision_state("watching", {
-                            "message": f"Triggered • confirming ({remaining_hold:.1f}s)",
+                            "message": f"Hold still... confirming for {remaining_hold:.1f}s",
                             "zones": triggered_zones or zone_names,
                             "countdown": countdown,
                             "metric": round(best_metric, 3),
@@ -918,7 +920,7 @@ class ExecutionWorker(QThread):
                 else:
                     confirm_start = None
                     state = "idle" if idle_enabled else "watching"
-                    message = "IDLE • waiting for next check" if idle_enabled else "Watching for triggers"
+                    message = "Camera is resting before the next check." if idle_enabled else "Watching the highlighted zones for activity..."
                     self._emit_vision_state(state, {
                         "message": message,
                         "zones": zone_names,
@@ -935,7 +937,7 @@ class ExecutionWorker(QThread):
 
         if success:
             self._emit_vision_state("complete", {
-                "message": "Vision step completed",
+                "message": "Vision check finished successfully.",
                 "zones": zone_names,
                 "camera_name": camera_name or str(camera_index),
                 "zone_polygons": zone_payload,
@@ -943,13 +945,13 @@ class ExecutionWorker(QThread):
         else:
             if self._stop_requested:
                 self._emit_vision_state("clear", {
-                    "message": "Vision step cancelled",
+                    "message": "Vision check was cancelled.",
                     "camera_name": camera_name or str(camera_index),
                     "zone_polygons": zone_payload,
                 })
             else:
                 self._emit_vision_state("error", {
-                    "message": "Vision step failed",
+                    "message": "Vision check failed. Review the camera setup and try again.",
                     "camera_name": camera_name or str(camera_index),
                     "zone_polygons": zone_payload,
                 })
@@ -960,7 +962,7 @@ class ExecutionWorker(QThread):
         """Execute a recording as part of a sequence (inline)"""
         recording = self.actions_mgr.load_action(recording_name)
         if not recording:
-            self.log_message.emit('error', f"Recording not found: {recording_name}")
+            self.log_message.emit('error', f"Recording '{recording_name}' is missing. Pick another recording or recreate it.")
             return
 
         self.motor_controller.speed_multiplier = self.speed_multiplier
@@ -968,7 +970,7 @@ class ExecutionWorker(QThread):
         # Connect if not already connected
         if not self.motor_controller.bus:
             if not self.motor_controller.connect():
-                self.log_message.emit('error', "Failed to connect to motors")
+                self.log_message.emit('error', "Could not reach the robot motors. Confirm the robot is powered and the USB cable is connected.")
                 return
         
         # Execute based on type
@@ -991,7 +993,7 @@ class ExecutionWorker(QThread):
         # Connect if not already connected
         if not self.motor_controller.bus:
             if not self.motor_controller.connect():
-                self.log_message.emit('error', "Failed to connect to motors - cannot hold position during delay")
+                self.log_message.emit('error', "Could not connect to the motors, so the arm will rest during this pause. Check the power and USB cable.")
                 # Fall back to regular sleep
                 time.sleep(duration)
                 return
@@ -1001,11 +1003,11 @@ class ExecutionWorker(QThread):
             current_positions = self.motor_controller.read_positions_from_bus()
             
             if not current_positions:
-                self.log_message.emit('warning', "Could not read positions - delay without holding")
+                self.log_message.emit('warning', "Couldn't read the motor positions. Waiting without holding the arm steady.")
                 time.sleep(duration)
                 return
-            
-            self.log_message.emit('info', f"Holding position: {current_positions}")
+
+            self.log_message.emit('info', "Holding the current position steady.")
             
             # Hold position by periodically re-sending position commands
             # This keeps torque enabled and arm locked in place
@@ -1026,7 +1028,7 @@ class ExecutionWorker(QThread):
                             normalize=False
                         )
                 except Exception as e:
-                    self.log_message.emit('warning', f"Hold position error: {e}")
+                    self.log_message.emit('warning', f"Couldn't refresh the hold position: {e}. The arm may drift slightly.")
                 
                 # Sleep for hold interval (or remaining time if less)
                 remaining = duration - (time.time() - start_time)
@@ -1034,10 +1036,10 @@ class ExecutionWorker(QThread):
                 if sleep_time > 0:
                     time.sleep(sleep_time)
             
-            self.log_message.emit('info', "✓ Delay complete (position held)")
-            
+            self.log_message.emit('info', "Pause finished while holding position.")
+
         except Exception as e:
-            self.log_message.emit('error', f"Error during delay hold: {e}")
+            self.log_message.emit('error', f"Holding the position failed: {e}. The arm is resting without torque.")
             # Fall back to regular sleep for any remaining time
             elapsed = time.time() - start_time if 'start_time' in locals() else 0
             remaining = duration - elapsed
@@ -1049,7 +1051,7 @@ class ExecutionWorker(QThread):
         # Connect if not already connected
         if not self.motor_controller.bus:
             if not self.motor_controller.connect():
-                self.log_message.emit('error', "Failed to connect to motors")
+                self.log_message.emit('error', "Could not reach the robot motors. Confirm power and the USB cable, then try homing again.")
                 return
         
         # Get home position from config (rest_position, not home_position!)
@@ -1057,7 +1059,7 @@ class ExecutionWorker(QThread):
         home_positions = rest_config.get("positions", [2048, 2048, 2048, 2048, 2048, 2048])
         home_velocity = rest_config.get("velocity", 600)
         
-        self.log_message.emit('info', f"Moving to home position: {home_positions}")
+        self.log_message.emit('info', "Moving the arm to the home position.")
         
         try:
             # Move to home position
@@ -1068,10 +1070,10 @@ class ExecutionWorker(QThread):
                 keep_connection=True
             )
             
-            self.log_message.emit('info', "✓ Reached home position")
-            
+            self.log_message.emit('info', "Arm is now at the home position.")
+
         except Exception as e:
-            self.log_message.emit('error', f"Failed to reach home: {e}")
+            self.log_message.emit('error', f"Could not move to the home position: {e}. Check for obstructions or motor power.")
     
     def _start_policy_server(self, task: str, checkpoint: str):
         """Start policy server and return process (for use in sequences)
@@ -1092,7 +1094,7 @@ class ExecutionWorker(QThread):
             checkpoint_path = train_dir / task / "checkpoints" / checkpoint / "pretrained_model"
             
             if not checkpoint_path.exists():
-                self.log_message.emit('error', f"Model not found: {checkpoint_path}")
+                self.log_message.emit('error', f"Model files are missing at {checkpoint_path}. Check the model download or choose a different checkpoint.")
                 return None
             
             # Build command
@@ -1113,14 +1115,14 @@ class ExecutionWorker(QThread):
             
             # Check if server started successfully
             if policy_process.poll() is not None:
-                self.log_message.emit('error', "Policy server failed to start")
+                self.log_message.emit('error', "Policy server failed to start. Open the terminal logs for more details.")
                 return None
-            
-            self.log_message.emit('info', "✓ Policy server ready")
+
+            self.log_message.emit('info', "Policy server is ready.")
             return policy_process
-            
+
         except Exception as e:
-            self.log_message.emit('error', f"Failed to start policy server: {e}")
+            self.log_message.emit('error', f"Policy server could not start: {e}. Check the model path and try again.")
             return None
     
     def _execute_model_with_server(self, policy_process, task: str, checkpoint: str, duration: float):
@@ -1144,7 +1146,7 @@ class ExecutionWorker(QThread):
             # Build robot client command
             robot_cmd = self._build_robot_client_cmd(checkpoint_path)
             
-            self.log_message.emit('info', "Starting robot client...")
+            self.log_message.emit('info', "Starting the robot control app...")
             
             # Start robot client
             robot_process = subprocess.Popen(
@@ -1160,21 +1162,21 @@ class ExecutionWorker(QThread):
             
             # Check if client started successfully
             if robot_process.poll() is not None:
-                self.log_message.emit('error', "Robot client failed to start")
+                self.log_message.emit('error', "Robot control app failed to start. Check the terminal for details.")
                 return
-            
-            self.log_message.emit('info', f"✓ Model running for {duration}s")
+
+            self.log_message.emit('info', f"Model will run for about {duration}s.")
             
             # Run for specified duration (check for stop every second)
             start_time = time.time()
             while time.time() - start_time < duration:
                 if self._stop_requested:
-                    self.log_message.emit('info', "Model execution stopped by user")
+                    self.log_message.emit('info', "Model run stopped by user.")
                     break
                 time.sleep(0.5)
             
             # Stop robot client (keep policy server running)
-            self.log_message.emit('info', "Stopping robot client...")
+            self.log_message.emit('info', "Stopping the robot control app...")
             robot_process.terminate()
             robot_process.wait(5)
             
@@ -1182,10 +1184,10 @@ class ExecutionWorker(QThread):
             if robot_process.poll() is None:
                 robot_process.kill()
             
-            self.log_message.emit('info', "✓ Model execution completed")
-            
+            self.log_message.emit('info', "Model run finished.")
+
         except Exception as e:
-            self.log_message.emit('error', f"Model execution failed: {e}")
+            self.log_message.emit('error', f"Model run ended with an error: {e}. See the terminal for more details.")
             import traceback
             traceback.print_exc()
     
@@ -1210,15 +1212,15 @@ class ExecutionWorker(QThread):
             for item in lerobot_data.iterdir():
                 if item.is_dir() and item.name.startswith("eval_"):
                     if verbose:
-                        self.log_message.emit('info', f"Cleaning up: local/{item.name}")
+                        self.log_message.emit('info', f"Removing old run folder: local/{item.name}")
                     shutil.rmtree(item)
                     deleted_count += 1
-            
+
             if deleted_count > 0:
-                self.log_message.emit('info', f"✓ Cleaned up {deleted_count} eval folder(s)")
-        
+                self.log_message.emit('info', f"Removed {deleted_count} old evaluation folder(s).")
+
         except Exception as e:
-            self.log_message.emit('warning', f"Failed to cleanup eval folders: {e}")
+            self.log_message.emit('warning', f"Could not clean up the evaluation folders: {e}. You can delete them manually later.")
     
     def _execute_model_local(self, task: str, checkpoint: str, duration: float, num_episodes: int):
         """Execute model using local mode (lerobot-record with policy)
@@ -1237,7 +1239,7 @@ class ExecutionWorker(QThread):
         while True:
             # Check if we should stop
             if self._stop_requested:
-                self.log_message.emit('warning', "Stopped by user")
+                self.log_message.emit('warning', "Run stopped by user.")
                 break
             
             # Check if we've completed all episodes (if not infinite loop)
@@ -1248,30 +1250,30 @@ class ExecutionWorker(QThread):
             
             # Log which iteration we're on
             if num_episodes > 0:
-                self.log_message.emit('info', f"=== Episode {episode_count}/{num_episodes} ===")
+                self.log_message.emit('info', f"Starting episode {episode_count} of {num_episodes}.")
             else:
-                self.log_message.emit('info', f"=== Episode {episode_count} (loop mode) ===")
+                self.log_message.emit('info', f"Starting episode {episode_count} (loop mode).")
             
             # Run ONE episode
             success = self._run_single_episode(task, checkpoint, duration)
             
             if not success and not self._stop_requested:
-                self.log_message.emit('error', f"Episode {episode_count} failed, stopping")
+                self.log_message.emit('error', f"Episode {episode_count} ended with an error. Stopping the run.")
                 break
             
             # After episode: Home and cleanup
             if not self._stop_requested:
-                self.log_message.emit('info', "Returning to home position...")
+                self.log_message.emit('info', "Returning the arm to home...")
                 self._execute_home_inline()
-                
-                self.log_message.emit('info', "Cleaning up eval folders...")
+
+                self.log_message.emit('info', "Tidying up run folders...")
                 self._cleanup_eval_folders(verbose=False)
-        
+
         # Final summary
         if num_episodes > 0:
-            self.log_message.emit('info', f"✓ Completed {episode_count}/{num_episodes} episodes")
+            self.log_message.emit('info', f"Finished {episode_count} of {num_episodes} episode(s).")
         else:
-            self.log_message.emit('info', f"✓ Completed {episode_count} episodes (loop mode)")
+            self.log_message.emit('info', f"Completed {episode_count} episode(s) in loop mode.")
     
     def _run_single_episode(self, task: str, checkpoint: str, duration: float) -> bool:
         """Run a single episode of model execution
@@ -1286,7 +1288,7 @@ class ExecutionWorker(QThread):
             checkpoint_path = train_dir / task / "checkpoints" / checkpoint / "pretrained_model"
             
             if not checkpoint_path.exists():
-                self.log_message.emit('error', f"Model not found: {checkpoint_path}")
+                self.log_message.emit('error', f"Model files are missing at {checkpoint_path}. Download the model again or pick a different checkpoint.")
                 return False
             
             # Build camera config string
@@ -1309,15 +1311,15 @@ class ExecutionWorker(QThread):
             random_id = ''.join(random.choices(string.digits, k=11))
             dataset_name = f"local/eval_{random_id}"
             
-            self.log_message.emit('info', f"Starting episode (dataset: {dataset_name})")
+            self.log_message.emit('info', f"Starting a new run (saved as {dataset_name}).")
 
             if self.camera_hub:
                 try:
-                    self.log_message.emit('info', "Pausing shared camera streams for model execution")
+                    self.log_message.emit('info', "Pausing shared camera streams for this model run.")
                     self.camera_hub.pause_all()
                     hub_paused = True
                 except Exception as exc:
-                    self.log_message.emit('warning', f"Failed to pause camera hub: {exc}")
+                    self.log_message.emit('warning', f"Could not pause the shared camera hub: {exc}. Continuing anyway.")
 
             # Build command using lerobot-record CLI
             # ALWAYS run 1 episode at a time (looping is handled by _execute_model_local)
@@ -1340,8 +1342,7 @@ class ExecutionWorker(QThread):
             # Check if we have permissions to access the robot port
             robot_port = robot_config.get('port', '/dev/ttyACM0')
             if not Path(robot_port).exists():
-                self.log_message.emit('error', f"Robot port not found: {robot_port}")
-                self.log_message.emit('error', "Make sure the robot is connected")
+                self.log_message.emit('error', f"Robot port {robot_port} was not found. Confirm the robot is connected and powered on.")
                 return False
             
             try:
@@ -1349,8 +1350,7 @@ class ExecutionWorker(QThread):
                 test_result = subprocess.run(['test', '-r', robot_port, '-a', '-w', robot_port], 
                                             capture_output=True, timeout=1)
                 if test_result.returncode != 0:
-                    self.log_message.emit('warning', f"No permission to access {robot_port}")
-                    self.log_message.emit('warning', f"Run: sudo chmod 666 {robot_port}")
+                    self.log_message.emit('warning', f"No permission to access {robot_port}. Allow access by running: sudo chmod 666 {robot_port}")
                     # Continue anyway - lerobot might handle this
             except:
                 pass  # If test fails, continue anyway
@@ -1384,13 +1384,13 @@ class ExecutionWorker(QThread):
                         if 'INFO' in line or 'ERROR' in line or 'Traceback' in line:
                             # Extract just the message part
                             if 'INFO' in line:
-                                self.log_message.emit('info', f"[lerobot] {line.split('INFO')[-1].strip()}")
+                                self.log_message.emit('info', f"Model service: {line.split('INFO')[-1].strip()}")
                             elif 'ERROR' in line:
-                                self.log_message.emit('error', f"[lerobot] {line.split('ERROR')[-1].strip()}")
+                                self.log_message.emit('error', f"Model service error: {line.split('ERROR')[-1].strip()}")
                             elif 'Traceback' in line:
-                                self.log_message.emit('error', f"[lerobot] {line}")
+                                self.log_message.emit('error', f"Model service traceback: {line}")
                 except Exception as e:
-                    self.log_message.emit('warning', f"Output reading error: {e}")
+                    self.log_message.emit('warning', f"Could not read output from the model service: {e}.")
                 finally:
                     if process.stdout:
                         process.stdout.close()
@@ -1405,8 +1405,7 @@ class ExecutionWorker(QThread):
             # Check if process started successfully
             if process.poll() is not None:
                 exit_code = process.returncode
-                self.log_message.emit('error', f"lerobot-record failed to start (exit code: {exit_code})")
-                self.log_message.emit('error', "Check the logs above for details")
+                self.log_message.emit('error', f"Model recording app failed to start (exit code {exit_code}). Check the terminal logs for details.")
                 # Print last few lines of output
                 for line in output_lines[-10:]:
                     print(f"[lerobot] {line}")
@@ -1419,16 +1418,16 @@ class ExecutionWorker(QThread):
             start_time = time.time()
             while time.time() - start_time < total_time:
                 if self._stop_requested:
-                    self.log_message.emit('warning', "Stopping by user request...")
+                    self.log_message.emit('warning', "Stop requested by user...")
                     break
                 
                 # Check if process finished
                 if process.poll() is not None:
                     exit_code = process.returncode
                     if exit_code == 0:
-                        self.log_message.emit('info', "✓ Episode completed successfully")
+                        self.log_message.emit('info', "Episode completed successfully.")
                     else:
-                        self.log_message.emit('error', f"lerobot-record failed with exit code {exit_code}")
+                        self.log_message.emit('error', f"Model recording app exited with code {exit_code}. See the recent logs for hints.")
                         # Print last few lines of output
                         for line in output_lines[-10:]:
                             print(f"[lerobot] {line}")
@@ -1441,12 +1440,12 @@ class ExecutionWorker(QThread):
             
             # If still running, terminate it
             if process.poll() is None:
-                self.log_message.emit('info', "Stopping lerobot-record...")
+                self.log_message.emit('info', "Stopping the model recording app...")
                 process.terminate()
                 try:
                     process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    self.log_message.emit('warning', "Force killing process...")
+                    self.log_message.emit('warning', "The model recording app did not close. Forcing it to stop...")
                     process.kill()
                     process.wait()
             
@@ -1456,7 +1455,7 @@ class ExecutionWorker(QThread):
             return True  # Success
             
         except Exception as e:
-            self.log_message.emit('error', f"Episode failed: {e}")
+            self.log_message.emit('error', f"Episode ended with an error: {e}. Review the terminal logs for more detail.")
             import traceback
             traceback.print_exc()
             return False
@@ -1464,9 +1463,9 @@ class ExecutionWorker(QThread):
             if hub_paused and self.camera_hub:
                 try:
                     self.camera_hub.resume_all()
-                    self.log_message.emit('info', "Resumed shared camera streams")
+                    self.log_message.emit('info', "Resumed the shared camera streams.")
                 except Exception as exc:
-                    self.log_message.emit('warning', f"Failed to resume camera hub: {exc}")
+                    self.log_message.emit('warning', f"Could not resume the camera hub: {exc}. Restart it manually if needed.")
     
     def _execute_model_inline(self, task: str, checkpoint: str, duration: float, num_episodes: int = None):
         """Execute a trained policy model for specified duration
@@ -1483,7 +1482,7 @@ class ExecutionWorker(QThread):
         local_mode = self.config.get("policy", {}).get("local_mode", True)
         
         if local_mode:
-            self.log_message.emit('info', "Using local mode (lerobot-record)")
+            self.log_message.emit('info', "Running the model locally on this device.")
             # Default to 1 episode for sequences, or use provided value
             if num_episodes is None:
                 num_episodes = 1
@@ -1497,10 +1496,10 @@ class ExecutionWorker(QThread):
             checkpoint_path = train_dir / task / "checkpoints" / checkpoint / "pretrained_model"
             
             if not checkpoint_path.exists():
-                self.log_message.emit('error', f"Model not found: {checkpoint_path}")
+                self.log_message.emit('error', f"Model files are missing at {checkpoint_path}. Download the model again or pick a different checkpoint.")
                 return
-            
-            self.log_message.emit('info', f"Starting policy server: {checkpoint_path}")
+
+            self.log_message.emit('info', f"Starting the policy server with model files at {checkpoint_path}.")
             
             # Build commands (similar to RobotWorker)
             policy_cmd = self._build_policy_server_cmd(checkpoint_path)
@@ -1520,10 +1519,10 @@ class ExecutionWorker(QThread):
             
             # Check if server started successfully
             if policy_process.poll() is not None:
-                self.log_message.emit('error', "Policy server failed to start")
+                self.log_message.emit('error', "Policy server failed to start. Check the terminal logs for more information.")
                 return
-            
-            self.log_message.emit('info', "Starting robot client...")
+
+            self.log_message.emit('info', "Starting the robot control app...")
             
             # Start robot client
             robot_process = subprocess.Popen(
@@ -1539,24 +1538,24 @@ class ExecutionWorker(QThread):
             
             # Check if client started successfully
             if robot_process.poll() is not None:
-                self.log_message.emit('error', "Robot client failed to start")
+                self.log_message.emit('error', "Robot control app failed to start. Check the terminal logs for more information.")
                 # Kill policy server
                 policy_process.terminate()
                 policy_process.wait(5)
                 return
-            
-            self.log_message.emit('info', f"✓ Model running for {duration}s")
+
+            self.log_message.emit('info', f"Model will run for about {duration}s.")
             
             # Run for specified duration (check for stop every second)
             start_time = time.time()
             while time.time() - start_time < duration:
                 if self._stop_requested:
-                    self.log_message.emit('info', "Model execution stopped by user")
+                    self.log_message.emit('info', "Model run stopped by user.")
                     break
                 time.sleep(0.5)
             
             # Stop processes
-            self.log_message.emit('info', "Stopping model...")
+            self.log_message.emit('info', "Stopping the model run...")
             robot_process.terminate()
             policy_process.terminate()
             
@@ -1570,14 +1569,14 @@ class ExecutionWorker(QThread):
             if policy_process.poll() is None:
                 policy_process.kill()
             
-            self.log_message.emit('info', "✓ Model execution completed")
-            
+            self.log_message.emit('info', "Model run finished.")
+
             # Return to home position after model completes
-            self.log_message.emit('info', "Returning to home position...")
+            self.log_message.emit('info', "Returning the arm to home...")
             self._execute_home_inline()
-            
+
         except Exception as e:
-            self.log_message.emit('error', f"Model execution failed: {e}")
+            self.log_message.emit('error', f"Model run ended with an error: {e}. See the terminal logs for clues.")
             import traceback
             traceback.print_exc()
     
