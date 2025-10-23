@@ -752,15 +752,24 @@ class ExecutionWorker(QThread):
         normalized_source = self._normalize_camera_identifier(source_id) if source_id else None
         normalized_index = str(index) if index is not None else None
 
-        for name, cfg in cameras.items():
-            identifier = cfg.get("index_or_path", 0)
-            norm_identifier = self._normalize_camera_identifier(identifier)
-            if normalized_source and norm_identifier == normalized_source:
-                return name
-            if normalized_index and norm_identifier == normalized_index:
-                return name
-            if source_id and str(identifier) == source_id:
-                return name
+        if source_id:
+            normalized_source = self._normalize_camera_identifier(source_id)
+            for name, cfg in cameras.items():
+                identifier = cfg.get("index_or_path", 0)
+                if self._normalize_camera_identifier(identifier) == normalized_source:
+                    return name
+
+        if normalized_index:
+            for name, cfg in cameras.items():
+                identifier = cfg.get("index_or_path", 0)
+                if self._normalize_camera_identifier(identifier) == normalized_index:
+                    return name
+
+        if source_id:
+            for name, cfg in cameras.items():
+                identifier = cfg.get("index_or_path", 0)
+                if str(identifier) == source_id:
+                    return name
         return None
 
     def _execute_vision_step(self, step: Dict, step_index: int, total_steps: int) -> bool:
@@ -1270,6 +1279,7 @@ class ExecutionWorker(QThread):
         Returns:
             bool: True if successful, False if failed
         """
+        hub_paused = False
         try:
             # Get checkpoint path
             train_dir = Path(self.config["policy"].get("base_path", ""))
@@ -1300,7 +1310,15 @@ class ExecutionWorker(QThread):
             dataset_name = f"local/eval_{random_id}"
             
             self.log_message.emit('info', f"Starting episode (dataset: {dataset_name})")
-            
+
+            if self.camera_hub:
+                try:
+                    self.log_message.emit('info', "Pausing shared camera streams for model execution")
+                    self.camera_hub.pause_all()
+                    hub_paused = True
+                except Exception as exc:
+                    self.log_message.emit('warning', f"Failed to pause camera hub: {exc}")
+
             # Build command using lerobot-record CLI
             # ALWAYS run 1 episode at a time (looping is handled by _execute_model_local)
             cmd = [
@@ -1442,6 +1460,13 @@ class ExecutionWorker(QThread):
             import traceback
             traceback.print_exc()
             return False
+        finally:
+            if hub_paused and self.camera_hub:
+                try:
+                    self.camera_hub.resume_all()
+                    self.log_message.emit('info', "Resumed shared camera streams")
+                except Exception as exc:
+                    self.log_message.emit('warning', f"Failed to resume camera hub: {exc}")
     
     def _execute_model_inline(self, task: str, checkpoint: str, duration: float, num_episodes: int = None):
         """Execute a trained policy model for specified duration

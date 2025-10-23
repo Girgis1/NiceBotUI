@@ -721,10 +721,6 @@ class DashboardTab(QWidget):
         controls_row.addWidget(self.home_btn)
         controls_column.addLayout(controls_row)
 
-        # Log and speed slider row
-        log_speed_row = QHBoxLayout()
-        log_speed_row.setSpacing(15)
-
         # Log text area (expand to fill height)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
@@ -738,12 +734,13 @@ class DashboardTab(QWidget):
                 border-radius: 4px;
             }
         """)
-        log_speed_row.addWidget(self.log_text, stretch=4)
+        controls_column.addWidget(self.log_text, stretch=1)
 
         # Speed slider column - fill maximum height
         speed_column = QVBoxLayout()
         speed_column.setSpacing(10)
         speed_column.setContentsMargins(0, 0, 0, 0)
+        speed_column.setAlignment(Qt.AlignTop)
 
         self.speed_slider = QSlider(Qt.Vertical)
         self.speed_slider.setRange(10, 120)
@@ -785,12 +782,8 @@ class DashboardTab(QWidget):
         self.speed_value_label.setAlignment(Qt.AlignCenter)
         speed_column.addWidget(self.speed_value_label)
 
-        log_speed_row.addLayout(speed_column, stretch=0)
-
-        controls_column.addLayout(log_speed_row)
-
         body_layout.addLayout(controls_column, stretch=5)
-
+        body_layout.addLayout(speed_column, stretch=1)
         layout.addLayout(body_layout)
         self._refresh_active_camera_label()
 
@@ -1191,7 +1184,7 @@ class DashboardTab(QWidget):
         zones = self.active_vision_zones.get(camera_name)
         if zones:
             return zones
-        return self.vision_zones.get(camera_name, [])
+        return []
 
     def update_camera_previews(self, force: bool = False):
         if not self.camera_view_active or cv2 is None or np is None:
@@ -1230,7 +1223,7 @@ class DashboardTab(QWidget):
         camera_cfg = self.config.get("cameras", {}).get(camera_name)
         if not camera_cfg:
             return
-        zones = self._get_preview_zones(camera_name)
+        zones = self.active_vision_zones.get(camera_name) or self.vision_zones.get(camera_name, [])
         dialog = CameraDetailDialog(
             camera_name, camera_cfg, zones, self._render_camera_frame, self.camera_hub, self
         )
@@ -1362,6 +1355,10 @@ class DashboardTab(QWidget):
 
         self._vision_state_active = False
         self._last_vision_signature = None
+        self.active_vision_zones.clear()
+        self._last_preview_timestamp = 0.0
+        if self.camera_view_active:
+            self.update_camera_previews(force=True)
         
         if selected.startswith("--"):
             self.log_text.append("[warning] No item selected")
