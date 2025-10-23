@@ -463,7 +463,7 @@ class CameraCanvas(QWidget):
                 for wpt in widget_points:
                     painter.drawEllipse(wpt, 6, 6)
 
-            # Zone info block inside polygon
+            # Zone info text inside polygon (no background box, inverted color for contrast)
             info_rect = poly.boundingRect().adjusted(10, 10, -10, -10)
             if info_rect.width() > 0 and info_rect.height() > 0:
                 detection = zone.get("detection", {})
@@ -472,6 +472,7 @@ class CameraCanvas(QWidget):
                 next_check = detection.get("next_check_seconds")
                 interval = detection.get("interval_seconds")
                 invert = detection.get("invert", False)
+
                 if invert:
                     comparator = "≤" if is_triggered else ">"
                 else:
@@ -487,12 +488,20 @@ class CameraCanvas(QWidget):
 
                 text = "\n".join(text_lines)
 
+                text_color = QColor(
+                    max(0, 255 - base_color.red()),
+                    max(0, 255 - base_color.green()),
+                    max(0, 255 - base_color.blue()),
+                )
+
                 painter.save()
-                painter.setBrush(QColor(0, 0, 0, 160))
-                painter.setPen(Qt.NoPen)
-                painter.drawRoundedRect(info_rect, 10, 10)
-                painter.setPen(QPen(QColor("#ffffff")))
                 painter.setFont(QFont("Noto Sans", 11, QFont.Medium))
+                painter.setPen(QPen(text_color, 1))
+                # Soft shadow for readability
+                shadow_color = QColor(0, 0, 0, 160)
+                painter.setPen(QPen(shadow_color, 1))
+                painter.drawText(info_rect.translated(1, 1), Qt.AlignCenter | Qt.TextWordWrap, text)
+                painter.setPen(QPen(text_color, 1))
                 painter.drawText(info_rect, Qt.AlignCenter | Qt.TextWordWrap, text)
                 painter.restore()
 
