@@ -1,0 +1,96 @@
+{
+  "format_version": "2.0",
+  "name": "VisionTest_03",
+  "type": "composite_sequence",
+  "description": "",
+  "loop": true,
+  "steps": [
+    {
+      "step_id": "step_001",
+      "step_number": 1,
+      "step_type": "home",
+      "name": "Unnamed Step",
+      "file": "01_unnamed_step_home.json",
+      "enabled": true,
+      "delay_after": 0.0
+    },
+    {
+      "step_id": "step_002",
+      "step_number": 2,
+      "step_type": "vision",
+      "name": "Detection Zone",
+      "file": "02_detection_zone_vision.json",
+      "enabled": true,
+      "delay_after": 0.0,
+      "camera": {
+        "config_key": "front",
+        "index": 0,
+        "index_or_path": "/dev/video0",
+        "label": "Front",
+        "resolution": [
+          640,
+          480
+        ],
+        "source_id": "system:front"
+      },
+      "trigger": {
+        "display_name": "Detection Zone",
+        "idle_mode": {
+          "enabled": false,
+          "interval_seconds": 2.0
+        },
+        "mode": "presence",
+        "settings": {
+          "hold_time": 0.0,
+          "invert": true,
+          "metric": "green_channel",
+          "sensitivity": 0.6,
+          "threshold": 0.75
+        },
+        "vision_type": "basic_detection",
+        "zones": [
+          {
+            "color": "#33FF99",
+            "enabled": true,
+            "name": "Zone 1",
+            "polygon": [
+              [
+                0.0641025641025641,
+                0.23504273504273504
+              ],
+              [
+                0.08814102564102565,
+                0.7008547008547008
+              ],
+              [
+                0.6490384615384616,
+                0.6730769230769231
+              ],
+              [
+                0.6442307692307693,
+                0.14102564102564102
+              ]
+            ],
+            "zone_id": "zone_8ae725b7"
+          }
+        ]
+      }
+    },
+    {
+      "step_id": "step_003",
+      "step_number": 3,
+      "step_type": "action",
+      "name": "LoopTest",
+      "file": "03_looptest_action.json",
+      "enabled": true,
+      "delay_after": 0.0,
+      "action_name": "LoopTest"
+    }
+  ],
+  "metadata": {
+    "created": "2025-10-23T14:01:54.488148+11:00",
+    "modified": "2025-10-23T14:03:59.993969+11:00",
+    "total_steps": 3,
+    "estimated_duration": 10.0
+  }
+}

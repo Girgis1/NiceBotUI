@@ -695,15 +695,78 @@ class SettingsTab(QWidget):
 
         QTimer.singleShot(500, _finish)
 
+    def run_hand_safety_test(self):
+        """Test hand safety monitoring with live camera preview."""
+        if cv2 is None or np is None:
+            message = "OpenCV/NumPy not installed. Install requirements.txt to run hand safety tests."
+            self.status_label.setText(f"❌ {message}")
+            print(f"[SAFETY] {message}")
+            return
+
+        camera_choice = self.hand_safety_camera_combo.currentData()
+        cameras_cfg = self.config.get("cameras", {})
+
+        def normalize_identifier(value):
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped.isdigit():
+                    return int(stripped)
+                return stripped
+            return value
+
+        sources: List[Tuple[str, Union[int, str]]] = []
+
+        def add_source(key: str, label_prefix: str):
+            cam_cfg = cameras_cfg.get(key, {})
+            identifier = cam_cfg.get("index_or_path", normalize_identifier(0 if key == "front" else 1))
+            identifier = normalize_identifier(identifier)
+            if identifier is None:
+                return
+            label = f"{label_prefix} ({identifier})"
+            sources.append((label, identifier))
+
+        if camera_choice in ("front", "wrist"):
+            add_source(camera_choice, camera_choice.title() + " Camera")
+        elif camera_choice in ("both", "all"):
+            add_source("front", "Front Camera")
+            add_source("wrist", "Wrist Camera")
+        else:
+            # Fallback to front
+            add_source("front", "Front Camera")
+
+        if not sources:
+            message = "No camera sources configured for safety monitoring — update the Camera tab first."
+            self.status_label.setText(f"❌ {message}")
+            print(f"[SAFETY] {message}")
+            return
+
+        self.status_label.setText("🎥 Launching hand safety test window…")
+        dialog = HandDetectionTestDialog(sources, parent=self)
+        dialog.exec()
+        
+        if dialog.detected_any:
+            self.status_label.setText("✅ Hand detection working! Detected hands during test.")
+            self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+        else:
+            self.status_label.setText("⚠️ No hands detected during test. Try moving your hand in view.")
+            self.status_label.setStyleSheet("QLabel { color: #FF9800; font-size: 15px; padding: 8px; }")
+    
     def run_hand_detection_test(self):
-        """Open live preview to validate hand detection settings."""
+        """Open live preview to validate hand detection settings (LEGACY - redirects to new test)."""
+        # Redirect to new safety test
+        self.run_hand_safety_test()
+        return
+        
+        # OLD CODE BELOW (kept for reference but not executed)
         if cv2 is None or np is None:
             message = "OpenCV/NumPy not installed. Install requirements.txt to run hand detection tests."
             self.status_label.setText(f"❌ {message}")
             print(f"[SAFETY] {message}")
             return
 
-        camera_choice = self.hand_detection_camera_combo.currentData()
+        camera_choice = "front"  # Dummy, never reached
         cameras_cfg = self.config.get("cameras", {})
 
         def normalize_identifier(value):
@@ -1077,25 +1140,32 @@ class SettingsTab(QWidget):
 
         layout.addSpacing(8)
 
-        # Hand detection safety
-        vision_section = QLabel("✋ Vision-Based Co-working")
-        vision_section.setStyleSheet("QLabel { color: #4CAF50; font-size: 16px; font-weight: bold; padding: 4px 0; }")
+        # Hand Safety Monitoring (EMERGENCY STOP)
+        vision_section = QLabel("🚨 Hand Safety Monitoring (Emergency Stop)")
+        vision_section.setStyleSheet("QLabel { color: #FF5722; font-size: 16px; font-weight: bold; padding: 4px 0; }")
         layout.addWidget(vision_section)
+        
+        warning_label = QLabel("⚠️ CRITICAL SAFETY: Detects hands and triggers EMERGENCY STOP to prevent injury")
+        warning_label.setStyleSheet("QLabel { color: #FF9800; font-size: 14px; padding: 4px; font-style: italic; }")
+        warning_label.setWordWrap(True)
+        layout.addWidget(warning_label)
 
-        self.hand_detection_check = QCheckBox("Pause robot when a hand enters the workcell")
-        self.hand_detection_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px; }")
-        layout.addWidget(self.hand_detection_check)
+        self.hand_safety_enabled_check = QCheckBox("Enable Hand Safety Monitoring")
+        self.hand_safety_enabled_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px; font-weight: bold; }")
+        layout.addWidget(self.hand_safety_enabled_check)
 
+        # Camera selection
         camera_row = QHBoxLayout()
-        camera_label = QLabel("Detection camera:")
-        camera_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 200px; }")
+        camera_label = QLabel("Monitor cameras:")
+        camera_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 220px; }")
         camera_row.addWidget(camera_label)
 
-        self.hand_detection_camera_combo = QComboBox()
-        self.hand_detection_camera_combo.addItem("Front Camera", "front")
-        self.hand_detection_camera_combo.addItem("Wrist Camera", "wrist")
-        self.hand_detection_camera_combo.addItem("Both Cameras", "both")
-        self.hand_detection_camera_combo.setStyleSheet("""
+        self.hand_safety_camera_combo = QComboBox()
+        self.hand_safety_camera_combo.addItem("Front Camera", "front")
+        self.hand_safety_camera_combo.addItem("Wrist Camera", "wrist")
+        self.hand_safety_camera_combo.addItem("Both Cameras", "both")
+        self.hand_safety_camera_combo.addItem("All Cameras", "all")
+        self.hand_safety_camera_combo.setStyleSheet("""
             QComboBox {
                 background-color: #505050;
                 color: #ffffff;
@@ -1106,7 +1176,7 @@ class SettingsTab(QWidget):
                 min-height: 45px;
             }
             QComboBox:focus {
-                border-color: #4CAF50;
+                border-color: #FF5722;
                 background-color: #555555;
             }
             QComboBox QListView {
@@ -1115,47 +1185,25 @@ class SettingsTab(QWidget):
                 padding: 4px;
             }
         """)
-        camera_row.addWidget(self.hand_detection_camera_combo)
+        camera_row.addWidget(self.hand_safety_camera_combo)
         camera_row.addStretch()
         layout.addLayout(camera_row)
 
-        model_row = QHBoxLayout()
-        model_label = QLabel("Vision model path or name:")
-        model_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 200px; }")
-        model_row.addWidget(model_label)
+        # Detection FPS (resource control)
+        fps_row = QHBoxLayout()
+        fps_label = QLabel("Detection FPS (lower=lighter):")
+        fps_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 220px; }")
+        fps_row.addWidget(fps_label)
 
-        self.hand_detection_model_edit = QLineEdit("nicebot/hand-detection-large")
-        self.hand_detection_model_edit.setMinimumHeight(45)
-        self.hand_detection_model_edit.setStyleSheet("""
-            QLineEdit {
-                background-color: #505050;
-                color: #ffffff;
-                border: 2px solid #707070;
-                border-radius: 8px;
-                padding: 10px;
-                font-size: 15px;
-            }
-            QLineEdit:focus {
-                border-color: #4CAF50;
-                background-color: #555555;
-            }
-        """)
-        model_row.addWidget(self.hand_detection_model_edit)
-        layout.addLayout(model_row)
-
-        resume_row = QHBoxLayout()
-        resume_label = QLabel("Resume delay after clear (s):")
-        resume_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 200px; }")
-        resume_row.addWidget(resume_label)
-
-        self.hand_resume_delay_spin = QDoubleSpinBox()
-        self.hand_resume_delay_spin.setRange(0.0, 10.0)
-        self.hand_resume_delay_spin.setDecimals(1)
-        self.hand_resume_delay_spin.setSingleStep(0.5)
-        self.hand_resume_delay_spin.setValue(0.5)
-        self.hand_resume_delay_spin.setMinimumHeight(45)
-        self.hand_resume_delay_spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
-        self.hand_resume_delay_spin.setStyleSheet("""
+        self.hand_safety_fps_spin = QDoubleSpinBox()
+        self.hand_safety_fps_spin.setRange(1.0, 30.0)
+        self.hand_safety_fps_spin.setDecimals(1)
+        self.hand_safety_fps_spin.setSingleStep(1.0)
+        self.hand_safety_fps_spin.setValue(8.0)
+        self.hand_safety_fps_spin.setMinimumHeight(45)
+        self.hand_safety_fps_spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
+        self.hand_safety_fps_spin.setToolTip("Lower FPS saves CPU/GPU resources. 8 FPS recommended for good safety with low overhead.")
+        self.hand_safety_fps_spin.setStyleSheet("""
             QDoubleSpinBox {
                 background-color: #505050;
                 color: #ffffff;
@@ -1165,25 +1213,124 @@ class SettingsTab(QWidget):
                 font-size: 15px;
             }
             QDoubleSpinBox:focus {
-                border-color: #4CAF50;
+                border-color: #FF5722;
                 background-color: #555555;
             }
         """)
-        resume_row.addWidget(self.hand_resume_delay_spin)
+        fps_row.addWidget(self.hand_safety_fps_spin)
+        fps_row.addStretch()
+        layout.addLayout(fps_row)
+
+        # Detection confidence (MediaPipe)
+        confidence_row = QHBoxLayout()
+        confidence_label = QLabel("Detection confidence threshold:")
+        confidence_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 220px; }")
+        confidence_row.addWidget(confidence_label)
+
+        self.hand_safety_confidence_spin = QDoubleSpinBox()
+        self.hand_safety_confidence_spin.setRange(0.1, 0.9)
+        self.hand_safety_confidence_spin.setDecimals(2)
+        self.hand_safety_confidence_spin.setSingleStep(0.05)
+        self.hand_safety_confidence_spin.setValue(0.45)
+        self.hand_safety_confidence_spin.setMinimumHeight(45)
+        self.hand_safety_confidence_spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
+        self.hand_safety_confidence_spin.setToolTip("Higher = fewer false positives but may miss hands. 0.45 recommended.")
+        self.hand_safety_confidence_spin.setStyleSheet("""
+            QDoubleSpinBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 8px;
+                font-size: 15px;
+            }
+            QDoubleSpinBox:focus {
+                border-color: #FF5722;
+                background-color: #555555;
+            }
+        """)
+        confidence_row.addWidget(self.hand_safety_confidence_spin)
+        confidence_row.addStretch()
+        layout.addLayout(confidence_row)
+
+        # Resume delay
+        resume_row = QHBoxLayout()
+        resume_label = QLabel("Resume delay after clear (s):")
+        resume_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 220px; }")
+        resume_row.addWidget(resume_label)
+
+        self.hand_safety_resume_delay_spin = QDoubleSpinBox()
+        self.hand_safety_resume_delay_spin.setRange(0.5, 10.0)
+        self.hand_safety_resume_delay_spin.setDecimals(1)
+        self.hand_safety_resume_delay_spin.setSingleStep(0.5)
+        self.hand_safety_resume_delay_spin.setValue(1.0)
+        self.hand_safety_resume_delay_spin.setMinimumHeight(45)
+        self.hand_safety_resume_delay_spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
+        self.hand_safety_resume_delay_spin.setToolTip("Time workspace must be clear before manual restart allowed.")
+        self.hand_safety_resume_delay_spin.setStyleSheet("""
+            QDoubleSpinBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 8px;
+                font-size: 15px;
+            }
+            QDoubleSpinBox:focus {
+                border-color: #FF5722;
+                background-color: #555555;
+            }
+        """)
+        resume_row.addWidget(self.hand_safety_resume_delay_spin)
         resume_row.addStretch()
         layout.addLayout(resume_row)
 
-        self.hand_hold_position_check = QCheckBox("Hold position with torque on while paused")
-        self.hand_hold_position_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px; }")
-        layout.addWidget(self.hand_hold_position_check)
+        # Frame size (advanced)
+        framesize_row = QHBoxLayout()
+        framesize_label = QLabel("Detection frame width (px):")
+        framesize_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 220px; }")
+        framesize_row.addWidget(framesize_label)
 
+        self.hand_safety_frame_width_spin = QSpinBox()
+        self.hand_safety_frame_width_spin.setRange(160, 640)
+        self.hand_safety_frame_width_spin.setSingleStep(80)
+        self.hand_safety_frame_width_spin.setValue(320)
+        self.hand_safety_frame_width_spin.setMinimumHeight(45)
+        self.hand_safety_frame_width_spin.setButtonSymbols(QSpinBox.NoButtons)
+        self.hand_safety_frame_width_spin.setToolTip("Smaller = faster processing. 320px recommended.")
+        self.hand_safety_frame_width_spin.setStyleSheet("""
+            QSpinBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 8px;
+                font-size: 15px;
+            }
+            QSpinBox:focus {
+                border-color: #FF5722;
+                background-color: #555555;
+            }
+        """)
+        framesize_row.addWidget(self.hand_safety_frame_width_spin)
+        framesize_row.addStretch()
+        layout.addLayout(framesize_row)
+
+        # Use MediaPipe toggle
+        self.hand_safety_use_mediapipe_check = QCheckBox("Use MediaPipe (recommended - most reliable)")
+        self.hand_safety_use_mediapipe_check.setChecked(True)
+        self.hand_safety_use_mediapipe_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px; }")
+        self.hand_safety_use_mediapipe_check.setToolTip("MediaPipe is more reliable. Disable to use HSV skin-tone fallback.")
+        layout.addWidget(self.hand_safety_use_mediapipe_check)
+
+        # Test button
         hand_button_row = QHBoxLayout()
         hand_button_row.addStretch()
-        self.hand_detection_test_btn = QPushButton("Run Hand Detection Test")
-        self.hand_detection_test_btn.setMinimumHeight(45)
-        self.hand_detection_test_btn.setStyleSheet(self.get_button_style("#2196F3", "#1976D2"))
-        self.hand_detection_test_btn.clicked.connect(self.run_hand_detection_test)
-        hand_button_row.addWidget(self.hand_detection_test_btn)
+        self.hand_safety_test_btn = QPushButton("🎥 Test Hand Detection")
+        self.hand_safety_test_btn.setMinimumHeight(45)
+        self.hand_safety_test_btn.setStyleSheet(self.get_button_style("#FF5722", "#E64A19"))
+        self.hand_safety_test_btn.clicked.connect(self.run_hand_safety_test)
+        hand_button_row.addWidget(self.hand_safety_test_btn)
         layout.addLayout(hand_button_row)
 
         layout.addStretch()
@@ -1354,15 +1501,18 @@ class SettingsTab(QWidget):
         self.torque_threshold_spin.setValue(safety_cfg.get("torque_limit_percent", 120.0))
         self.torque_disable_check.setChecked(safety_cfg.get("torque_auto_disable", True))
 
-        hand_camera = safety_cfg.get("hand_detection_camera", "front")
-        index = self.hand_detection_camera_combo.findData(hand_camera)
+        # Hand Safety Monitoring (NEW)
+        self.hand_safety_enabled_check.setChecked(safety_cfg.get("enabled", False))
+        hand_camera = safety_cfg.get("cameras", "front")
+        index = self.hand_safety_camera_combo.findData(hand_camera)
         if index == -1:
             index = 0
-        self.hand_detection_camera_combo.setCurrentIndex(index)
-        self.hand_detection_check.setChecked(safety_cfg.get("hand_detection_enabled", False))
-        self.hand_detection_model_edit.setText(safety_cfg.get("hand_detection_model", "nicebot/hand-detection-large"))
-        self.hand_resume_delay_spin.setValue(safety_cfg.get("hand_resume_delay_s", 0.5))
-        self.hand_hold_position_check.setChecked(safety_cfg.get("hand_hold_position", True))
+        self.hand_safety_camera_combo.setCurrentIndex(index)
+        self.hand_safety_fps_spin.setValue(safety_cfg.get("detection_fps", 8.0))
+        self.hand_safety_confidence_spin.setValue(safety_cfg.get("detection_confidence", 0.45))
+        self.hand_safety_resume_delay_spin.setValue(safety_cfg.get("resume_delay_s", 1.0))
+        self.hand_safety_frame_width_spin.setValue(safety_cfg.get("frame_width", 320))
+        self.hand_safety_use_mediapipe_check.setChecked(safety_cfg.get("use_mediapipe", True))
     
     def save_settings(self):
         """Save settings to config file"""
@@ -1426,11 +1576,17 @@ class SettingsTab(QWidget):
         self.config["safety"]["torque_monitoring_enabled"] = self.torque_monitor_check.isChecked()
         self.config["safety"]["torque_limit_percent"] = self.torque_threshold_spin.value()
         self.config["safety"]["torque_auto_disable"] = self.torque_disable_check.isChecked()
-        self.config["safety"]["hand_detection_enabled"] = self.hand_detection_check.isChecked()
-        self.config["safety"]["hand_detection_camera"] = self.hand_detection_camera_combo.currentData()
-        self.config["safety"]["hand_detection_model"] = self.hand_detection_model_edit.text()
-        self.config["safety"]["hand_resume_delay_s"] = self.hand_resume_delay_spin.value()
-        self.config["safety"]["hand_hold_position"] = self.hand_hold_position_check.isChecked()
+        # Hand Safety Monitoring (NEW)
+        self.config["safety"]["enabled"] = self.hand_safety_enabled_check.isChecked()
+        self.config["safety"]["cameras"] = self.hand_safety_camera_combo.currentData()
+        self.config["safety"]["detection_fps"] = self.hand_safety_fps_spin.value()
+        self.config["safety"]["detection_confidence"] = self.hand_safety_confidence_spin.value()
+        self.config["safety"]["tracking_confidence"] = 0.35  # Fixed value
+        self.config["safety"]["resume_delay_s"] = self.hand_safety_resume_delay_spin.value()
+        self.config["safety"]["frame_width"] = self.hand_safety_frame_width_spin.value()
+        self.config["safety"]["frame_height"] = int(self.hand_safety_frame_width_spin.value() * 0.75)  # 4:3 aspect
+        self.config["safety"]["skin_threshold"] = 0.045  # Fixed value for HSV fallback
+        self.config["safety"]["use_mediapipe"] = self.hand_safety_use_mediapipe_check.isChecked()
         
         # Write to file
         try:
