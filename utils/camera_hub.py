@@ -239,6 +239,7 @@ class CameraStreamHub:
         self._config = config
         self._streams: Dict[str, CameraStream] = {}
         self._streams_lock = threading.Lock()
+        self._paused = False
 
     # ------------------------------------------------------------------
     # Singleton helpers
@@ -304,6 +305,25 @@ class CameraStreamHub:
             for stream in self._streams.values():
                 stream.stop()
             self._streams.clear()
+        self._paused = False
+
+    def pause_all(self) -> None:
+        """Temporarily stop all camera threads (e.g., when another process needs exclusive access)."""
+        with self._streams_lock:
+            if self._paused:
+                return
+            for stream in self._streams.values():
+                stream.stop()
+            self._paused = True
+
+    def resume_all(self) -> None:
+        """Restart camera threads after a pause."""
+        with self._streams_lock:
+            if not self._paused:
+                return
+            for stream in self._streams.values():
+                stream.start()
+            self._paused = False
 
 
 def shutdown_camera_hub() -> None:
