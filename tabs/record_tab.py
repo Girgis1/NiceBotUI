@@ -1470,4 +1470,4 @@ class RecordTab(QWidget):
         
         self.status_label.setText("⏹ Playback stopped")
         self.playback_status.emit("stopped")
-
+    

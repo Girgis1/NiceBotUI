@@ -25,10 +25,10 @@ from typing import Optional, List, Dict
 import pytz
 
 try:
-    from .sequence_step import SequenceStep, ActionStep, ModelStep, DelayStep, HomeStep
+    from .sequence_step import SequenceStep, ActionStep, ModelStep, DelayStep, HomeStep, VisionStep
 except ImportError:
     # Allow running as standalone script for testing
-    from sequence_step import SequenceStep, ActionStep, ModelStep, DelayStep, HomeStep
+    from sequence_step import SequenceStep, ActionStep, ModelStep, DelayStep, HomeStep, VisionStep
 
 
 TIMEZONE = pytz.timezone('Australia/Sydney')
@@ -88,6 +88,8 @@ class CompositeSequence:
             elif step_type == 'home':
                 # Rough estimate for homing
                 total += 3.0
+            elif step_type == 'vision':
+                total += 2.0
         
         return total
     
@@ -187,7 +189,7 @@ class CompositeSequence:
         """Add a step to the composite sequence
         
         Args:
-            step_type: "action", "model", "delay", or "home"
+            step_type: "action", "model", "delay", "home", or "vision"
             name: Display name for this step
             step_file: Filename of the step JSON (e.g., "01_grab_action.json")
             enabled: Whether step is active
@@ -220,6 +222,9 @@ class CompositeSequence:
             step["duration"] = kwargs.get("duration", 25.0)
         elif step_type == "delay":
             step["duration"] = kwargs.get("duration", 1.0)
+        elif step_type == "vision":
+            step["camera"] = kwargs.get("camera", {})
+            step["trigger"] = kwargs.get("trigger", {})
         # home type has no extra fields
         
         self.steps.append(step)
@@ -347,6 +352,33 @@ class CompositeSequence:
                 
         except Exception as e:
             print(f"[ERROR] Failed to add model step: {e}")
+            return ""
+
+    def add_vision_step(self, name: str, camera: Dict, trigger: Dict,
+                        enabled: bool = True, delay_after: float = 0.0) -> str:
+        """Create and save a vision step"""
+        try:
+            camera_data = json.loads(json.dumps(camera))
+            trigger_data = json.loads(json.dumps(trigger))
+            step_obj = VisionStep(name, camera_data, trigger_data, enabled, delay_after)
+
+            filename = f"{self._next_step_number:02d}_{name.lower().replace(' ', '_')}_vision.json"
+            filepath = self.sequence_dir / filename
+
+            if step_obj.save(filepath):
+                step_id = self.add_step(
+                    "vision",
+                    name,
+                    filename,
+                    enabled,
+                    delay_after,
+                    camera=camera_data,
+                    trigger=trigger_data,
+                )
+                return step_id
+            return ""
+        except Exception as e:
+            print(f"[ERROR] Failed to add vision step: {e}")
             return ""
     
     def add_delay_step(self, name: str, duration: float, enabled: bool = True, 
@@ -561,4 +593,3 @@ if __name__ == "__main__":
     print()
     
     print("✓ Composite sequence manager working!")
-

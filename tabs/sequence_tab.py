@@ -5,9 +5,12 @@ Combine actions, trained models, and delays into complex sequences
 
 import sys
 from pathlib import Path
+from typing import Optional
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QComboBox, QInputDialog, QMessageBox, QListWidget, QListWidgetItem
+    QComboBox, QInputDialog, QMessageBox, QListWidget, QListWidgetItem,
+    QDialog
 )
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor
@@ -17,6 +20,36 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from utils.sequences_manager import SequencesManager
 from utils.actions_manager import ActionsManager
+
+# Vision designer dialog (new modular UI)
+try:
+    from vision_ui import VisionConfigDialog, create_default_vision_config
+except ImportError:
+    VisionConfigDialog = None  # Fallback if vision UI not yet available
+
+    def create_default_vision_config():
+        return {
+            "type": "vision",
+            "name": "Setup Vision Trigger",
+            "camera": {
+                "index": 0,
+                "label": "Camera 0",
+                "resolution": [640, 480],
+                "source_id": "camera:0",
+            },
+            "trigger": {
+                "display_name": "Detection Zone",
+                "mode": "presence",
+                "settings": {
+                    "metric": "intensity",
+                    "threshold": 0.55,
+                    "invert": False,
+                    "hold_time": 0.0,
+                    "sensitivity": 0.6,
+                },
+                "zones": [],
+            },
+        }
 
 
 class SequenceTab(QWidget):
@@ -40,6 +73,7 @@ class SequenceTab(QWidget):
         
         self.init_ui()
         self.refresh_sequence_list()
+        self._highlighted_step_row = None
     
     def init_ui(self):
         """Initialize UI"""
@@ -111,6 +145,7 @@ class SequenceTab(QWidget):
         self.save_btn.clicked.connect(self.save_sequence)
         top_bar.addWidget(self.save_btn)
         
+        # Vision button
         self.new_btn = QPushButton("✨ NEW")
         self.new_btn.setMinimumHeight(45)
         self.new_btn.setStyleSheet("""
@@ -170,6 +205,24 @@ class SequenceTab(QWidget):
         """)
         self.add_model_btn.clicked.connect(self.add_model_step)
         add_bar.addWidget(self.add_model_btn)
+        
+        self.add_vision_btn = QPushButton("+ Vision")
+        self.add_vision_btn.setMinimumHeight(45)
+        self.add_vision_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #AA00FF;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #8E24AA;
+            }
+        """)
+        self.add_vision_btn.clicked.connect(self.add_vision_step)
+        add_bar.addWidget(self.add_vision_btn)
         
         self.add_delay_btn = QPushButton("⏱ Delay")
         self.add_delay_btn.setMinimumHeight(45)
@@ -237,6 +290,7 @@ class SequenceTab(QWidget):
                 background-color: #404040;
             }
         """)
+        self.steps_list.itemDoubleClicked.connect(self.edit_step)
         layout.addWidget(self.steps_list, stretch=1)
         
         # Run controls
@@ -323,6 +377,7 @@ class SequenceTab(QWidget):
             }
         """)
         self.status_label.setAlignment(Qt.AlignCenter)
+        self._default_status_message = "Build a sequence by adding actions, models, and delays."
         layout.addWidget(self.status_label)
     
     def refresh_sequence_list(self):
@@ -402,13 +457,18 @@ class SequenceTab(QWidget):
         elif step_type == "home":
             text = f"{number}. 🏠 Home: Return to rest position"
             color = QColor("#4CAF50")
+        elif step_type == "vision":
+            text = self._format_vision_step_text(step, number)
+            color = QColor("#AA00FF")
         else:
             text = f"{number}. ❓ Unknown step"
             color = QColor("#909090")
         
         item = QListWidgetItem(text)
         item.setData(Qt.UserRole, step)  # Store step data
-        item.setBackground(color.darker(200))
+        base_bg = color.darker(200)
+        item.setData(Qt.UserRole + 1, base_bg.name())
+        item.setBackground(base_bg)
         item.setForeground(QColor("#ffffff"))
         
         self.steps_list.addItem(item)
@@ -470,7 +530,20 @@ class SequenceTab(QWidget):
                     "duration": duration
                 }
                 self.add_step_to_list(step)
-                self.status_label.setText(f"✓ Added model: {task}")
+            self.status_label.setText(f"✓ Added model: {task}")
+    
+    def add_vision_step(self):
+        """Add a vision configuration step"""
+        step = create_default_vision_config()
+        
+        self.add_step_to_list(step)
+        self.status_label.setText("✓ Added vision trigger")
+        self._report_vision_status("watching", "Vision step added — configure zones to enable triggers.")
+        
+        # Automatically prompt for configuration
+        last_item = self.steps_list.item(self.steps_list.count() - 1)
+        if last_item:
+            self.configure_vision_step(last_item)
     
     def add_delay_step(self):
         """Add a delay step"""
@@ -557,6 +630,7 @@ class SequenceTab(QWidget):
         """Create a new sequence"""
         self.sequence_combo.setCurrentText("NewSequence01")
         self.steps_list.clear()
+        self.clear_running_highlight()
         self.status_label.setText("New sequence created")
     
     def toggle_loop(self):
@@ -608,6 +682,7 @@ class SequenceTab(QWidget):
         # Disable editing while running
         self.add_action_btn.setEnabled(False)
         self.add_model_btn.setEnabled(False)
+        self.add_vision_btn.setEnabled(False)
         self.add_delay_btn.setEnabled(False)
         self.add_home_btn.setEnabled(False)
         self.save_btn.setEnabled(False)
@@ -628,10 +703,161 @@ class SequenceTab(QWidget):
         # Re-enable editing
         self.add_action_btn.setEnabled(True)
         self.add_model_btn.setEnabled(True)
+        self.add_vision_btn.setEnabled(True)
         self.add_delay_btn.setEnabled(True)
         self.add_home_btn.setEnabled(True)
         self.save_btn.setEnabled(True)
         self.new_btn.setEnabled(True)
         
+        self.clear_running_highlight()
         self.status_label.setText("⏹ Sequence stopped")
+    
+    def edit_step(self, item: QListWidgetItem):
+        """Handle double-click to edit a step"""
+        if not item:
+            return
+        
+        step = item.data(Qt.UserRole) or {}
+        step_type = step.get("type")
+        
+        if step_type == "vision":
+            self.configure_vision_step(item)
+        else:
+            self.status_label.setText("Editing is only available for vision steps right now.")
+    
+    def configure_vision_step(self, item: QListWidgetItem):
+        """Open the vision designer dialog for the given item"""
+        if VisionConfigDialog is None:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "Vision Designer Missing",
+                "Vision designer module is not available. Please ensure vision_ui/designer.py exists."
+            )
+            return
+        
+        step = item.data(Qt.UserRole) or {}
+        
+        dialog = VisionConfigDialog(self, step, self.config)
+        if hasattr(dialog, "state_changed"):
+            dialog.state_changed.connect(self._handle_designer_state_changed)
+        result = dialog.exec()
+        if hasattr(dialog, "state_changed"):
+            try:
+                dialog.state_changed.disconnect(self._handle_designer_state_changed)
+            except Exception:
+                pass
+        if result == QDialog.Accepted:
+            updated_step = dialog.get_step_data()
+            if updated_step:
+                updated_step["type"] = "vision"
+                if not updated_step.get("name"):
+                    updated_step["name"] = updated_step.get("trigger", {}).get("display_name", "Vision Trigger")
+                item.setData(Qt.UserRole, updated_step)
+                # Refresh text to show updated summary
+                number = self.steps_list.row(item) + 1
+                item.setText(self._format_vision_step_text(updated_step, number))
+                self.status_label.setText("✓ Vision step updated")
+                display_name = updated_step.get("trigger", {}).get("display_name", "Vision Trigger")
+                self._report_vision_status("watching", f"Vision updated: {display_name}")
+        else:
+            self.status_label.setText("Vision step unchanged")
+    
+    def _format_vision_step_text(self, step: dict, number: int) -> str:
+        """Format the list text for a vision step"""
+        camera = step.get("camera", {})
+        trigger = step.get("trigger", {})
+        
+        camera_label = camera.get("label", f"Camera {camera.get('index', 0)}")
+        mode = trigger.get("mode", "custom")
+        zones = trigger.get("zones", [])
+        zone_count = len(zones)
+        
+        summary = trigger.get("display_name", "Setup Vision Trigger")
+        metrics = trigger.get("settings", {}).get("metric", "custom")
+        idle_mode = trigger.get("idle_mode", {})
+        if idle_mode.get("enabled"):
+            idle_text = f"Idle {idle_mode.get('interval_seconds', 2.0):.1f}s"
+        else:
+            idle_text = "Live"
+        
+        return (
+            f"{number}. 👁️ Vision: {summary} • {camera_label} • "
+            f"{mode.title()} • {zone_count} zone{'s' if zone_count != 1 else ''} • "
+            f"metric={metrics} • {idle_text}"
+        )
 
+    # ------------------------------------------------------------------
+    # Dashboard integration helpers
+
+    def _handle_designer_state_changed(self, state: str, payload: dict):
+        """Relay live designer updates to dashboard status/log."""
+        detail = payload.get("message")
+        if not detail:
+            if state == "triggered":
+                zones = payload.get("zones", [])
+                zone_part = ", ".join(zones) if zones else "Vision trigger detected"
+                detail = f"Vision Triggered: {zone_part}"
+            elif state == "idle":
+                interval = payload.get("interval_seconds", 0)
+                detail = f"Vision Idle • checking every {interval:.1f}s"
+            else:
+                detail = "Watching for triggers"
+        self._report_vision_status(state, detail, payload)
+
+    def _report_vision_status(self, state: str, detail: str, payload: Optional[dict] = None):
+        dashboard = self._get_dashboard_tab()
+        if dashboard is None:
+            return
+        try:
+            dashboard.record_vision_status(state, detail, payload)
+        except Exception as exc:
+            print(f"[SEQUENCE][WARN] Failed to update vision status: {exc}")
+
+    def _get_dashboard_tab(self):
+        parent = self.parent()
+        while parent:
+            if hasattr(parent, "dashboard_tab"):
+                return getattr(parent, "dashboard_tab")
+            parent = parent.parent()
+        return None
+
+    def highlight_running_step(self, index: int, step: dict = None):
+        """Visually highlight the running step in the list."""
+        if self._highlighted_step_row is not None:
+            self._restore_step_style(self._highlighted_step_row)
+            self._highlighted_step_row = None
+
+        if index < 0 or index >= self.steps_list.count():
+            return
+
+        item = self.steps_list.item(index)
+        if not item:
+            return
+
+        base_hex = item.data(Qt.UserRole + 1)
+        base_color = QColor(base_hex) if base_hex else QColor("#505050")
+        highlight = QColor(base_color).lighter(170)
+        item.setBackground(highlight)
+        item.setForeground(QColor("#000000"))
+        self._highlighted_step_row = index
+
+        step_info = step or item.data(Qt.UserRole) or {}
+        display_name = step_info.get("name") or step_info.get("trigger", {}).get("display_name") or item.text()
+        self.status_label.setText(f"▶ Running: {display_name}")
+
+    def _restore_step_style(self, row: int):
+        item = self.steps_list.item(row)
+        if not item:
+            return
+        base_hex = item.data(Qt.UserRole + 1)
+        base_color = QColor(base_hex) if base_hex else QColor("#505050")
+        item.setBackground(base_color)
+        item.setForeground(QColor("#ffffff"))
+
+    def clear_running_highlight(self):
+        if self._highlighted_step_row is not None:
+            self._restore_step_style(self._highlighted_step_row)
+            self._highlighted_step_row = None
+            if hasattr(self, "_default_status_message"):
+                self.status_label.setText(self._default_status_message)

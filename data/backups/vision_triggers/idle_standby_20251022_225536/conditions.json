@@ -1,0 +1,8 @@
+{
+  "condition_type": "presence",
+  "rules": {
+    "zone": "work_area",
+    "min_objects": 1,
+    "stability_frames": 2
+  }
+}

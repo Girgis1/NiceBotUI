@@ -1,0 +1,20 @@
+{
+  "name": "Idle Standby",
+  "trigger_id": "idle_standby",
+  "type": "presence",
+  "created_at": "2025-10-22T22:38:29.791381+11:00",
+  "modified_at": "2025-10-22T22:56:07.759003+11:00",
+  "description": "Wait for any object to appear in work area. Checks every 5 seconds.",
+  "enabled": false,
+  "check_interval_seconds": 5.0,
+  "active_when": {
+    "robot_state": "home"
+  },
+  "action": {
+    "type": "advance_sequence"
+  },
+  "components": {
+    "zones": "zones.json",
+    "conditions": "conditions.json"
+  }
+}

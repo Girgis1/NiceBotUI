@@ -1,0 +1,65 @@
+{
+  "step_type": "vision",
+  "name": "Detection Zone",
+  "enabled": true,
+  "delay_after": 0.0,
+  "metadata": {
+    "created_at": "2025-10-23T00:36:31.798450+11:00",
+    "modified_at": "2025-10-23T00:36:31.798467+11:00"
+  },
+  "camera": {
+    "index": 0,
+    "label": "Camera 0",
+    "resolution": [
+      640,
+      480
+    ],
+    "source_id": "camera:0"
+  },
+  "trigger": {
+    "display_name": "Detection Zone",
+    "idle_mode": {
+      "enabled": true,
+      "interval_seconds": 5.0
+    },
+    "mode": "presence",
+    "settings": {
+      "hold_time": 0.0,
+      "invert": true,
+      "metric": "edge_density",
+      "sensitivity": 0.6,
+      "threshold": 0.04
+    },
+    "zones": [
+      {
+        "color": "#33FF99",
+        "enabled": true,
+        "name": "Zone 1",
+        "notes": "",
+        "polygon": [
+          [
+            0.5817307692307693,
+            0.2692307692307692
+          ],
+          [
+            0.719551282051282,
+            0.1388888888888889
+          ],
+          [
+            0.8926282051282052,
+            0.42094017094017094
+          ],
+          [
+            0.8365384615384616,
+            0.5042735042735043
+          ],
+          [
+            0.7275641025641025,
+            0.6132478632478633
+          ]
+        ],
+        "zone_id": "zone_7c664c6a"
+      }
+    ]
+  }
+}

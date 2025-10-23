@@ -131,6 +131,8 @@ class SequencesManager:
             for step_dict in steps:
                 step_type = step_dict.get("type", "")
                 step_name = step_dict.get("name", "Unnamed Step")
+                if step_type == "vision" and (not step_name or step_name == "Unnamed Step"):
+                    step_name = step_dict.get("trigger", {}).get("display_name", "Vision Trigger")
                 
                 if step_type == "action":
                     action_name = step_dict.get("name", "")
@@ -148,6 +150,14 @@ class SequencesManager:
                 
                 elif step_type == "home":
                     composite.add_home_step(step_name)
+                
+                elif step_type == "vision":
+                    camera = step_dict.get("camera", {})
+                    trigger = step_dict.get("trigger", {})
+                    trigger.setdefault("idle_mode", {"enabled": False, "interval_seconds": 2.0})
+                    enabled = step_dict.get("enabled", True)
+                    delay_after = step_dict.get("delay_after", 0.0)
+                    composite.add_vision_step(step_name, camera, trigger, enabled, delay_after)
             
             # Save manifest
             success = composite.save_manifest()
@@ -196,6 +206,11 @@ class SequencesManager:
                     simple_step["duration"] = step.get("duration", 1.0)
                 elif step_type == "home":
                     pass  # No extra fields for home
+                elif step_type == "vision":
+                    simple_step["name"] = step.get("name", step.get("trigger", {}).get("display_name", "Vision Trigger"))
+                    simple_step["camera"] = step.get("camera", {})
+                    simple_step["trigger"] = step.get("trigger", {})
+                    simple_step["trigger"].setdefault("idle_mode", {"enabled": False, "interval_seconds": 2.0})
                 
                 simple_steps.append(simple_step)
             
@@ -283,4 +298,3 @@ class SequencesManager:
         except Exception as e:
             print(f"[ERROR] Failed to get sequence info for {name}: {e}")
             return None
-
