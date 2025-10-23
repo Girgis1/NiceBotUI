@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.22] - 2025-10-23
+
+### 🛡️ Vision Safety & Monitoring
+- Introduced the Vision Designer with touch-friendly polygon editing, integrated idle cadence controls, and live detection overlays.
+- Added configurable safety monitoring in the Settings tab including temperature, torque, and hand-detection checks with real-time feedback.
+- Enhanced kiosk dashboard stability, recording workflows, and camera health checks for long-running deployments.
+- Bundled ready-to-run vision triggers, sequences, and documentation (Vision Quickstart/Status/Plan guides) for rapid setup.
+
 ## [0.21] - 2025-10-18
 
 ### 🎨 UI/UX Improvements + Critical Bug Fix
@@ -434,4 +442,3 @@ Hardware testing needed for:
 `MAJOR.MINOR`
 - MAJOR: Breaking changes or major feature releases
 - MINOR: Bug fixes, improvements, new features (backward compatible)
-
