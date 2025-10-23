@@ -7,7 +7,7 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QLineEdit, QScrollArea, QFrame, QSpinBox, QDoubleSpinBox,
-    QTabWidget, QCheckBox
+    QTabWidget, QCheckBox, QComboBox
 )
 from PySide6.QtCore import Qt, Signal
 
@@ -108,6 +108,10 @@ class SettingsTab(QWidget):
         # Control tab
         control_tab = self.create_control_tab()
         self.tab_widget.addTab(control_tab, "🎮 Control")
+
+        # Safety tab
+        safety_tab = self.create_safety_tab()
+        self.tab_widget.addTab(safety_tab, "🛡️ Safety")
         
         main_layout.addWidget(self.tab_widget)
         
@@ -569,21 +573,245 @@ class SettingsTab(QWidget):
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)  # No margins
         layout.setSpacing(6)  # Compact spacing
-        
+
         self.num_episodes_spin = self.add_spinbox_row(layout, "Episodes:", 1, 100, 10)
         self.episode_time_spin = self.add_doublespinbox_row(layout, "Episode Time (s):", 1.0, 300.0, 20.0)
         self.warmup_spin = self.add_doublespinbox_row(layout, "Warmup (s):", 0.0, 60.0, 3.0)
         self.reset_time_spin = self.add_doublespinbox_row(layout, "Reset Time (s):", 0.0, 60.0, 8.0)
-        
+
         # Checkboxes
         self.display_data_check = QCheckBox("Display Data")
         self.display_data_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 8px; }")
         layout.addWidget(self.display_data_check)
-        
+
         self.object_gate_check = QCheckBox("Object Gate")
         self.object_gate_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 8px; }")
         layout.addWidget(self.object_gate_check)
-        
+
+        layout.addStretch()
+        return widget
+
+    def create_safety_tab(self) -> QWidget:
+        """Create safety settings tab"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        # Motor temperature monitoring
+        temp_section = QLabel("🔥 Motor Temperature Safety")
+        temp_section.setStyleSheet("QLabel { color: #4CAF50; font-size: 16px; font-weight: bold; padding: 4px 0; }")
+        layout.addWidget(temp_section)
+
+        self.motor_temp_monitor_check = QCheckBox("Enable Feetech motor temperature monitoring")
+        self.motor_temp_monitor_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px; }")
+        layout.addWidget(self.motor_temp_monitor_check)
+
+        temp_threshold_row = QHBoxLayout()
+        temp_label = QLabel("Overheat threshold (°C):")
+        temp_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 200px; }")
+        temp_threshold_row.addWidget(temp_label)
+
+        self.motor_temp_threshold_spin = QSpinBox()
+        self.motor_temp_threshold_spin.setRange(30, 120)
+        self.motor_temp_threshold_spin.setValue(75)
+        self.motor_temp_threshold_spin.setMinimumHeight(45)
+        self.motor_temp_threshold_spin.setButtonSymbols(QSpinBox.NoButtons)
+        self.motor_temp_threshold_spin.setStyleSheet("""
+            QSpinBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 8px;
+                font-size: 15px;
+            }
+            QSpinBox:focus {
+                border-color: #4CAF50;
+                background-color: #555555;
+            }
+        """)
+        temp_threshold_row.addWidget(self.motor_temp_threshold_spin)
+        temp_threshold_row.addStretch()
+        layout.addLayout(temp_threshold_row)
+
+        temp_interval_row = QHBoxLayout()
+        temp_interval_label = QLabel("Polling interval (s):")
+        temp_interval_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 200px; }")
+        temp_interval_row.addWidget(temp_interval_label)
+
+        self.motor_temp_interval_spin = QDoubleSpinBox()
+        self.motor_temp_interval_spin.setRange(0.5, 30.0)
+        self.motor_temp_interval_spin.setValue(2.0)
+        self.motor_temp_interval_spin.setDecimals(1)
+        self.motor_temp_interval_spin.setSingleStep(0.5)
+        self.motor_temp_interval_spin.setMinimumHeight(45)
+        self.motor_temp_interval_spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
+        self.motor_temp_interval_spin.setStyleSheet("""
+            QDoubleSpinBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 8px;
+                font-size: 15px;
+            }
+            QDoubleSpinBox:focus {
+                border-color: #4CAF50;
+                background-color: #555555;
+            }
+        """)
+        temp_interval_row.addWidget(self.motor_temp_interval_spin)
+        temp_interval_row.addStretch()
+        layout.addLayout(temp_interval_row)
+
+        layout.addSpacing(8)
+
+        # Torque monitoring
+        torque_section = QLabel("🛑 Torque Collision Protection")
+        torque_section.setStyleSheet("QLabel { color: #4CAF50; font-size: 16px; font-weight: bold; padding: 4px 0; }")
+        layout.addWidget(torque_section)
+
+        self.torque_monitor_check = QCheckBox("Kill task and react when torque spikes")
+        self.torque_monitor_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px; }")
+        layout.addWidget(self.torque_monitor_check)
+
+        torque_threshold_row = QHBoxLayout()
+        torque_threshold_label = QLabel("Torque limit (% of rated):")
+        torque_threshold_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 200px; }")
+        torque_threshold_row.addWidget(torque_threshold_label)
+
+        self.torque_threshold_spin = QDoubleSpinBox()
+        self.torque_threshold_spin.setRange(10.0, 200.0)
+        self.torque_threshold_spin.setValue(120.0)
+        self.torque_threshold_spin.setDecimals(1)
+        self.torque_threshold_spin.setSingleStep(5.0)
+        self.torque_threshold_spin.setMinimumHeight(45)
+        self.torque_threshold_spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
+        self.torque_threshold_spin.setStyleSheet("""
+            QDoubleSpinBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 8px;
+                font-size: 15px;
+            }
+            QDoubleSpinBox:focus {
+                border-color: #4CAF50;
+                background-color: #555555;
+            }
+        """)
+        torque_threshold_row.addWidget(self.torque_threshold_spin)
+        torque_threshold_row.addStretch()
+        layout.addLayout(torque_threshold_row)
+
+        self.torque_disable_check = QCheckBox("Automatically drop torque when limit is exceeded")
+        self.torque_disable_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px; }")
+        layout.addWidget(self.torque_disable_check)
+
+        layout.addSpacing(8)
+
+        # Hand detection safety
+        vision_section = QLabel("✋ Vision-Based Co-working")
+        vision_section.setStyleSheet("QLabel { color: #4CAF50; font-size: 16px; font-weight: bold; padding: 4px 0; }")
+        layout.addWidget(vision_section)
+
+        self.hand_detection_check = QCheckBox("Pause robot when a hand enters the workcell")
+        self.hand_detection_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px; }")
+        layout.addWidget(self.hand_detection_check)
+
+        camera_row = QHBoxLayout()
+        camera_label = QLabel("Detection camera:")
+        camera_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 200px; }")
+        camera_row.addWidget(camera_label)
+
+        self.hand_detection_camera_combo = QComboBox()
+        self.hand_detection_camera_combo.addItem("Front Camera", "front")
+        self.hand_detection_camera_combo.addItem("Wrist Camera", "wrist")
+        self.hand_detection_camera_combo.addItem("Both Cameras", "both")
+        self.hand_detection_camera_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 8px;
+                font-size: 15px;
+                min-height: 45px;
+            }
+            QComboBox:focus {
+                border-color: #4CAF50;
+                background-color: #555555;
+            }
+            QComboBox QListView {
+                background-color: #3a3a3a;
+                color: #ffffff;
+                padding: 4px;
+            }
+        """)
+        camera_row.addWidget(self.hand_detection_camera_combo)
+        camera_row.addStretch()
+        layout.addLayout(camera_row)
+
+        model_row = QHBoxLayout()
+        model_label = QLabel("Vision model path or name:")
+        model_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 200px; }")
+        model_row.addWidget(model_label)
+
+        self.hand_detection_model_edit = QLineEdit("nicebot/hand-detection-large")
+        self.hand_detection_model_edit.setMinimumHeight(45)
+        self.hand_detection_model_edit.setStyleSheet("""
+            QLineEdit {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 10px;
+                font-size: 15px;
+            }
+            QLineEdit:focus {
+                border-color: #4CAF50;
+                background-color: #555555;
+            }
+        """)
+        model_row.addWidget(self.hand_detection_model_edit)
+        layout.addLayout(model_row)
+
+        resume_row = QHBoxLayout()
+        resume_label = QLabel("Resume delay after clear (s):")
+        resume_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 200px; }")
+        resume_row.addWidget(resume_label)
+
+        self.hand_resume_delay_spin = QDoubleSpinBox()
+        self.hand_resume_delay_spin.setRange(0.0, 10.0)
+        self.hand_resume_delay_spin.setDecimals(1)
+        self.hand_resume_delay_spin.setSingleStep(0.5)
+        self.hand_resume_delay_spin.setValue(0.5)
+        self.hand_resume_delay_spin.setMinimumHeight(45)
+        self.hand_resume_delay_spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
+        self.hand_resume_delay_spin.setStyleSheet("""
+            QDoubleSpinBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 8px;
+                font-size: 15px;
+            }
+            QDoubleSpinBox:focus {
+                border-color: #4CAF50;
+                background-color: #555555;
+            }
+        """)
+        resume_row.addWidget(self.hand_resume_delay_spin)
+        resume_row.addStretch()
+        layout.addLayout(resume_row)
+
+        self.hand_hold_position_check = QCheckBox("Hold position with torque on while paused")
+        self.hand_hold_position_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 4px; }")
+        layout.addWidget(self.hand_hold_position_check)
+
         layout.addStretch()
         return widget
     
@@ -742,6 +970,25 @@ class SettingsTab(QWidget):
         # UI settings
         ui_cfg = self.config.get("ui", {})
         self.object_gate_check.setChecked(ui_cfg.get("object_gate", False))
+
+        # Safety settings
+        safety_cfg = self.config.get("safety", {})
+        self.motor_temp_monitor_check.setChecked(safety_cfg.get("motor_temp_monitoring_enabled", False))
+        self.motor_temp_threshold_spin.setValue(safety_cfg.get("motor_temp_threshold_c", 75))
+        self.motor_temp_interval_spin.setValue(safety_cfg.get("motor_temp_poll_interval_s", 2.0))
+        self.torque_monitor_check.setChecked(safety_cfg.get("torque_monitoring_enabled", False))
+        self.torque_threshold_spin.setValue(safety_cfg.get("torque_limit_percent", 120.0))
+        self.torque_disable_check.setChecked(safety_cfg.get("torque_auto_disable", True))
+
+        hand_camera = safety_cfg.get("hand_detection_camera", "front")
+        index = self.hand_detection_camera_combo.findData(hand_camera)
+        if index == -1:
+            index = 0
+        self.hand_detection_camera_combo.setCurrentIndex(index)
+        self.hand_detection_check.setChecked(safety_cfg.get("hand_detection_enabled", False))
+        self.hand_detection_model_edit.setText(safety_cfg.get("hand_detection_model", "nicebot/hand-detection-large"))
+        self.hand_resume_delay_spin.setValue(safety_cfg.get("hand_resume_delay_s", 0.5))
+        self.hand_hold_position_check.setChecked(safety_cfg.get("hand_hold_position", True))
     
     def save_settings(self):
         """Save settings to config file"""
@@ -795,6 +1042,21 @@ class SettingsTab(QWidget):
         if "ui" not in self.config:
             self.config["ui"] = {}
         self.config["ui"]["object_gate"] = self.object_gate_check.isChecked()
+
+        # Safety settings
+        if "safety" not in self.config:
+            self.config["safety"] = {}
+        self.config["safety"]["motor_temp_monitoring_enabled"] = self.motor_temp_monitor_check.isChecked()
+        self.config["safety"]["motor_temp_threshold_c"] = self.motor_temp_threshold_spin.value()
+        self.config["safety"]["motor_temp_poll_interval_s"] = self.motor_temp_interval_spin.value()
+        self.config["safety"]["torque_monitoring_enabled"] = self.torque_monitor_check.isChecked()
+        self.config["safety"]["torque_limit_percent"] = self.torque_threshold_spin.value()
+        self.config["safety"]["torque_auto_disable"] = self.torque_disable_check.isChecked()
+        self.config["safety"]["hand_detection_enabled"] = self.hand_detection_check.isChecked()
+        self.config["safety"]["hand_detection_camera"] = self.hand_detection_camera_combo.currentData()
+        self.config["safety"]["hand_detection_model"] = self.hand_detection_model_edit.text()
+        self.config["safety"]["hand_resume_delay_s"] = self.hand_resume_delay_spin.value()
+        self.config["safety"]["hand_hold_position"] = self.hand_hold_position_check.isChecked()
         
         # Write to file
         try:
@@ -835,6 +1097,18 @@ class SettingsTab(QWidget):
         self.reset_time_spin.setValue(8.0)
         self.display_data_check.setChecked(True)
         self.object_gate_check.setChecked(False)
+
+        self.motor_temp_monitor_check.setChecked(False)
+        self.motor_temp_threshold_spin.setValue(75)
+        self.motor_temp_interval_spin.setValue(2.0)
+        self.torque_monitor_check.setChecked(False)
+        self.torque_threshold_spin.setValue(120.0)
+        self.torque_disable_check.setChecked(True)
+        self.hand_detection_check.setChecked(False)
+        self.hand_detection_camera_combo.setCurrentIndex(0)
+        self.hand_detection_model_edit.setText("nicebot/hand-detection-large")
+        self.hand_resume_delay_spin.setValue(0.5)
+        self.hand_hold_position_check.setChecked(True)
         
         self.status_label.setText("⚠️ Defaults loaded. Click Save to apply.")
         self.status_label.setStyleSheet("QLabel { color: #FF9800; font-size: 15px; padding: 8px; }")
