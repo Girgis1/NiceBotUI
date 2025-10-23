@@ -1,32 +1,22 @@
-"""
-IPC - Inter-Process Communication via file-based state exchange
-
-Simple, reliable communication between vision daemon and sequencer using JSON files.
-
-Files:
-- robot_state.json: Sequencer → Daemon (robot state, accepting triggers)
-- vision_events.json: Daemon → Sequencer (detection events, trigger results)
-"""
+"""IPC helpers for sharing state between the sequencer and vision daemon."""
 
 import json
 import time
 from pathlib import Path
-from typing import Optional, Dict
-from datetime import datetime
-import pytz
+from typing import Dict, Optional
 
-
-TIMEZONE = pytz.timezone('Australia/Sydney')
+from .time_utils import get_timezone, now_iso
 
 
 class IPCManager:
     """Manage IPC state files for vision daemon communication"""
-    
-    def __init__(self, runtime_dir: Path):
+
+    def __init__(self, runtime_dir: Path, timezone_name: Optional[str] = None):
         self.runtime_dir = runtime_dir
         self.robot_state_file = runtime_dir / "robot_state.json"
         self.vision_events_file = runtime_dir / "vision_events.json"
         self.daemon_pid_file = runtime_dir / "vision_daemon.pid"
+        self.timezone = get_timezone(timezone_name)
         
         # Ensure runtime directory exists
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -55,7 +45,8 @@ class IPCManager:
                 "moving": moving,
                 "current_sequence": current_sequence,
                 "accepting_triggers": accepting_triggers,
-                "timestamp": time.time()
+                "timestamp": time.time(),
+                "timestamp_iso": now_iso(self.timezone),
             }
             
             # Atomic write (write to temp, then rename)
@@ -85,7 +76,8 @@ class IPCManager:
                     "moving": False,
                     "current_sequence": None,
                     "accepting_triggers": False,
-                    "timestamp": time.time()
+                    "timestamp": time.time(),
+                    "timestamp_iso": now_iso(self.timezone),
                 }
             
             with open(self.robot_state_file, 'r') as f:
@@ -116,9 +108,10 @@ class IPCManager:
         try:
             data = {
                 "last_check": time.time(),
+                "last_check_iso": now_iso(self.timezone),
                 "status": status,
                 "trigger_id": trigger_id,
-                "event": event
+                "event": event,
             }
             
             # Atomic write

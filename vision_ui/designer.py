@@ -7,12 +7,13 @@ touch-friendly polygon editing and live preview feedback.
 
 from __future__ import annotations
 
-import os
 import sys
 import uuid
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
+
+import platform
 
 import cv2
 import numpy as np
@@ -151,11 +152,34 @@ class CameraStream:
     def list_sources(self, max_devices: int = 5) -> List[CameraSource]:
         sources: List[CameraSource] = []
 
+        system = platform.system()
+
         for idx in range(max_devices):
             source_id = f"camera:{idx}"
-            device_path = f"/dev/video{idx}"
-            available = os.path.exists(device_path)
-            label = f"Camera {idx}" if available else f"Camera {idx} (offline)"
+            label = f"Camera {idx}"
+            available = False
+            capture = None
+
+            try:
+                if system == "Windows":
+                    capture = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+                    if not capture or not capture.isOpened():
+                        if capture:
+                            capture.release()
+                        capture = cv2.VideoCapture(idx)
+                else:
+                    capture = cv2.VideoCapture(idx)
+
+                available = bool(capture and capture.isOpened())
+            except Exception:
+                available = False
+            finally:
+                if capture:
+                    capture.release()
+
+            if not available:
+                label = f"{label} (offline)"
+
             sources.append(CameraSource(source_id, label, "camera", idx, available))
 
         # Add demo virtual feed
