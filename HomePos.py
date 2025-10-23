@@ -6,6 +6,7 @@ Real Feetech motor control implementation.
 
 import argparse
 import json
+import os
 import time
 from pathlib import Path
 
@@ -116,6 +117,17 @@ def go_to_rest(disable_torque=None):
     rest_config = cfg["rest_position"]
     positions = rest_config["positions"]
     velocity = rest_config.get("velocity", 1200)
+    control_cfg = cfg.get("control", {})
+    speed_multiplier = control_cfg.get("speed_multiplier", 1.0)
+    env_multiplier = os.environ.get("LEROBOT_SPEED_MULTIPLIER")
+    if env_multiplier:
+        try:
+            speed_multiplier = float(env_multiplier)
+        except ValueError:
+            pass
+    if not 0.1 <= speed_multiplier <= 1.2:
+        speed_multiplier = 1.0
+    velocity = int(max(1, min(4000, velocity * speed_multiplier)))
     
     # Allow override of disable_torque setting (important for emergency stops)
     if disable_torque is None:
@@ -124,7 +136,7 @@ def go_to_rest(disable_torque=None):
     print(f"[HomePos] Returning Home:")
     print(f"  Port: {port}")
     print(f"  Positions: {positions}")
-    print(f"  Velocity: {velocity}")
+    print(f"  Velocity: {velocity} (scale {speed_multiplier:.2f}×)")
     
     try:
         # Connect to motors

@@ -37,6 +37,10 @@ class MotorController:
         self.port = config["robot"]["port"]
         self.motor_names = MOTOR_NAMES
         self.bus = None
+        control_cfg = config.get("control", {})
+        self.speed_multiplier = control_cfg.get("speed_multiplier", 1.0)
+        if not 0.1 <= self.speed_multiplier <= 1.2:
+            self.speed_multiplier = 1.0
         
         # Load position tolerance from config if available
         if "position_tolerance" in config.get("robot", {}):
@@ -195,12 +199,15 @@ class MotorController:
             # Enable torque (always keep on for smooth sequences)
             for name in self.motor_names:
                 self.bus.write("Torque_Enable", name, 1, normalize=False)
-            
-            # Set velocity and acceleration
-            acceleration = min(int(velocity / 4000 * 255), 255)
+
+            effective_velocity = max(1, min(4000, int(velocity * self.speed_multiplier)))
+            effective_acceleration = min(int(effective_velocity / 4000 * 255), 255)
+
             for name in self.motor_names:
-                self.bus.write("Goal_Velocity", name, velocity, normalize=False)
-                self.bus.write("Acceleration", name, acceleration, normalize=False)
+                self.bus.write("Goal_Velocity", name, effective_velocity, normalize=False)
+                self.bus.write("Acceleration", name, effective_acceleration, normalize=False)
+            print(f"[MOTOR] Velocity scale applied: base={velocity}, multiplier={self.speed_multiplier:.2f}, "
+                  f"effective={effective_velocity}, acceleration={effective_acceleration}")
             
             # Set goal positions
             for idx, name in enumerate(self.motor_names):
@@ -221,10 +228,10 @@ class MotorController:
                 # 2. Calculate movement time with proper acceleration consideration
                 # For STS3215: position units are 0-4095, velocity in units/sec
                 # Time = distance / velocity, but add acceleration time
-                if velocity > 0:
-                    base_time = max_distance / velocity
+                if effective_velocity > 0:
+                    base_time = max_distance / effective_velocity
                     # Add acceleration phase (rough estimate: 0.3-0.5s for acc + dec)
-                    accel_time = 0.4 * (1.0 - acceleration / 255.0)  # Lower accel = more time
+                    accel_time = 0.4 * (1.0 - effective_acceleration / 255.0)  # Lower accel = more time
                     total_time = base_time + accel_time
                 else:
                     total_time = 3.0  # Fallback
@@ -261,4 +268,3 @@ class MotorController:
                 self.bus.write("Torque_Enable", name, 0, normalize=False)
         except:
             pass
-
