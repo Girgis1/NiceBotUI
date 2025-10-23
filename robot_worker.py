@@ -10,8 +10,12 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
+from typing import Optional
 from PySide6.QtCore import QThread, Signal
+
+from safety import HandSafetyMonitor, build_camera_sources
 
 
 class RobotWorker(QThread):
@@ -31,11 +35,14 @@ class RobotWorker(QThread):
         self.server_proc = None  # Policy server process
         self.client_proc = None  # Robot client process
         self._stop_requested = False
-        
+        self._safety_monitor: Optional[HandSafetyMonitor] = None
+        self._safety_paused = False
+        self._safety_lock = threading.Lock()
+
     def run(self):
         """Main worker thread execution - async inference (server + client)"""
         self._stop_requested = False
-        
+
         try:
             # Step 1: Start policy server
             self.log_message.emit('info', "Starting policy server...")
@@ -74,12 +81,17 @@ class RobotWorker(QThread):
 
             if self.client_proc.poll() is not None:
                 raise RuntimeError("Robot client failed to start")
-            
+
             self.connection_changed.emit(True)
             self.status_update.emit("Robot running...")
-            
+
+            self._start_hand_safety_monitor()
+
             # Monitor client process output
-            self._monitor_process()
+            try:
+                self._monitor_process()
+            finally:
+                self._stop_hand_safety_monitor()
             
         except FileNotFoundError as e:
             self.error_occurred.emit('lerobot_not_found', {'error': str(e)})
@@ -262,6 +274,99 @@ class RobotWorker(QThread):
                     self.client_proc.stdout.close()
                 except Exception:
                     pass
+
+    # ======================= SAFETY HELPERS ========================
+    def _start_hand_safety_monitor(self) -> None:
+        safety_cfg = self.config.get("safety", {}) if isinstance(self.config, dict) else {}
+        enabled = bool(safety_cfg.get("hand_detection_enabled", False))
+        test_mode = bool(safety_cfg.get("hand_detection_test_mode", False))
+
+        if not enabled and not test_mode:
+            self._safety_monitor = None
+            self._safety_paused = False
+            return
+
+        sources = build_camera_sources(self.config, safety_cfg.get("hand_detection_camera", "front"))
+        if not sources:
+            self.log_message.emit('warning', "[SAFETY] Hand detection enabled but no camera sources found")
+            self._safety_monitor = None
+            return
+
+        resume_delay = float(safety_cfg.get("hand_resume_delay_s", 0.5))
+        model_name = safety_cfg.get("hand_detection_model", "mediapipe-hands")
+
+        self._safety_monitor = HandSafetyMonitor(
+            sources,
+            model_name=model_name,
+            resume_delay=resume_delay,
+            detection_interval=0.12,
+            test_mode=test_mode and not enabled,
+            log_func=lambda level, message: self.log_message.emit(level, message),
+        )
+
+        if enabled and not test_mode:
+            self._safety_monitor.set_callbacks(self._on_hand_detected, self._on_hand_cleared, None)
+        else:
+            self._safety_monitor.set_callbacks(None, None, None)
+
+        self._safety_paused = False
+        self._safety_monitor.start()
+
+        if test_mode:
+            self.log_message.emit('info', "[SAFETY] Test mode active – monitoring without pausing the arm")
+
+    def _stop_hand_safety_monitor(self) -> None:
+        if self._safety_monitor:
+            try:
+                self._safety_monitor.stop()
+            except Exception:
+                pass
+        self._safety_monitor = None
+        self._safety_paused = False
+
+    def _on_hand_detected(self, camera_label: str, confidence: float) -> None:
+        with self._safety_lock:
+            if self._safety_paused:
+                return
+            self._safety_paused = True
+
+        self.status_update.emit("Safety pause: hand detected")
+        self.log_message.emit(
+            'warning', f"[SAFETY] Hand detected on {camera_label} (confidence {confidence:.2f}) – pausing robot"
+        )
+
+        if not hasattr(signal, "SIGSTOP"):
+            self.log_message.emit('warning', "[SAFETY] SIGSTOP unavailable on this platform; cannot pause process")
+            return
+
+        try:
+            if self.client_proc and self.client_proc.poll() is None:
+                self.client_proc.send_signal(signal.SIGSTOP)
+            if self.server_proc and self.server_proc.poll() is None:
+                self.server_proc.send_signal(signal.SIGSTOP)
+        except Exception as exc:
+            self.log_message.emit('warning', f"[SAFETY] Failed to pause robot process: {exc}")
+
+    def _on_hand_cleared(self) -> None:
+        with self._safety_lock:
+            if not self._safety_paused:
+                return
+            self._safety_paused = False
+
+        self.status_update.emit("Resuming after hand clear")
+        self.log_message.emit('info', "[SAFETY] Workspace clear – resuming robot")
+
+        if not hasattr(signal, "SIGCONT"):
+            self.log_message.emit('warning', "[SAFETY] SIGCONT unavailable on this platform; restart robot manually")
+            return
+
+        try:
+            if self.server_proc and self.server_proc.poll() is None:
+                self.server_proc.send_signal(signal.SIGCONT)
+            if self.client_proc and self.client_proc.poll() is None:
+                self.client_proc.send_signal(signal.SIGCONT)
+        except Exception as exc:
+            self.log_message.emit('warning', f"[SAFETY] Failed to resume robot process: {exc}")
             
     def _parse_error(self, stderr_text, return_code):
         """Parse stderr to determine error type"""
@@ -317,6 +422,7 @@ class RobotWorker(QThread):
         
     def _cleanup_processes(self):
         """Stop both server and client processes - FAST for emergency stops"""
+        self._stop_hand_safety_monitor()
         # Stop client first (FAST - we need the serial port released ASAP)
         if self.client_proc:
             try:
