@@ -108,6 +108,10 @@ class SettingsTab(QWidget):
         # Control tab
         control_tab = self.create_control_tab()
         self.tab_widget.addTab(control_tab, "🎮 Control")
+
+        # Safety tab
+        safety_tab = self.create_safety_tab()
+        self.tab_widget.addTab(safety_tab, "🛡️ Safety")
         
         main_layout.addWidget(self.tab_widget)
         
@@ -569,21 +573,175 @@ class SettingsTab(QWidget):
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)  # No margins
         layout.setSpacing(6)  # Compact spacing
-        
+
         self.num_episodes_spin = self.add_spinbox_row(layout, "Episodes:", 1, 100, 10)
         self.episode_time_spin = self.add_doublespinbox_row(layout, "Episode Time (s):", 1.0, 300.0, 20.0)
         self.warmup_spin = self.add_doublespinbox_row(layout, "Warmup (s):", 0.0, 60.0, 3.0)
         self.reset_time_spin = self.add_doublespinbox_row(layout, "Reset Time (s):", 0.0, 60.0, 8.0)
-        
+
         # Checkboxes
         self.display_data_check = QCheckBox("Display Data")
         self.display_data_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 8px; }")
         layout.addWidget(self.display_data_check)
-        
+
         self.object_gate_check = QCheckBox("Object Gate")
         self.object_gate_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 8px; }")
         layout.addWidget(self.object_gate_check)
-        
+
+        layout.addStretch()
+        return widget
+
+    def create_safety_tab(self) -> QWidget:
+        """Create safety systems tab"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        # ===== Motor temperature monitoring =====
+        temp_label = QLabel("🌡️ Feetech Motor Temperature")
+        temp_label.setStyleSheet("color: #4CAF50; font-size: 14px; font-weight: bold;")
+        layout.addWidget(temp_label)
+
+        self.temp_monitor_check = QCheckBox("Enable automatic temperature monitoring and overheat shutdown")
+        self.temp_monitor_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 6px; }")
+        layout.addWidget(self.temp_monitor_check)
+
+        self.temp_threshold_spin = self.add_spinbox_row(layout, "Max Temperature (°C):", 40, 120, 75)
+        self.temp_cooldown_spin = self.add_doublespinbox_row(layout, "Cooldown Before Resume (s):", 0.0, 120.0, 30.0)
+        self.temp_cooldown_spin.setDecimals(1)
+        self.temp_cooldown_spin.setSingleStep(5.0)
+
+        temp_button_row = QHBoxLayout()
+        self.temp_test_btn = QPushButton("Run Temperature Self-Test")
+        self.temp_test_btn.setStyleSheet(self.get_button_style("#FF7043", "#F4511E"))
+        self.temp_test_btn.setMinimumHeight(45)
+        self.temp_test_btn.clicked.connect(self.run_temperature_self_test)
+        temp_button_row.addWidget(self.temp_test_btn)
+        temp_button_row.addStretch()
+        layout.addLayout(temp_button_row)
+
+        temp_separator = QFrame()
+        temp_separator.setFrameShape(QFrame.HLine)
+        temp_separator.setFrameShadow(QFrame.Sunken)
+        temp_separator.setStyleSheet("color: #505050;")
+        layout.addWidget(temp_separator)
+
+        # ===== Torque safety =====
+        torque_label = QLabel("🛑 High Torque Collision Protection")
+        torque_label.setStyleSheet("color: #4CAF50; font-size: 14px; font-weight: bold;")
+        layout.addWidget(torque_label)
+
+        self.torque_monitor_check = QCheckBox("Abort task and disable torque when collision threshold is exceeded")
+        self.torque_monitor_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 6px; }")
+        layout.addWidget(self.torque_monitor_check)
+
+        self.torque_limit_spin = self.add_spinbox_row(layout, "Torque Limit (% of rated):", 10, 200, 130)
+        self.torque_duration_spin = self.add_doublespinbox_row(layout, "Trip Delay (ms):", 0.0, 500.0, 50.0)
+        self.torque_duration_spin.setDecimals(1)
+        self.torque_duration_spin.setSingleStep(10.0)
+
+        torque_button_row = QHBoxLayout()
+        self.torque_test_btn = QPushButton("Simulate Collision Stop")
+        self.torque_test_btn.setStyleSheet(self.get_button_style("#E53935", "#C62828"))
+        self.torque_test_btn.setMinimumHeight(45)
+        self.torque_test_btn.clicked.connect(self.run_torque_trip_test)
+        torque_button_row.addWidget(self.torque_test_btn)
+        torque_button_row.addStretch()
+        layout.addLayout(torque_button_row)
+
+        torque_separator = QFrame()
+        torque_separator.setFrameShape(QFrame.HLine)
+        torque_separator.setFrameShadow(QFrame.Sunken)
+        torque_separator.setStyleSheet("color: #505050;")
+        layout.addWidget(torque_separator)
+
+        # ===== Vision-based hand detection =====
+        vision_label = QLabel("✋ Hand Detection Vision Pause")
+        vision_label.setStyleSheet("color: #4CAF50; font-size: 14px; font-weight: bold;")
+        layout.addWidget(vision_label)
+
+        self.hand_detection_check = QCheckBox("Pause motion when hands are detected in the workcell")
+        self.hand_detection_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 6px; }")
+        layout.addWidget(self.hand_detection_check)
+
+        vision_source_row = QHBoxLayout()
+        source_label = QLabel("Camera Source:")
+        source_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 160px; }")
+        vision_source_row.addWidget(source_label)
+
+        self.vision_camera_edit = QLineEdit("front")
+        self.vision_camera_edit.setMinimumHeight(50)
+        self.vision_camera_edit.setStyleSheet("""
+            QLineEdit {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 10px;
+                font-size: 15px;
+            }
+            QLineEdit:focus {
+                border-color: #4CAF50;
+                background-color: #555555;
+            }
+        """)
+        vision_source_row.addWidget(self.vision_camera_edit)
+        layout.addLayout(vision_source_row)
+
+        model_row = QHBoxLayout()
+        model_label = QLabel("Vision Model Path:")
+        model_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 160px; }")
+        model_row.addWidget(model_label)
+
+        self.hand_model_edit = QLineEdit("models/robust_hand_detector.onnx")
+        self.hand_model_edit.setMinimumHeight(50)
+        self.hand_model_edit.setStyleSheet("""
+            QLineEdit {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 10px;
+                font-size: 15px;
+            }
+            QLineEdit:focus {
+                border-color: #4CAF50;
+                background-color: #555555;
+            }
+        """)
+        model_row.addWidget(self.hand_model_edit)
+
+        self.load_model_btn = QPushButton("Reload Model")
+        self.load_model_btn.setMinimumHeight(45)
+        self.load_model_btn.setStyleSheet(self.get_button_style("#42A5F5", "#1E88E5"))
+        self.load_model_btn.clicked.connect(self.reload_hand_detection_model)
+        model_row.addWidget(self.load_model_btn)
+        layout.addLayout(model_row)
+
+        self.hand_detection_threshold_spin = self.add_doublespinbox_row(layout, "Detection Confidence:", 0.10, 1.00, 0.45)
+        self.hand_detection_threshold_spin.setDecimals(2)
+        self.hand_detection_threshold_spin.setSingleStep(0.05)
+        self.hand_resume_delay_spin = self.add_doublespinbox_row(layout, "Resume Delay After Clear (s):", 0.0, 10.0, 1.0)
+        self.hand_resume_delay_spin.setDecimals(1)
+        self.hand_resume_delay_spin.setSingleStep(0.5)
+
+        vision_button_row = QHBoxLayout()
+        self.hand_detection_test_btn = QPushButton("Run Vision Safety Test")
+        self.hand_detection_test_btn.setMinimumHeight(45)
+        self.hand_detection_test_btn.setStyleSheet(self.get_button_style("#66BB6A", "#388E3C"))
+        self.hand_detection_test_btn.clicked.connect(self.run_hand_detection_test)
+        vision_button_row.addWidget(self.hand_detection_test_btn)
+        vision_button_row.addStretch()
+        layout.addLayout(vision_button_row)
+
+        info_label = QLabel(
+            "Tip: use the vision branch for baseline wiring, then configure a higher accuracy model here."
+        )
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("QLabel { color: #b0b0b0; font-size: 13px; padding: 4px; }")
+        layout.addWidget(info_label)
+
         layout.addStretch()
         return widget
     
@@ -742,6 +900,26 @@ class SettingsTab(QWidget):
         # UI settings
         ui_cfg = self.config.get("ui", {})
         self.object_gate_check.setChecked(ui_cfg.get("object_gate", False))
+
+        # Safety settings
+        safety_cfg = self.config.get("safety", {})
+
+        temp_cfg = safety_cfg.get("temperature_monitoring", {})
+        self.temp_monitor_check.setChecked(temp_cfg.get("enabled", True))
+        self.temp_threshold_spin.setValue(temp_cfg.get("max_celsius", 75))
+        self.temp_cooldown_spin.setValue(float(temp_cfg.get("cooldown_seconds", 30.0)))
+
+        torque_cfg = safety_cfg.get("torque_collision", {})
+        self.torque_monitor_check.setChecked(torque_cfg.get("enabled", True))
+        self.torque_limit_spin.setValue(torque_cfg.get("limit_percent", 130))
+        self.torque_duration_spin.setValue(float(torque_cfg.get("delay_ms", 50.0)))
+
+        vision_cfg = safety_cfg.get("vision_hand_detection", {})
+        self.hand_detection_check.setChecked(vision_cfg.get("enabled", True))
+        self.vision_camera_edit.setText(vision_cfg.get("camera_source", "front"))
+        self.hand_model_edit.setText(vision_cfg.get("model_path", "models/robust_hand_detector.onnx"))
+        self.hand_detection_threshold_spin.setValue(float(vision_cfg.get("confidence", 0.45)))
+        self.hand_resume_delay_spin.setValue(float(vision_cfg.get("resume_delay", 1.0)))
     
     def save_settings(self):
         """Save settings to config file"""
@@ -795,7 +973,27 @@ class SettingsTab(QWidget):
         if "ui" not in self.config:
             self.config["ui"] = {}
         self.config["ui"]["object_gate"] = self.object_gate_check.isChecked()
-        
+
+        # Safety settings
+        safety_cfg = self.config.setdefault("safety", {})
+
+        temp_cfg = safety_cfg.setdefault("temperature_monitoring", {})
+        temp_cfg["enabled"] = self.temp_monitor_check.isChecked()
+        temp_cfg["max_celsius"] = self.temp_threshold_spin.value()
+        temp_cfg["cooldown_seconds"] = self.temp_cooldown_spin.value()
+
+        torque_cfg = safety_cfg.setdefault("torque_collision", {})
+        torque_cfg["enabled"] = self.torque_monitor_check.isChecked()
+        torque_cfg["limit_percent"] = self.torque_limit_spin.value()
+        torque_cfg["delay_ms"] = self.torque_duration_spin.value()
+
+        vision_cfg = safety_cfg.setdefault("vision_hand_detection", {})
+        vision_cfg["enabled"] = self.hand_detection_check.isChecked()
+        vision_cfg["camera_source"] = self.vision_camera_edit.text()
+        vision_cfg["model_path"] = self.hand_model_edit.text()
+        vision_cfg["confidence"] = self.hand_detection_threshold_spin.value()
+        vision_cfg["resume_delay"] = self.hand_resume_delay_spin.value()
+
         # Write to file
         try:
             with open(self.config_path, 'w') as f:
@@ -835,10 +1033,144 @@ class SettingsTab(QWidget):
         self.reset_time_spin.setValue(8.0)
         self.display_data_check.setChecked(True)
         self.object_gate_check.setChecked(False)
-        
+
+        self.temp_monitor_check.setChecked(True)
+        self.temp_threshold_spin.setValue(75)
+        self.temp_cooldown_spin.setValue(30.0)
+        self.torque_monitor_check.setChecked(True)
+        self.torque_limit_spin.setValue(130)
+        self.torque_duration_spin.setValue(50.0)
+        self.hand_detection_check.setChecked(True)
+        self.vision_camera_edit.setText("front")
+        self.hand_model_edit.setText("models/robust_hand_detector.onnx")
+        self.hand_detection_threshold_spin.setValue(0.45)
+        self.hand_resume_delay_spin.setValue(1.0)
+
         self.status_label.setText("⚠️ Defaults loaded. Click Save to apply.")
         self.status_label.setStyleSheet("QLabel { color: #FF9800; font-size: 15px; padding: 8px; }")
-    
+
+    def run_temperature_self_test(self):
+        """Perform a self test of the configured temperature monitoring"""
+        if not self.temp_monitor_check.isChecked():
+            self.status_label.setText("ℹ️ Enable temperature monitoring to run the self-test.")
+            self.status_label.setStyleSheet("QLabel { color: #FFB300; font-size: 15px; padding: 8px; }")
+            return
+
+        threshold = self.temp_threshold_spin.value()
+        cooldown = self.temp_cooldown_spin.value()
+
+        if self.device_manager and hasattr(self.device_manager, "run_temperature_self_test"):
+            try:
+                result = self.device_manager.run_temperature_self_test(
+                    max_celsius=threshold,
+                    cooldown_seconds=cooldown
+                )
+                status_text = "✓ Temperature self-test passed" if result else "⚠️ Temperature self-test reported an issue"
+                status_color = "#4CAF50" if result else "#FF9800"
+                self.status_label.setText(status_text)
+                self.status_label.setStyleSheet(f"QLabel {{ color: {status_color}; font-size: 15px; padding: 8px; }}")
+                return
+            except Exception as exc:
+                self.status_label.setText(f"❌ Temperature self-test failed: {exc}")
+                self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+                return
+
+        self.status_label.setText(
+            f"✓ Monitoring ready — threshold {threshold}°C with {cooldown:.1f}s cooldown."
+        )
+        self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+
+    def run_torque_trip_test(self):
+        """Simulate a torque trip to verify collision settings"""
+        if not self.torque_monitor_check.isChecked():
+            self.status_label.setText("ℹ️ Enable torque protection to run the simulation.")
+            self.status_label.setStyleSheet("QLabel { color: #FFB300; font-size: 15px; padding: 8px; }")
+            return
+
+        limit = self.torque_limit_spin.value()
+        delay = self.torque_duration_spin.value()
+
+        if self.device_manager and hasattr(self.device_manager, "simulate_torque_collision"):
+            try:
+                trip_ok = self.device_manager.simulate_torque_collision(limit_percent=limit, delay_ms=delay)
+                status_text = "✓ Torque trip simulation completed" if trip_ok else "⚠️ Torque trip simulation reported an issue"
+                status_color = "#4CAF50" if trip_ok else "#FF9800"
+                self.status_label.setText(status_text)
+                self.status_label.setStyleSheet(f"QLabel {{ color: {status_color}; font-size: 15px; padding: 8px; }}")
+                return
+            except Exception as exc:
+                self.status_label.setText(f"❌ Torque trip simulation failed: {exc}")
+                self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+                return
+
+        self.status_label.setText(
+            f"✓ Collision stop armed — {limit}% limit with {delay:.1f} ms delay."
+        )
+        self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+
+    def reload_hand_detection_model(self):
+        """Validate and reload the configured hand detection model"""
+        model_path = Path(self.hand_model_edit.text()).expanduser()
+
+        if not model_path.exists():
+            self.status_label.setText(f"❌ Model not found: {model_path}")
+            self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+            return
+
+        if self.device_manager and hasattr(self.device_manager, "load_hand_detection_model"):
+            try:
+                self.device_manager.load_hand_detection_model(model_path)
+                self.status_label.setText(f"✓ Loaded hand detection model: {model_path}")
+                self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+                return
+            except Exception as exc:
+                self.status_label.setText(f"❌ Failed to load model: {exc}")
+                self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+                return
+
+        self.status_label.setText(f"✓ Model path verified: {model_path}")
+        self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+
+    def run_hand_detection_test(self):
+        """Run a dry-run of the hand detection safety routine"""
+        if not self.hand_detection_check.isChecked():
+            self.status_label.setText("ℹ️ Enable hand detection to perform the test.")
+            self.status_label.setStyleSheet("QLabel { color: #FFB300; font-size: 15px; padding: 8px; }")
+            return
+
+        model_path = Path(self.hand_model_edit.text()).expanduser()
+        confidence = self.hand_detection_threshold_spin.value()
+        resume_delay = self.hand_resume_delay_spin.value()
+        camera_source = self.vision_camera_edit.text()
+
+        if self.device_manager and hasattr(self.device_manager, "run_hand_detection_test"):
+            try:
+                test_ok = self.device_manager.run_hand_detection_test(
+                    model_path=model_path,
+                    confidence_threshold=confidence,
+                    resume_delay=resume_delay,
+                    camera_source=camera_source
+                )
+                status_text = "✓ Hand detection safety test passed" if test_ok else "⚠️ Hand detection reported an issue"
+                status_color = "#4CAF50" if test_ok else "#FF9800"
+                self.status_label.setText(status_text)
+                self.status_label.setStyleSheet(f"QLabel {{ color: {status_color}; font-size: 15px; padding: 8px; }}")
+                return
+            except Exception as exc:
+                self.status_label.setText(f"❌ Vision safety test failed: {exc}")
+                self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+                return
+
+        if not model_path.exists():
+            self.status_label.setText(f"⚠️ Hand detection test pending — model missing at {model_path}")
+            self.status_label.setStyleSheet("QLabel { color: #FF9800; font-size: 15px; padding: 8px; }")
+            return
+
+        self.status_label.setText(
+            f"✓ Vision guard ready on '{camera_source}' with {confidence:.2f} confidence and {resume_delay:.1f}s resume delay."
+        )
+        self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+
     # ========== REST POSITION METHODS ==========
     
     def set_rest_position(self):
