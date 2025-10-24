@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Tuple, Union
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QLineEdit, QScrollArea, QFrame, QSpinBox, QDoubleSpinBox,
-    QTabWidget, QCheckBox, QComboBox, QDialog
+    QTabWidget, QCheckBox, QComboBox, QDialog, QSizePolicy
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QImage, QPixmap
@@ -30,6 +30,7 @@ except ImportError:  # pragma: no cover - optional dependency
     YOLO = None
 
 from utils.camera_hub import CameraStreamHub
+from ik_tools import IKToolDialog
 
 
 class HandDetectionTestDialog(QDialog):
@@ -404,6 +405,8 @@ class SettingsTab(QWidget):
         
         # Tabbed interface
         self.tab_widget = QTabWidget()
+        self.tab_widget.setDocumentMode(True)
+        self.tab_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.tab_widget.setStyleSheet("""
             QTabWidget::pane {
                 border: 2px solid #606060;
@@ -418,10 +421,10 @@ class SettingsTab(QWidget):
                 border-bottom: none;
                 border-top-left-radius: 6px;
                 border-top-right-radius: 6px;
-                padding: 12px 20px;
-                font-size: 15px;
+                padding: 10px 18px;
+                font-size: 14px;
                 font-weight: bold;
-                min-width: 120px;
+                min-width: 110px;
             }
             QTabBar::tab:selected {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -434,25 +437,26 @@ class SettingsTab(QWidget):
                                            stop:0 #606060, stop:1 #555555);
             }
         """)
+        self.tab_widget.tabBar().setCursor(Qt.PointingHandCursor)
         
         # Robot tab
-        robot_tab = self.create_robot_tab()
+        robot_tab = self.wrap_tab(self.create_robot_tab())
         self.tab_widget.addTab(robot_tab, "🤖 Robot")
         
         # Camera tab
-        camera_tab = self.create_camera_tab()
+        camera_tab = self.wrap_tab(self.create_camera_tab())
         self.tab_widget.addTab(camera_tab, "📷 Camera")
         
         # Policy tab
-        policy_tab = self.create_policy_tab()
+        policy_tab = self.wrap_tab(self.create_policy_tab())
         self.tab_widget.addTab(policy_tab, "🧠 Policy")
         
         # Control tab
-        control_tab = self.create_control_tab()
+        control_tab = self.wrap_tab(self.create_control_tab())
         self.tab_widget.addTab(control_tab, "🎮 Control")
 
         # Safety tab
-        safety_tab = self.create_safety_tab()
+        safety_tab = self.wrap_tab(self.create_safety_tab())
         self.tab_widget.addTab(safety_tab, "🛡️ Safety")
         
         main_layout.addWidget(self.tab_widget)
@@ -462,13 +466,13 @@ class SettingsTab(QWidget):
         button_layout.addStretch()
         
         self.reset_btn = QPushButton("🔄 Reset")
-        self.reset_btn.setMinimumHeight(55)
+        self.reset_btn.setMinimumHeight(48)
         self.reset_btn.setStyleSheet(self.get_button_style("#909090", "#707070"))
         self.reset_btn.clicked.connect(self.reset_defaults)
         button_layout.addWidget(self.reset_btn)
         
         self.save_btn = QPushButton("💾 Save")
-        self.save_btn.setMinimumHeight(55)
+        self.save_btn.setMinimumHeight(48)
         self.save_btn.setStyleSheet(self.get_button_style("#4CAF50", "#388E3C"))
         self.save_btn.clicked.connect(self.save_settings)
         button_layout.addWidget(self.save_btn)
@@ -477,13 +481,10 @@ class SettingsTab(QWidget):
         
         # Status label
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("""
-            QLabel {
-                color: #4CAF50;
-                font-size: 15px;
-                padding: 8px;
-            }
-        """)
+        self.status_label.setWordWrap(True)
+        self._status_default_style = "QLabel { color: #4CAF50; font-size: 14px; padding: 6px; }"
+        self._status_info_style = "QLabel { color: #909090; font-size: 14px; padding: 6px; }"
+        self.status_label.setStyleSheet(self._status_default_style)
         self.status_label.setAlignment(Qt.AlignCenter)
         main_layout.addWidget(self.status_label)
     
@@ -496,10 +497,10 @@ class SettingsTab(QWidget):
                 color: white;
                 border: 2px solid {color1};
                 border-radius: 8px;
-                font-size: 16px;
+                font-size: 15px;
                 font-weight: bold;
-                padding: 8px 25px;
-                min-width: 120px;
+                padding: 6px 18px;
+                min-width: 110px;
             }}
             QPushButton:hover {{
                 border-color: #ffffff;
@@ -508,6 +509,20 @@ class SettingsTab(QWidget):
                 background: {color2};
             }}
         """
+
+    def wrap_tab(self, content_widget: QWidget) -> QScrollArea:
+        """Place tab contents inside a scroll area for small displays."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(0)
+        container_layout.addWidget(content_widget, alignment=Qt.AlignTop)
+        scroll.setWidget(container)
+        return scroll
     
     def create_status_circle(self, status: str) -> QLabel:
         """Create a status indicator circle
@@ -549,8 +564,8 @@ class SettingsTab(QWidget):
         """Create robot settings tab - optimized for 1024x600 touchscreen"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)  # No margins - let content breathe
-        layout.setSpacing(6)  # Compact spacing
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
         
         # ========== HOME ROW ==========
         rest_section = QLabel("🏠 Home Position")
@@ -607,6 +622,7 @@ class SettingsTab(QWidget):
         self.find_ports_btn.setStyleSheet(self.get_button_style("#FF9800", "#F57C00"))
         self.find_ports_btn.clicked.connect(self.find_robot_ports)
         rest_row.addWidget(self.find_ports_btn)
+        rest_row.addStretch()
         
         layout.addLayout(rest_row)
         
@@ -658,6 +674,7 @@ class SettingsTab(QWidget):
         self.calibrate_btn.setStyleSheet(self.get_button_style("#9C27B0", "#7B1FA2"))
         self.calibrate_btn.clicked.connect(self.calibrate_arm)
         port_row.addWidget(self.calibrate_btn)
+        port_row.addStretch()
         
         layout.addLayout(port_row)
         
@@ -708,6 +725,17 @@ class SettingsTab(QWidget):
         
         self.teleop_port_edit = self.add_setting_row(layout, "Teleop Port:", "/dev/ttyACM1")
         
+        ik_row = QHBoxLayout()
+        ik_row.setSpacing(6)
+        ik_row.addSpacing(20)
+        self.open_ik_btn = QPushButton("🦾 Open IK Tools")
+        self.open_ik_btn.setFixedHeight(44)
+        self.open_ik_btn.setStyleSheet(self.get_button_style("#673AB7", "#512DA8"))
+        self.open_ik_btn.clicked.connect(self.open_ik_tools)
+        ik_row.addWidget(self.open_ik_btn)
+        ik_row.addStretch()
+        layout.addLayout(ik_row)
+        
         # Position verification settings
         label = QLabel("🎯 Position Accuracy")
         label.setStyleSheet("color: #4CAF50; font-size: 16px; font-weight: bold; margin-top: 15px;")
@@ -719,7 +747,7 @@ class SettingsTab(QWidget):
         verify_row = QHBoxLayout()
         verify_label = QLabel("Enable Position Verification:")
         verify_label.setStyleSheet("color: #d0d0d0; font-size: 15px;")
-        verify_label.setMinimumWidth(250)
+        verify_label.setMinimumWidth(220)
         verify_row.addWidget(verify_label)
         
         from PySide6.QtWidgets import QCheckBox
@@ -731,8 +759,8 @@ class SettingsTab(QWidget):
                 spacing: 10px;
             }
             QCheckBox::indicator {
-                width: 35px;
-                height: 35px;
+                width: 26px;
+                height: 26px;
                 border: 2px solid #707070;
                 border-radius: 6px;
                 background-color: #505050;
@@ -740,12 +768,6 @@ class SettingsTab(QWidget):
             QCheckBox::indicator:checked {
                 background-color: #4CAF50;
                 border-color: #4CAF50;
-            }
-            QCheckBox::indicator:checked:after {
-                content: "✓";
-                color: white;
-                font-size: 24px;
-                font-weight: bold;
             }
         """)
         verify_row.addWidget(self.position_verification_check)
@@ -949,8 +971,8 @@ class SettingsTab(QWidget):
         """Create camera settings tab - optimized for 1024x600 touchscreen"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)  # No margins - let content breathe
-        layout.setSpacing(6)  # Compact spacing
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
         
         # ========== CAMERA DETECTION ==========
         detect_section = QLabel("🎥 Camera Configuration")
@@ -997,6 +1019,7 @@ class SettingsTab(QWidget):
         self.find_cameras_btn.setStyleSheet(self.get_button_style("#FF9800", "#F57C00"))
         self.find_cameras_btn.clicked.connect(self.find_cameras)
         front_row.addWidget(self.find_cameras_btn)
+        front_row.addStretch()
         
         layout.addLayout(front_row)
         
@@ -1034,7 +1057,8 @@ class SettingsTab(QWidget):
         wrist_row.addWidget(self.cam_wrist_edit)
         
         # Empty space for alignment (140px for Find button)
-        wrist_row.addSpacing(140)
+        wrist_row.addSpacing(12)
+        wrist_row.addStretch()
         
         layout.addLayout(wrist_row)
         
@@ -1057,8 +1081,8 @@ class SettingsTab(QWidget):
         """Create policy settings tab"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)  # No margins
-        layout.setSpacing(6)  # Compact spacing
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
         
         self.policy_base_edit = self.add_setting_row(layout, "Base Path:", "/home/daniel/lerobot/outputs/train")
         self.policy_device_edit = self.add_setting_row(layout, "Device:", "cuda")
@@ -1103,8 +1127,8 @@ class SettingsTab(QWidget):
         """Create control settings tab"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)  # No margins
-        layout.setSpacing(6)  # Compact spacing
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
 
         self.num_episodes_spin = self.add_spinbox_row(layout, "Episodes:", 1, 100, 10)
         self.episode_time_spin = self.add_doublespinbox_row(layout, "Episode Time (s):", 1.0, 300.0, 20.0)
@@ -1127,7 +1151,7 @@ class SettingsTab(QWidget):
         """Create safety settings tab"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
         # Motor temperature monitoring
@@ -1465,22 +1489,23 @@ class SettingsTab(QWidget):
         label.setStyleSheet("""
             QLabel {
                 color: #e0e0e0;
-                font-size: 15px;
-                min-width: 160px;
+                font-size: 14px;
+                min-width: 150px;
             }
         """)
         row.addWidget(label)
         
         edit = QLineEdit(default_value)
-        edit.setMinimumHeight(50)
+        edit.setMinimumHeight(44)
+        edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         edit.setStyleSheet("""
             QLineEdit {
                 background-color: #505050;
                 color: #ffffff;
                 border: 2px solid #707070;
                 border-radius: 8px;
-                padding: 10px;
-                font-size: 15px;
+                padding: 8px;
+                font-size: 14px;
             }
             QLineEdit:focus {
                 border-color: #4CAF50;
@@ -1488,6 +1513,7 @@ class SettingsTab(QWidget):
             }
         """)
         row.addWidget(edit, stretch=1)
+        row.addStretch()
         
         layout.addLayout(row)
         return edit
@@ -1500,8 +1526,8 @@ class SettingsTab(QWidget):
         label.setStyleSheet("""
             QLabel {
                 color: #e0e0e0;
-                font-size: 15px;
-                min-width: 160px;
+                font-size: 14px;
+                min-width: 150px;
             }
         """)
         row.addWidget(label)
@@ -1510,7 +1536,7 @@ class SettingsTab(QWidget):
         spin.setMinimum(min_val)
         spin.setMaximum(max_val)
         spin.setValue(default)
-        spin.setMinimumHeight(50)
+        spin.setMinimumHeight(44)
         spin.setButtonSymbols(QSpinBox.NoButtons)
         spin.setStyleSheet("""
             QSpinBox {
@@ -1518,14 +1544,15 @@ class SettingsTab(QWidget):
                 color: #ffffff;
                 border: 2px solid #707070;
                 border-radius: 8px;
-                padding: 10px;
-                font-size: 15px;
+                padding: 8px;
+                font-size: 14px;
             }
             QSpinBox:focus {
                 border-color: #4CAF50;
                 background-color: #555555;
             }
         """)
+        spin.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         row.addWidget(spin)
         row.addStretch()
         
@@ -1540,8 +1567,8 @@ class SettingsTab(QWidget):
         label.setStyleSheet("""
             QLabel {
                 color: #e0e0e0;
-                font-size: 15px;
-                min-width: 160px;
+                font-size: 14px;
+                min-width: 150px;
             }
         """)
         row.addWidget(label)
@@ -1551,7 +1578,7 @@ class SettingsTab(QWidget):
         spin.setMaximum(max_val)
         spin.setValue(default)
         spin.setDecimals(1)
-        spin.setMinimumHeight(50)
+        spin.setMinimumHeight(44)
         spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
         spin.setStyleSheet("""
             QDoubleSpinBox {
@@ -1559,14 +1586,15 @@ class SettingsTab(QWidget):
                 color: #ffffff;
                 border: 2px solid #707070;
                 border-radius: 8px;
-                padding: 10px;
-                font-size: 15px;
+                padding: 8px;
+                font-size: 14px;
             }
             QDoubleSpinBox:focus {
                 border-color: #4CAF50;
                 background-color: #555555;
             }
         """)
+        spin.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         row.addWidget(spin)
         row.addStretch()
         
@@ -1849,7 +1877,19 @@ class SettingsTab(QWidget):
         except Exception as e:
             self.status_label.setText(f"❌ Error: {str(e)}")
             self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
-    
+
+    def open_ik_tools(self):
+        """Launch the standalone IK tool dialog."""
+        dialog = IKToolDialog(self.config, self)
+        dialog.exec()
+
+        if dialog.applied_settings:
+            self.status_label.setStyleSheet(self._status_default_style)
+            self.status_label.setText("🦾 IK parameters updated. Click Save to persist.")
+        else:
+            self.status_label.setStyleSheet(self._status_info_style)
+            self.status_label.setText("IK tools closed without applying changes.")
+
     # ========== PORT DETECTION METHODS ==========
     
     def find_robot_ports(self):
