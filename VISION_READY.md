@@ -89,7 +89,7 @@ python vision_triggers/daemon.py &
 python test_vision.py
 ```
 
-**For production/kiosk mode:**
+**For production deployments:**
 - Daemon runs independently
 - Communicates via JSON files
 - Auto-restarts on errors
@@ -341,5 +341,4 @@ python vision_app.py --vision
 ```
 
 Enjoy! 🚀
-
 
