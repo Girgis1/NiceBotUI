@@ -30,7 +30,6 @@ except ImportError:  # pragma: no cover - optional dependency
     YOLO = None
 
 from utils.camera_hub import CameraStreamHub
-from ik_tools import IKToolWidget
 
 
 class HandDetectionTestDialog(QDialog):
@@ -454,10 +453,6 @@ class SettingsTab(QWidget):
         # Control tab
         control_tab = self.wrap_tab(self.create_control_tab())
         self.tab_widget.addTab(control_tab, "🎮 Control")
-
-        # IK tab
-        ik_tab = self.wrap_tab(IKToolWidget(self.config, self))
-        self.tab_widget.addTab(ik_tab, "🦾 IK")
 
         # Safety tab
         safety_tab = self.wrap_tab(self.create_safety_tab())

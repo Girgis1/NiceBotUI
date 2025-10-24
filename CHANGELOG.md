@@ -2,19 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.25] - 2025-10-24
-
-### 🛠️ IK Calibration & Safety
-- Added a full two-step calibration wizard matching phosphobot’s workflow to compute servo offsets and signs before running IK.
-- Introduced workspace clamping, adjustable TCP orientation, and an optional PyBullet GUI mirror so moves line up with reality and stay above the table.
-- IK keypad now supports direct robot streaming with safeguarded offsets/velocity settings stored alongside the solver presets.
-
 ## [0.24] - 2025-10-24
 
-### 🦾 IK Toolkit
-- Added a dedicated IK tab in Settings featuring phosphobot URDF-backed solving, Cartesian keypad jog controls, and preset management for SO-100 / SO-101 arms.
-- Bundled the SO-100 URDF and meshes locally so IK previews work offline without the kiosk stack.
-- Refreshed Settings layout for 1024×600 displays (scrollable tabs, tighter control spacing).
+### 🧩 Settings Layout Refresh
+- Converted each Settings section into a scrollable pane sized for 1024×600 touch displays.
+- Unified button/label sizing, tightened spacing, and introduced consistent status messaging.
+- No functional changes to IK or motion control in this release.
 
 ## [0.23] - 2025-10-24
 
