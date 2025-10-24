@@ -90,25 +90,40 @@ class DeviceManager(QObject):
             self.camera_status_changed.emit("front", "empty")
             self.camera_status_changed.emit("wrist", "empty")
         
-        # Print compact summary (both terminal and GUI)
+        # Print compact summary for terminal while sending user-friendly dashboard logs
         print("\n=== Detecting Ports ===", flush=True)
-        self.discovery_log.emit("=== Detecting Ports ===")
-        
+        self.discovery_log.emit("Checking connected devices...")
+
         print(f"----- Robot Arms: {robot_count} -----", flush=True)
-        self.discovery_log.emit(f"----- Robot Arms: {robot_count} -----")
-        
-        if robot_port:
-            print(f"Port: {robot_port}", flush=True)
-            self.discovery_log.emit(f"Port: {robot_port}")
-        
+        if robot_count:
+            self.discovery_log.emit("Robot arm connected.")
+            if robot_port:
+                port_msg = f"Port: {robot_port}"
+                print(port_msg, flush=True)
+                self.discovery_log.emit(f"Robot arm detected on {robot_port}.")
+        else:
+            self.discovery_log.emit(
+                "WARN: Robot arm not detected. Check the USB cable and power, then retry."
+            )
+
         print(f"----- Cameras: {len(camera_assignments)} -----", flush=True)
-        self.discovery_log.emit(f"----- Cameras: {len(camera_assignments)} -----")
-        
-        for cam_name, cam_path in camera_assignments.items():
-            msg = f"{cam_name.title()}: {cam_path}"
-            print(msg, flush=True)
-            self.discovery_log.emit(msg)
-        
+        if camera_assignments:
+            for cam_name, cam_path in camera_assignments.items():
+                msg = f"{cam_name.title()}: {cam_path}"
+                print(msg, flush=True)
+                self.discovery_log.emit(f"{cam_name.title()} camera ready ({cam_path}).")
+        else:
+            self.discovery_log.emit(
+                "WARN: No cameras detected. Confirm the cables are connected and the correct camera is selected in Settings."
+            )
+
+        if results["errors"]:
+            for error in results["errors"]:
+                print(error, flush=True)
+            self.discovery_log.emit(
+                "ERROR: Device check hit an issue. See the terminal for technical details."
+            )
+
         print("", flush=True)  # Blank line at end
         sys.stdout.flush()
         
