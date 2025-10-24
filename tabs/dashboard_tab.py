@@ -6,7 +6,6 @@ This is the existing UI refactored as a tab
 import sys
 import os
 import json
-import subprocess
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, List, Tuple
@@ -32,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from robot_worker import RobotWorker
 from utils.execution_manager import ExecutionWorker
+from utils.home_workers import HomeProcessWorker
 from utils.camera_hub import CameraStreamHub
 
 # Timezone
@@ -303,6 +303,7 @@ class DashboardTab(QWidget):
         self.device_manager = device_manager
         self.worker = None
         self.execution_worker = None  # New unified execution worker
+        self.home_worker = None  # Background worker for HomePos
         self.start_time = None
         self.elapsed_seconds = 0
         self.is_running = False
@@ -1729,30 +1730,43 @@ class DashboardTab(QWidget):
     
     def go_home(self):
         """Go to home position"""
+        if self.home_worker and self.home_worker.isRunning():
+            self.log_text.append("[info] Home command already in progress")
+            return
+
         self.action_label.setText("Moving to home...")
         self.log_text.append("[info] Moving to home position...")
         self.log_text.append(f"[info] Speed override {int(self.master_speed * 100)}%")
 
-        try:
-            env = os.environ.copy()
-            env["LEROBOT_SPEED_MULTIPLIER"] = f"{self.master_speed:.2f}"
-            result = subprocess.run(
-                [sys.executable, str(ROOT / "HomePos.py"), "--go"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                env=env
-            )
-            
-            if result.returncode == 0:
-                self.action_label.setText("✓ At home position")
-                self.log_text.append("[info] ✓ Home position reached")
-            else:
-                self.action_label.setText("⚠️ Home failed")
-                self.log_text.append(f"[error] Home failed: {result.stderr}")
-        except Exception as e:
-            self.action_label.setText("⚠️ Home error")
-            self.log_text.append(f"[error] Home error: {e}")
+        env = os.environ.copy()
+        env["LEROBOT_SPEED_MULTIPLIER"] = f"{self.master_speed:.2f}"
+
+        self.home_btn.setEnabled(False)
+        command = [sys.executable, str(ROOT / "HomePos.py"), "--go"]
+        self.home_worker = HomeProcessWorker(command, env=env, timeout=45, parent=self)
+        self.home_worker.completed.connect(self._on_home_completed)
+        self.home_worker.finished.connect(self.home_worker.deleteLater)
+        self.home_worker.start()
+
+    def _on_home_completed(self, success: bool, stdout: str, stderr: str):
+        """Handle completion of the asynchronous home command."""
+        self.home_btn.setEnabled(True)
+
+        self.home_worker = None
+
+        if success:
+            self.action_label.setText("✓ At home position")
+            self.log_text.append("[info] ✓ Home position reached")
+            if stdout.strip():
+                for line in stdout.strip().splitlines():
+                    self.log_text.append(f"[debug] {line}")
+        else:
+            message = stderr.strip() or stdout.strip()
+            if not message:
+                message = "Unknown error"
+            self.action_label.setText("⚠️ Home failed")
+            self.log_text.append(f"[error] Home failed: {message}")
+
     
     def run_from_dashboard(self):
         """Execute the selected RUN item (same as pressing START)"""
