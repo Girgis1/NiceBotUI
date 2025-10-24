@@ -69,6 +69,7 @@ class ExecutionWorker(QThread):
         self.motor_controller = MotorController(config)
         self.speed_multiplier = config.get("control", {}).get("speed_multiplier", 1.0)
         self.motor_controller.speed_multiplier = self.speed_multiplier
+        self._model_hold_requested_home = False
         try:
             self.camera_hub: Optional[CameraStreamHub] = CameraStreamHub.instance(config)
         except Exception:
@@ -1072,7 +1073,60 @@ class ExecutionWorker(QThread):
             
         except Exception as e:
             self.log_message.emit('error', f"Failed to reach home: {e}")
-    
+
+    def _stabilize_arm_after_model(self, hold_seconds: float = 1.0) -> bool:
+        """Re-enable torque and hold current pose after model execution.
+
+        Returns:
+            bool: True if torque hold succeeded, False if fallback action required.
+        """
+        if not self.motor_controller:
+            return False
+
+        connected_locally = False
+        try:
+            if not self.motor_controller.bus:
+                if not self.motor_controller.connect():
+                    self.log_message.emit('warning', "[MODEL] Unable to connect to motors for torque hold")
+                    return False
+                connected_locally = True
+
+            positions = self.motor_controller.read_positions_from_bus()
+            if not positions:
+                try:
+                    positions = self.motor_controller.read_positions()
+                except Exception:
+                    positions = []
+
+            if not positions:
+                self.log_message.emit('warning', "[MODEL] Could not read positions to hold after model")
+                return False
+
+            # Enable torque and command current positions to hold pose
+            for motor_name in self.motor_controller.motor_names:
+                self.motor_controller.bus.write("Torque_Enable", motor_name, 1, normalize=False)
+
+            hold_until = time.time() + max(0.0, hold_seconds)
+            while time.time() < hold_until and not self._stop_requested:
+                for idx, motor_name in enumerate(self.motor_controller.motor_names):
+                    target = positions[idx] if idx < len(positions) else positions[-1]
+                    self.motor_controller.bus.write("Goal_Position", motor_name, target, normalize=False)
+                time.sleep(0.05)
+
+            self.log_message.emit('info', "[MODEL] Torque hold engaged after model shutdown")
+            return True
+
+        except Exception as exc:
+            self.log_message.emit('warning', f"[MODEL] Torque hold failed: {exc}")
+            return False
+
+        finally:
+            if connected_locally:
+                try:
+                    self.motor_controller.disconnect()
+                except Exception:
+                    pass
+
     def _start_policy_server(self, task: str, checkpoint: str):
         """Start policy server and return process (for use in sequences)
         
@@ -1261,12 +1315,19 @@ class ExecutionWorker(QThread):
             
             # After episode: Home and cleanup
             if not self._stop_requested:
-                self.log_message.emit('info', "Returning to home position...")
-                self._execute_home_inline()
-                
+                if self._model_hold_requested_home:
+                    self.log_message.emit('info', "Home already requested during torque recovery")
+                    self._model_hold_requested_home = False
+                else:
+                    self.log_message.emit('info', "Returning to home position...")
+                    self._execute_home_inline()
+
                 self.log_message.emit('info', "Cleaning up eval folders...")
                 self._cleanup_eval_folders(verbose=False)
-        
+
+        # Reset home request flag after model loop completes
+        self._model_hold_requested_home = False
+
         # Final summary
         if num_episodes > 0:
             self.log_message.emit('info', f"✓ Completed {episode_count}/{num_episodes} episodes")
@@ -1467,6 +1528,15 @@ class ExecutionWorker(QThread):
                     self.log_message.emit('info', "Resumed shared camera streams")
                 except Exception as exc:
                     self.log_message.emit('warning', f"Failed to resume camera hub: {exc}")
+            
+            # Immediately stabilize the arm so it doesn't drop before homing
+            hold_ok = self._stabilize_arm_after_model()
+            if not hold_ok and not self._stop_requested:
+                self.log_message.emit('info', "Torque hold unavailable, moving to home")
+                self._execute_home_inline()
+                self._model_hold_requested_home = True
+            else:
+                self._model_hold_requested_home = False
     
     def _execute_model_inline(self, task: str, checkpoint: str, duration: float, num_episodes: int = None):
         """Execute a trained policy model for specified duration
@@ -1572,9 +1642,15 @@ class ExecutionWorker(QThread):
             
             self.log_message.emit('info', "✓ Model execution completed")
             
+            # Stabilize torque before homing to prevent arm drop
+            hold_ok = self._stabilize_arm_after_model()
+            if not hold_ok and not self._stop_requested:
+                self.log_message.emit('info', "Torque hold unavailable, moving to home")
+
             # Return to home position after model completes
             self.log_message.emit('info', "Returning to home position...")
             self._execute_home_inline()
+            self._model_hold_requested_home = False
             
         except Exception as e:
             self.log_message.emit('error', f"Model execution failed: {e}")
