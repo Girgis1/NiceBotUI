@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.24] - 2025-10-24
+
+### 🦾 IK Toolkit
+- Added a dedicated IK tab in Settings featuring phosphobot URDF-backed solving, Cartesian keypad jog controls, and preset management for SO-100 / SO-101 arms.
+- Bundled the SO-100 URDF and meshes locally so IK previews work offline without the kiosk stack.
+- Refreshed Settings layout for 1024×600 displays (scrollable tabs, tighter control spacing).
+
 ## [0.23] - 2025-10-24
 
 ### ⚙️ Sequence Stability
