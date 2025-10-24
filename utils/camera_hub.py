@@ -138,11 +138,31 @@ class CameraStream:
                 pass
             self._capture = None
 
-        backend = cv2.CAP_ANY if isinstance(self.source, str) else cv2.CAP_V4L2
-        cap = cv2.VideoCapture(self.source, backend)
-        if not cap or not cap.isOpened():
+        backends_to_try = []
+        if isinstance(self.source, str):
+            backends_to_try.append(cv2.CAP_ANY)
+        else:
+            # Prefer V4L2 where available but gracefully fall back when unsupported
+            if hasattr(cv2, "CAP_V4L2"):
+                backends_to_try.append(cv2.CAP_V4L2)
+            backends_to_try.append(cv2.CAP_ANY)
+
+        cap = None
+        for backend in backends_to_try:
+            try:
+                cap = cv2.VideoCapture(self.source, backend)
+            except TypeError:
+                # Older OpenCV builds may not accept the backend argument
+                cap = cv2.VideoCapture(self.source)
+
+            if cap and cap.isOpened():
+                break
+
             if cap:
                 cap.release()
+            cap = None
+
+        if not cap or not cap.isOpened():
             self._capture = None
             return False
 
