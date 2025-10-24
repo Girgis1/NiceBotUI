@@ -243,7 +243,7 @@ class RecordTab(QWidget):
                 background-color: #FF9800;
             }
         """)
-        self.loop_btn.clicked.connect(self.toggle_loop)
+        self.loop_btn.toggled.connect(self.toggle_loop)
         control_bar.addWidget(self.loop_btn)
         
         # Delay button removed - delays now handled per-step in composite manifest
@@ -1259,14 +1259,14 @@ class RecordTab(QWidget):
         else:
             self.stop_playback()
     
-    def toggle_loop(self):
+    def toggle_loop(self, checked: bool):
         """Toggle loop mode"""
-        self.play_loop = self.loop_btn.isChecked()
+        self.play_loop = checked
         if self.play_loop:
             self.status_label.setText("🔁 Loop enabled")
         else:
             self.status_label.setText("Loop disabled")
-    
+
     def start_playback(self):
         """INDUSTRIAL precision playback of all actions"""
         print("[PLAYBACK] 🎬 STARTING PLAYBACK...")
@@ -1279,7 +1279,10 @@ class RecordTab(QWidget):
             self.status_label.setText("❌ No actions to play")
             self.play_btn.setChecked(False)
             return
-        
+
+        # Capture current loop state at start to avoid stale values
+        self.play_loop = self.loop_btn.isChecked()
+
         self.is_playing = True
         self.play_btn.setText("⏹ STOP")
         self.set_btn.setEnabled(False)
@@ -1456,7 +1459,8 @@ class RecordTab(QWidget):
         self.play_btn.setText("▶ PLAY")
         self.set_btn.setEnabled(True)
         self.save_btn.setEnabled(True)
-        
+        self.live_record_btn.setEnabled(True)
+
         # Clear row selection
         self.table.clearSelection()
         
