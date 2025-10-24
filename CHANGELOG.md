@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.23] - 2025-10-24
+
+### ⚙️ Sequence Stability
+- Added post-model torque hold in `utils/execution_manager.py` so ACT runs keep the arm powered until the home move begins, preventing the drop-between-steps crash.
+
 ## [0.21] - 2025-10-18
 
 ### 🎨 UI/UX Improvements + Critical Bug Fix
@@ -434,4 +439,3 @@ Hardware testing needed for:
 `MAJOR.MINOR`
 - MAJOR: Breaking changes or major feature releases
 - MINOR: Bug fixes, improvements, new features (backward compatible)
-
