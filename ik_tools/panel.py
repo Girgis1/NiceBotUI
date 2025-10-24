@@ -28,6 +28,27 @@ from utils.motor_controller import MotorController  # type: ignore
 MOTOR_RESOLUTION = 4095.0
 DEFAULT_OFFSETS = np.full(6, 2048.0)
 DEFAULT_SIGNS = np.array([-1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+DEFAULT_TARGET = np.array([0.25, 0.0, 0.18])  # metres
+DEFAULT_ORIENTATION_DEG = np.array([0.0, 180.0, 0.0])  # roll, pitch, yaw
+WORKSPACE_LIMITS = {
+    "x": (0.05, 0.35),
+    "y": (-0.25, 0.25),
+    "z": (0.05, 0.45),
+}
+# Values lifted from phosphobot's SO-100 calibration pose (radians)
+CALIBRATION_REFERENCE_RAD = np.zeros(6)
+CALIBRATION_TARGET_RAD = np.array(
+    [-0.09359567856848712, -1.6632412388236073, 1.4683781047547897,
+     0.5799863360473464, 0.72268138697963, 0.018412264636423696]
+)
+CALIBRATION_STEP1_MESSAGE = (
+    "Step 1/2 — move the arm to the neutral pose (joints centred, elbow upright) "
+    "then click 'Capture Calibration Step'."
+)
+CALIBRATION_STEP2_MESSAGE = (
+    "Step 2/2 — move the arm to the phosphobot calibration pose: shoulder lowered, "
+    "elbow forward, wrist vertical (see docs). Click 'Capture Calibration Step' again."
+)
 
 
 @dataclass
@@ -47,11 +68,16 @@ class IKToolWidget(QWidget):
 
         self._loading = False
         self.parameter_spins: Dict[str, QDoubleSpinBox] = {}
-        self.target_position = np.array([0.20, 0.0, 0.18])  # metres
+        self.target_position = DEFAULT_TARGET.copy()
+        self.orientation_deg = DEFAULT_ORIENTATION_DEG.copy()
         self.current_solution: Optional[np.ndarray] = None
 
         self.servo_offsets = DEFAULT_OFFSETS.copy()
         self.servo_signs = DEFAULT_SIGNS.copy()
+        self.workspace_limits = WORKSPACE_LIMITS
+
+        self.calibration_stage = 0
+        self.calibration_step1: Optional[np.ndarray] = None
 
         self.presets: Dict[str, IKPreset] = {
             "SO-100": IKPreset(
@@ -105,6 +131,7 @@ class IKToolWidget(QWidget):
         layout.addLayout(self._build_preset_controls())
         layout.addLayout(self._build_parameter_grid())
         layout.addWidget(self._build_calibration_panel())
+        layout.addWidget(self._build_orientation_controls())
         layout.addWidget(self._build_keypad())
 
         self.output_box = QTextEdit()
@@ -145,6 +172,10 @@ class IKToolWidget(QWidget):
         self.load_preset_btn = QPushButton("Load Preset")
         self.load_preset_btn.clicked.connect(self._load_selected_preset)
         row.addWidget(self.load_preset_btn)
+
+        self.show_gui_check = QCheckBox("Show simulation")
+        self.show_gui_check.toggled.connect(self._toggle_gui)
+        row.addWidget(self.show_gui_check)
 
         row.addStretch()
         return row
@@ -188,6 +219,12 @@ class IKToolWidget(QWidget):
         self.prefer_elbow_up_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 13px; padding: 4px; }")
         grid.addWidget(self.prefer_elbow_up_check, len(param_specs), 0, 1, 2)
 
+        self.geometry_summary_label = QLabel("")
+        self.geometry_summary_label.setStyleSheet(
+            "QLabel { color: #cfcfcf; font-size: 12px; padding-top: 4px; }"
+        )
+        grid.addWidget(self.geometry_summary_label, len(param_specs) + 1, 0, 1, 2)
+
         return grid
 
     def _build_calibration_panel(self) -> QWidget:
@@ -201,28 +238,35 @@ class IKToolWidget(QWidget):
         layout.addWidget(title)
 
         explainer = QLabel(
-            "Servo offsets/signs convert IK joint angles into motor units. Capture offsets after aligning the arm to your zero pose."
+            "Servo offsets/signs convert IK joint angles into motor units. Run the two-step calibration to capture the real offsets."
         )
         explainer.setWordWrap(True)
         explainer.setStyleSheet("QLabel { color: #aaaaaa; font-size: 12px; }")
         layout.addWidget(explainer)
+
+        self.calibration_message = QLabel("Click 'Start Calibration Wizard' to begin.")
+        self.calibration_message.setWordWrap(True)
+        self.calibration_message.setStyleSheet(
+            "QLabel { color: #e0e0e0; font-size: 12px; padding: 4px; border: 1px solid #555555; border-radius: 6px; }"
+        )
+        layout.addWidget(self.calibration_message)
+
+        button_row = QHBoxLayout()
+        self.start_calibration_btn = QPushButton("Start Calibration Wizard")
+        self.start_calibration_btn.clicked.connect(self._start_calibration)
+        button_row.addWidget(self.start_calibration_btn)
+
+        self.capture_calibration_btn = QPushButton("Capture Calibration Step")
+        self.capture_calibration_btn.clicked.connect(self._capture_calibration_step)
+        button_row.addWidget(self.capture_calibration_btn)
+        button_row.addStretch()
+        layout.addLayout(button_row)
 
         self.offset_label = QLabel("")
         self.offset_label.setStyleSheet(
             "QLabel { color: #e0e0e0; font-size: 12px; padding: 4px; border: 1px solid #555555; border-radius: 6px; }"
         )
         layout.addWidget(self.offset_label)
-
-        button_row = QHBoxLayout()
-        capture_btn = QPushButton("Capture Offsets from Robot")
-        capture_btn.clicked.connect(self._capture_offsets_from_robot)
-        button_row.addWidget(capture_btn)
-
-        defaults_btn = QPushButton("Reset Defaults")
-        defaults_btn.clicked.connect(self._reset_offsets_to_defaults)
-        button_row.addWidget(defaults_btn)
-        button_row.addStretch()
-        layout.addLayout(button_row)
 
         sign_row = QHBoxLayout()
         sign_row.setSpacing(6)
@@ -244,6 +288,36 @@ class IKToolWidget(QWidget):
         self.hold_connection_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 12px; padding: 4px; }")
         layout.addWidget(self.hold_connection_check)
 
+        return container
+
+    def _build_orientation_controls(self) -> QWidget:
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setSpacing(8)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        label = QLabel("TCP orientation (deg):")
+        label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 13px; }")
+        layout.addWidget(label)
+
+        self.orientation_spins: Dict[str, QDoubleSpinBox] = {}
+        for axis in ("roll", "pitch", "yaw"):
+            spin = QDoubleSpinBox()
+            spin.setRange(-180.0, 180.0)
+            spin.setSingleStep(5.0)
+            spin.setDecimals(1)
+            spin.setMinimumHeight(32)
+            spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
+            spin.setStyleSheet(
+                "QDoubleSpinBox { background-color: #505050; color: #ffffff; border: 2px solid #707070;"
+                " border-radius: 6px; padding: 4px; font-size: 12px; }"
+            )
+            spin.valueChanged.connect(self._on_orientation_changed)
+            layout.addWidget(QLabel(axis.upper()))
+            layout.addWidget(spin)
+            self.orientation_spins[axis] = spin
+
+        layout.addStretch()
         return container
 
     def _build_keypad(self) -> QWidget:
@@ -348,7 +422,7 @@ class IKToolWidget(QWidget):
 
         return container
 
-    # ------------------------------------------------------------------ data loading
+    # ------------------------------------------------------------------ configuration loading
     def _load_selected_preset(self) -> None:
         preset_key = self.arm_combo.currentData()
         if isinstance(preset_key, str):
@@ -373,14 +447,19 @@ class IKToolWidget(QWidget):
 
     def _load_from_config(self) -> None:
         ik_section = self.config.get("ik", {})
+
+        # Preset
         active = ik_section.get("active_preset")
         if active and active in self.presets:
             index = self.arm_combo.findData(active)
             if index >= 0:
+                self.arm_combo.blockSignals(True)
                 self.arm_combo.setCurrentIndex(index)
+                self.arm_combo.blockSignals(False)
         else:
             self._load_selected_preset()
 
+        # Parameters
         params = ik_section.get("parameters")
         if isinstance(params, dict):
             for key, spin in self.parameter_spins.items():
@@ -392,53 +471,90 @@ class IKToolWidget(QWidget):
         if "prefer_elbow_up" in ik_section:
             self.prefer_elbow_up_check.setChecked(bool(ik_section["prefer_elbow_up"]))
 
+        # Servo calibration
         offsets = ik_section.get("servo_offsets")
         if isinstance(offsets, Sequence) and len(offsets) == 6:
             self.servo_offsets = np.array([float(v) for v in offsets])
 
         signs = ik_section.get("servo_signs")
         if isinstance(signs, Sequence) and len(signs) == 6:
-            self.servo_signs = np.array([float(v) for v in signs])
+            self.servo_signs = np.array([1.0 if float(v) >= 0 else -1.0 for v in signs])
 
+        # Target & orientation
+        last_target = ik_section.get("last_target")
+        if isinstance(last_target, Sequence) and len(last_target) == 3:
+            self.target_position = np.array([float(v) for v in last_target])
+        self._clamp_target()
+
+        roll = ik_section.get("roll_deg", DEFAULT_ORIENTATION_DEG[0])
+        pitch = ik_section.get("pitch_deg", DEFAULT_ORIENTATION_DEG[1])
+        yaw = ik_section.get("yaw_deg", DEFAULT_ORIENTATION_DEG[2])
+        self.orientation_deg = np.array([float(roll), float(pitch), float(yaw)])
+
+        # Jog settings
         step_mm = ik_section.get("step_mm")
         if isinstance(step_mm, (int, float)):
             self.step_spin.setValue(float(step_mm))
-
         velocity = ik_section.get("velocity")
         if isinstance(velocity, (int, float)):
             self.velocity_spin.setValue(float(velocity))
 
-        last_target = ik_section.get("last_target")
-        if isinstance(last_target, Sequence) and len(last_target) == 3:
-            self.target_position = np.array([float(v) for v in last_target])
-
         self.auto_send_check.setChecked(bool(ik_section.get("auto_send", False)))
         self.hold_connection_check.setChecked(bool(ik_section.get("keep_connection", True)))
 
+        show_gui = bool(ik_section.get("show_gui", False))
+        self.show_gui_check.blockSignals(True)
+        self.show_gui_check.setChecked(show_gui)
+        self.show_gui_check.blockSignals(False)
+        self._toggle_gui(show_gui)
+
         self._refresh_offset_display()
         self._set_signs_ui()
+        self._set_orientation_ui()
+        self._update_summary()
 
     # ------------------------------------------------------------------ calculations & UI updates
     def _step_m(self) -> float:
         return self.step_spin.value() / 1000.0
 
+    def _clamp_target(self) -> None:
+        for idx, axis in enumerate(["x", "y", "z"]):
+            low, high = self.workspace_limits[axis]
+            self.target_position[idx] = float(np.clip(self.target_position[idx], low, high))
+
     def _nudge(self, dx: float = 0.0, dy: float = 0.0, dz: float = 0.0) -> None:
         self.target_position = self.target_position + np.array([dx, dy, dz])
+        self._clamp_target()
         self._recompute_solution()
 
     def _reset_position(self) -> None:
-        self.target_position = np.zeros(3)
+        self.target_position = DEFAULT_TARGET.copy()
+        self._clamp_target()
         self._recompute_solution()
+
+    def _set_orientation_ui(self) -> None:
+        for idx, axis in enumerate(["roll", "pitch", "yaw"]):
+            spin = self.orientation_spins[axis]
+            spin.blockSignals(True)
+            spin.setValue(self.orientation_deg[idx])
+            spin.blockSignals(False)
+
+    def _on_orientation_changed(self) -> None:
+        for idx, axis in enumerate(["roll", "pitch", "yaw"]):
+            self.orientation_deg[idx] = self.orientation_spins[axis].value()
+        self._recompute_solution()
+
+    def _get_orientation_radians(self) -> np.ndarray:
+        return np.radians(self.orientation_deg)
 
     def _refresh_offset_display(self) -> None:
         values = ", ".join(f"{int(v)}" for v in self.servo_offsets)
-        self.offset_label.setText(f"Offsets (units): [{values}]")
+        self.offset_label.setText(f"Offsets (motor units): [{values}]")
 
     def _set_signs_ui(self) -> None:
         for idx, combo in enumerate(self.sign_combos):
-            sign = self.servo_signs[idx]
             combo.blockSignals(True)
-            combo.setCurrentIndex(0 if sign >= 0 else 1)
+            combo.setCurrentIndex(0 if self.servo_signs[idx] >= 0 else 1)
             combo.blockSignals(False)
 
     def _update_signs_from_ui(self) -> None:
@@ -452,31 +568,20 @@ class IKToolWidget(QWidget):
         forearm = self.parameter_spins["forearm_length_mm"].value()
         wrist = self.parameter_spins["wrist_offset_mm"].value()
         reach = up + forearm + wrist
-        summary = (
-            f"Approx. reach: {reach:.1f} mm\n"
-            f"Tool length: {self.parameter_spins['tool_length_mm'].value():.1f} mm"
-        )
-        self.prefer_elbow_up_check.setToolTip(
-            "When enabled, prefer elbow-up configurations if multiple IK solutions exist."
-        )
-        self.solution_label.setToolTip("Joint angles produced by the latest IK solve.")
-        self.offset_label.setToolTip(
-            "Motor units captured from the robot representing the joint zero (rest) offsets."
-        )
-        # summary label sits above keypad
-        # (Wider display updates so no direct set here)
+        summary = f"Approx. reach: {reach:.1f} mm • Tool: {self.parameter_spins['tool_length_mm'].value():.1f} mm"
+        self.geometry_summary_label.setText(summary)
 
     def _recompute_solution(self) -> None:
+        self._clamp_target()
         self.position_label.setText(
             f"Target: x={self.target_position[0]:.3f} m, y={self.target_position[1]:.3f} m, z={self.target_position[2]:.3f} m"
         )
         try:
-            joints = self.solver.solve(self.target_position)
+            joints = self.solver.solve(self.target_position, self._get_orientation_radians())
             self.current_solution = joints
             degrees = np.degrees(joints)
             text = ", ".join(f"J{i + 1}:{deg:.1f}°" for i, deg in enumerate(degrees))
             self.solution_label.setText(f"Solution (rad): {joints.round(4)}\nAngles: {text}")
-            self._append_output("Computed IK solution successfully. Adjust offsets before applying to real hardware.")
         except Exception as exc:
             self.current_solution = None
             self.solution_label.setText(f"IK failed: {exc}")
@@ -487,25 +592,58 @@ class IKToolWidget(QWidget):
             self._send_to_robot()
 
     # ------------------------------------------------------------------ calibration helpers
-    def _capture_offsets_from_robot(self) -> None:
+    def _start_calibration(self) -> None:
+        self.calibration_stage = 1
+        self.calibration_step1 = None
+        self.calibration_message.setText(CALIBRATION_STEP1_MESSAGE)
+        self._append_output("Calibration started: Step 1/2. Move to neutral pose and capture.")
+
+    def _capture_calibration_step(self) -> None:
+        if self.calibration_stage == 0:
+            self._append_output("Click 'Start Calibration Wizard' first.")
+            return
         try:
             controller = self._get_motor_controller()
             positions = controller.read_positions()
             if not positions:
-                raise RuntimeError("Failed to read motor positions. Ensure torque is enabled and the robot is connected.")
-            self.servo_offsets = np.array([float(v) for v in positions])
-            self._refresh_offset_display()
-            self._append_output("Captured servo offsets from current robot pose.")
-            self._maybe_release_connection()
+                raise RuntimeError("Failed to read motor positions.")
+            values = np.array([float(v) for v in positions])
         except Exception as exc:
-            self._append_output(f"Offset capture failed: {exc}")
+            self._append_output(f"Calibration capture failed: {exc}")
+            return
 
-    def _reset_offsets_to_defaults(self) -> None:
-        self.servo_offsets = DEFAULT_OFFSETS.copy()
-        self.servo_signs = DEFAULT_SIGNS.copy()
-        self._refresh_offset_display()
-        self._set_signs_ui()
-        self._append_output("Offsets reset to factory defaults (2048, default signs).")
+        if self.calibration_stage == 1:
+            self.calibration_step1 = values
+            self.calibration_stage = 2
+            self.calibration_message.setText(CALIBRATION_STEP2_MESSAGE)
+            self._append_output("Captured Step 1. Move to the calibration pose and capture again.")
+            self._maybe_release_connection()
+            return
+
+        if self.calibration_stage == 2:
+            assert self.calibration_step1 is not None
+            step2 = values
+            delta = step2 - self.calibration_step1
+            with np.errstate(divide="ignore", invalid="ignore"):
+                raw_signs = np.sign(delta / CALIBRATION_TARGET_RAD)
+            raw_signs[~np.isfinite(raw_signs)] = 1.0
+            raw_signs[raw_signs == 0] = 1.0
+            raw_signs[-1] = 1.0  # keep gripper positive
+
+            self.servo_offsets = self.calibration_step1.copy()
+            self.servo_signs = raw_signs
+            self.calibration_stage = 0
+            self.calibration_step1 = None
+
+            self._refresh_offset_display()
+            self._set_signs_ui()
+            self.calibration_message.setText(
+                "Calibration complete. Save parameters to persist."
+            )
+            self._append_output(
+                "Calibration complete: offsets and signs updated."
+            )
+            self._maybe_release_connection()
 
     # ------------------------------------------------------------------ hardware interface
     def _get_motor_controller(self) -> MotorController:
@@ -533,11 +671,27 @@ class IKToolWidget(QWidget):
             controller = self._get_motor_controller()
             units = self._radians_to_units(self.current_solution).astype(int).tolist()
             velocity = int(self.velocity_spin.value())
-            controller.set_positions(units, velocity=velocity, wait=True, keep_connection=True)
+            controller.set_positions(
+                units,
+                velocity=velocity,
+                wait=True,
+                keep_connection=self.hold_connection_check.isChecked(),
+            )
             self._append_output(f"Sent to robot (velocity={velocity}) → {units}")
-            self._maybe_release_connection()
         except Exception as exc:
             self._append_output(f"Send failed: {exc}")
+        finally:
+            self._maybe_release_connection()
+
+    # ------------------------------------------------------------------ GUI toggling
+    def _toggle_gui(self, checked: bool) -> None:
+        try:
+            self.solver.reinitialize(use_gui=checked)
+            self._append_output("PyBullet GUI enabled." if checked else "PyBullet GUI disabled.")
+        except Exception as exc:
+            self._append_output(f"Failed to toggle simulation GUI: {exc}")
+        finally:
+            self._recompute_solution()
 
     # ------------------------------------------------------------------ config persistence
     def _apply_to_config(self) -> None:
@@ -554,7 +708,11 @@ class IKToolWidget(QWidget):
         section["velocity"] = self.velocity_spin.value()
         section["auto_send"] = self.auto_send_check.isChecked()
         section["keep_connection"] = self.hold_connection_check.isChecked()
-        self._append_output("Stored IK parameters in memory. Click the main Save button to persist to disk.")
+        section["roll_deg"] = float(self.orientation_deg[0])
+        section["pitch_deg"] = float(self.orientation_deg[1])
+        section["yaw_deg"] = float(self.orientation_deg[2])
+        section["show_gui"] = self.show_gui_check.isChecked()
+        self._append_output("Stored IK parameters in memory. Click Save to persist to disk.")
 
     def _append_output(self, text: str) -> None:
         self.output_box.append(text)

@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.25] - 2025-10-24
+
+### 🛠️ IK Calibration & Safety
+- Added a full two-step calibration wizard matching phosphobot’s workflow to compute servo offsets and signs before running IK.
+- Introduced workspace clamping, adjustable TCP orientation, and an optional PyBullet GUI mirror so moves line up with reality and stay above the table.
+- IK keypad now supports direct robot streaming with safeguarded offsets/velocity settings stored alongside the solver presets.
+
 ## [0.24] - 2025-10-24
 
 ### 🦾 IK Toolkit
