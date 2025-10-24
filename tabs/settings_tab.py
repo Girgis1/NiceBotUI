@@ -4,12 +4,14 @@ Settings Tab - Configuration Interface
 
 import json
 import random
+from copy import deepcopy
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QLineEdit, QScrollArea, QFrame, QSpinBox, QDoubleSpinBox,
-    QTabWidget, QCheckBox, QComboBox, QDialog
+    QTabWidget, QCheckBox, QComboBox, QDialog, QGroupBox,
+    QGridLayout, QStackedWidget
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QImage, QPixmap
@@ -30,6 +32,42 @@ except ImportError:  # pragma: no cover - optional dependency
     YOLO = None
 
 from utils.camera_hub import CameraStreamHub
+
+
+DEFAULT_IK_CONFIG = {
+    "enabled": False,
+    "debug_visualizer": False,
+    "active_arm": "SO-100",
+    "solver": {
+        "max_iterations": 128,
+        "position_tolerance_mm": 1.0,
+        "damping_lambda": 0.05,
+    },
+    "arms": {
+        "SO-100": {
+            "base_offset_mm": {"x": 0.0, "y": 0.0, "z": 0.0},
+            "link_lengths_mm": {
+                "shoulder": 110.0,
+                "upper_arm": 160.0,
+                "forearm": 170.0,
+                "wrist": 120.0,
+            },
+            "tool_offset_mm": {"x": 0.0, "y": 0.0, "z": 110.0},
+            "joint_offsets_deg": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        },
+        "SO-101": {
+            "base_offset_mm": {"x": 5.0, "y": 0.0, "z": 0.0},
+            "link_lengths_mm": {
+                "shoulder": 115.0,
+                "upper_arm": 165.0,
+                "forearm": 175.0,
+                "wrist": 125.0,
+            },
+            "tool_offset_mm": {"x": 0.0, "y": 0.0, "z": 115.0},
+            "joint_offsets_deg": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        },
+    },
+}
 
 
 class HandDetectionTestDialog(QDialog):
@@ -365,17 +403,31 @@ class SettingsTab(QWidget):
         self.config = config
         self.config_path = Path(__file__).parent.parent / "config.json"
         self.device_manager = device_manager
-        
+
         # Device status tracking (synced with device_manager)
         self.robot_status = "empty"          # empty/online/offline
         self.camera_front_status = "empty"   # empty/online/offline
         self.camera_wrist_status = "empty"   # empty/online/offline
-        
+
         # Status circle widgets (will be set during init_ui)
         self.robot_status_circle = None
         self.camera_front_circle = None
         self.camera_wrist_circle = None
-        
+
+        # IK editor widgets (initialized in create_ik_tab)
+        self.ik_enable_check = None
+        self.ik_debug_check = None
+        self.ik_arm_combo = None
+        self.ik_arm_stack: Optional[QStackedWidget] = None
+        self.ik_reach_label = None
+        self.ik_solver_iter_spin: Optional[QSpinBox] = None
+        self.ik_solver_tol_spin: Optional[QDoubleSpinBox] = None
+        self.ik_solver_damping_spin: Optional[QDoubleSpinBox] = None
+        self.ik_base_offset_spins: Dict[str, Dict[str, QDoubleSpinBox]] = {}
+        self.ik_link_length_spins: Dict[str, Dict[str, QDoubleSpinBox]] = {}
+        self.ik_tool_offset_spins: Dict[str, Dict[str, QDoubleSpinBox]] = {}
+        self.ik_joint_offset_spins: Dict[str, List[QDoubleSpinBox]] = {}
+
         self.init_ui()
         self.load_settings()
         
@@ -450,6 +502,10 @@ class SettingsTab(QWidget):
         # Control tab
         control_tab = self.create_control_tab()
         self.tab_widget.addTab(control_tab, "🎮 Control")
+
+        # IK tab
+        ik_tab = self.create_ik_tab()
+        self.tab_widget.addTab(ik_tab, "🦾 IK")
 
         # Safety tab
         safety_tab = self.create_safety_tab()
@@ -1123,6 +1179,440 @@ class SettingsTab(QWidget):
         layout.addStretch()
         return widget
 
+    def create_ik_tab(self) -> QWidget:
+        """Create IK configuration tab."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        title = QLabel("🦾 Inverse Kinematics Setup")
+        title.setStyleSheet("QLabel { color: #ffffff; font-size: 18px; font-weight: bold; padding: 6px 0; }")
+        layout.addWidget(title)
+
+        description = QLabel(
+            "Adjust arm geometry and solver tolerances for SO-100/SO-101 arms. "
+            "Run the debug check to verify reach envelopes and offsets."
+        )
+        description.setWordWrap(True)
+        description.setStyleSheet("QLabel { color: #c8c8c8; font-size: 14px; padding-bottom: 8px; }")
+        layout.addWidget(description)
+
+        self.ik_enable_check = QCheckBox("Enable IK controller")
+        self.ik_enable_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 14px; padding: 4px 0; }")
+        layout.addWidget(self.ik_enable_check)
+
+        self.ik_debug_check = QCheckBox("Enable debug visualizer output")
+        self.ik_debug_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 14px; padding: 4px 0; }")
+        layout.addWidget(self.ik_debug_check)
+
+        arm_row = QHBoxLayout()
+        arm_row.setSpacing(8)
+        arm_label = QLabel("Arm preset:")
+        arm_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 14px; }")
+        arm_row.addWidget(arm_label)
+
+        self.ik_arm_combo = QComboBox()
+        self.ik_arm_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #4c4c4c;
+                color: #ffffff;
+                border: 2px solid #6a6a6a;
+                border-radius: 6px;
+                padding: 6px 10px;
+                min-width: 170px;
+            }
+            QComboBox::drop-down {
+                width: 24px;
+                border-left: 1px solid #6a6a6a;
+            }
+        """)
+        for arm_name in DEFAULT_IK_CONFIG["arms"].keys():
+            self.ik_arm_combo.addItem(f"{arm_name} Arm", arm_name)
+        self.ik_arm_combo.currentIndexChanged.connect(self._on_ik_arm_changed)
+        arm_row.addWidget(self.ik_arm_combo)
+        arm_row.addStretch()
+        layout.addLayout(arm_row)
+
+        self.ik_arm_stack = QStackedWidget()
+        self.ik_arm_stack.setStyleSheet("QStackedWidget { background-color: transparent; }")
+        for arm_name in DEFAULT_IK_CONFIG["arms"].keys():
+            arm_widget = self._create_ik_arm_form(arm_name)
+            self.ik_arm_stack.addWidget(arm_widget)
+        layout.addWidget(self.ik_arm_stack)
+
+        solver_group = QGroupBox("Solver parameters")
+        solver_group.setStyleSheet("QGroupBox { color: #ffffff; font-size: 15px; margin-top: 6px; }")
+        solver_layout = QGridLayout()
+        solver_layout.setSpacing(6)
+
+        iter_label = QLabel("Max iterations")
+        iter_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 13px; }")
+        self.ik_solver_iter_spin = QSpinBox()
+        self.ik_solver_iter_spin.setRange(1, 4096)
+        self.ik_solver_iter_spin.setSingleStep(8)
+        self.ik_solver_iter_spin.setStyleSheet("QSpinBox { color: #ffffff; background-color: #3d3d3d; }")
+
+        tol_label = QLabel("Position tolerance (mm)")
+        tol_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 13px; }")
+        self.ik_solver_tol_spin = QDoubleSpinBox()
+        self.ik_solver_tol_spin.setRange(0.001, 25.0)
+        self.ik_solver_tol_spin.setDecimals(3)
+        self.ik_solver_tol_spin.setSingleStep(0.05)
+        self.ik_solver_tol_spin.setStyleSheet("QDoubleSpinBox { color: #ffffff; background-color: #3d3d3d; }")
+
+        damping_label = QLabel("Damping λ")
+        damping_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 13px; }")
+        self.ik_solver_damping_spin = QDoubleSpinBox()
+        self.ik_solver_damping_spin.setRange(0.0, 1.0)
+        self.ik_solver_damping_spin.setDecimals(3)
+        self.ik_solver_damping_spin.setSingleStep(0.01)
+        self.ik_solver_damping_spin.setStyleSheet("QDoubleSpinBox { color: #ffffff; background-color: #3d3d3d; }")
+
+        solver_layout.addWidget(iter_label, 0, 0)
+        solver_layout.addWidget(self.ik_solver_iter_spin, 0, 1)
+        solver_layout.addWidget(tol_label, 0, 2)
+        solver_layout.addWidget(self.ik_solver_tol_spin, 0, 3)
+        solver_layout.addWidget(damping_label, 1, 0)
+        solver_layout.addWidget(self.ik_solver_damping_spin, 1, 1)
+        solver_group.setLayout(solver_layout)
+        layout.addWidget(solver_group)
+
+        buttons_row = QHBoxLayout()
+        buttons_row.addStretch()
+        reset_btn = QPushButton("Load arm defaults")
+        reset_btn.setMinimumWidth(160)
+        reset_btn.setStyleSheet(self.get_button_style("#757575", "#5c5c5c"))
+        reset_btn.clicked.connect(self._reset_current_arm_to_default)
+        buttons_row.addWidget(reset_btn)
+
+        debug_btn = QPushButton("Run IK debug")
+        debug_btn.setMinimumWidth(160)
+        debug_btn.setStyleSheet(self.get_button_style("#4CAF50", "#388E3C"))
+        debug_btn.clicked.connect(self.run_ik_debug)
+        buttons_row.addWidget(debug_btn)
+        layout.addLayout(buttons_row)
+
+        self.ik_reach_label = QLabel("IK reach summary pending load…")
+        self.ik_reach_label.setWordWrap(True)
+        self.ik_reach_label.setStyleSheet("QLabel { color: #8bc34a; font-size: 14px; padding: 4px; }")
+        layout.addWidget(self.ik_reach_label)
+
+        layout.addStretch()
+        return widget
+
+    def _create_ik_arm_form(self, arm_name: str) -> QWidget:
+        """Build the per-arm IK configuration form."""
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(8, 8, 8, 8)
+        container_layout.setSpacing(10)
+
+        self.ik_base_offset_spins[arm_name] = {}
+        self.ik_link_length_spins[arm_name] = {}
+        self.ik_tool_offset_spins[arm_name] = {}
+        self.ik_joint_offset_spins[arm_name] = []
+
+        base_group = QGroupBox("Base frame offset (mm)")
+        base_group.setStyleSheet("QGroupBox { color: #ffffff; font-size: 14px; }")
+        base_layout = QGridLayout()
+        base_layout.setSpacing(6)
+        for idx, (axis_key, axis_label) in enumerate((("x", "X"), ("y", "Y"), ("z", "Z"))):
+            label = QLabel(f"{axis_label}:")
+            label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 13px; }")
+            spin = QDoubleSpinBox()
+            spin.setRange(-500.0, 500.0)
+            spin.setDecimals(2)
+            spin.setSingleStep(1.0)
+            spin.setStyleSheet("QDoubleSpinBox { color: #ffffff; background-color: #3a3a3a; }")
+            spin.valueChanged.connect(self._update_ik_summary)
+            base_layout.addWidget(label, 0, idx * 2)
+            base_layout.addWidget(spin, 0, idx * 2 + 1)
+            self.ik_base_offset_spins[arm_name][axis_key] = spin
+        base_group.setLayout(base_layout)
+        container_layout.addWidget(base_group)
+
+        lengths_group = QGroupBox("Link lengths (mm)")
+        lengths_group.setStyleSheet("QGroupBox { color: #ffffff; font-size: 14px; }")
+        lengths_layout = QGridLayout()
+        lengths_layout.setSpacing(6)
+        link_fields = [
+            ("shoulder", "Shoulder"),
+            ("upper_arm", "Upper arm"),
+            ("forearm", "Forearm"),
+            ("wrist", "Wrist"),
+        ]
+        for row, (key, label_text) in enumerate(link_fields):
+            label = QLabel(f"{label_text}:")
+            label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 13px; }")
+            spin = QDoubleSpinBox()
+            spin.setRange(10.0, 600.0)
+            spin.setDecimals(1)
+            spin.setSingleStep(1.0)
+            spin.setStyleSheet("QDoubleSpinBox { color: #ffffff; background-color: #3a3a3a; }")
+            spin.valueChanged.connect(self._update_ik_summary)
+            lengths_layout.addWidget(label, row, 0)
+            lengths_layout.addWidget(spin, row, 1)
+            self.ik_link_length_spins[arm_name][key] = spin
+        lengths_group.setLayout(lengths_layout)
+        container_layout.addWidget(lengths_group)
+
+        tool_group = QGroupBox("Tool offset (mm)")
+        tool_group.setStyleSheet("QGroupBox { color: #ffffff; font-size: 14px; }")
+        tool_layout = QGridLayout()
+        tool_layout.setSpacing(6)
+        for idx, (axis_key, axis_label) in enumerate((("x", "X"), ("y", "Y"), ("z", "Z"))):
+            label = QLabel(f"{axis_label}:")
+            label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 13px; }")
+            spin = QDoubleSpinBox()
+            spin.setRange(-400.0, 400.0)
+            spin.setDecimals(2)
+            spin.setSingleStep(1.0)
+            spin.setStyleSheet("QDoubleSpinBox { color: #ffffff; background-color: #3a3a3a; }")
+            spin.valueChanged.connect(self._update_ik_summary)
+            tool_layout.addWidget(label, 0, idx * 2)
+            tool_layout.addWidget(spin, 0, idx * 2 + 1)
+            self.ik_tool_offset_spins[arm_name][axis_key] = spin
+        tool_group.setLayout(tool_layout)
+        container_layout.addWidget(tool_group)
+
+        joint_group = QGroupBox("Joint zero offsets (deg)")
+        joint_group.setStyleSheet("QGroupBox { color: #ffffff; font-size: 14px; }")
+        joint_layout = QGridLayout()
+        joint_layout.setSpacing(6)
+        for idx in range(6):
+            label = QLabel(f"J{idx + 1}:")
+            label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 13px; }")
+            spin = QDoubleSpinBox()
+            spin.setRange(-360.0, 360.0)
+            spin.setDecimals(2)
+            spin.setSingleStep(0.5)
+            spin.setStyleSheet("QDoubleSpinBox { color: #ffffff; background-color: #3a3a3a; }")
+            spin.valueChanged.connect(self._update_ik_summary)
+            row = idx // 3
+            col = (idx % 3) * 2
+            joint_layout.addWidget(label, row, col)
+            joint_layout.addWidget(spin, row, col + 1)
+            self.ik_joint_offset_spins[arm_name].append(spin)
+        joint_group.setLayout(joint_layout)
+        container_layout.addWidget(joint_group)
+
+        note = QLabel(
+            "Offsets are applied before solving; positive values follow the right-hand rule."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("QLabel { color: #9e9e9e; font-size: 12px; }")
+        container_layout.addWidget(note)
+
+        container_layout.addStretch()
+        return container
+
+    def _get_default_ik_config(self) -> dict:
+        """Return a deep copy of the default IK configuration."""
+        return deepcopy(DEFAULT_IK_CONFIG)
+
+    def _merge_ik_config(self, base_cfg: dict, override_cfg: Optional[dict]) -> dict:
+        """Merge an override configuration into a base IK config."""
+        merged = deepcopy(base_cfg)
+        if not override_cfg:
+            return merged
+
+        merged["enabled"] = override_cfg.get("enabled", merged["enabled"])
+        merged["debug_visualizer"] = override_cfg.get("debug_visualizer", merged["debug_visualizer"])
+        merged["active_arm"] = override_cfg.get("active_arm", merged["active_arm"])
+
+        solver_override = override_cfg.get("solver", {})
+        if solver_override:
+            for key, value in solver_override.items():
+                merged.setdefault("solver", {})[key] = value
+
+        arms_override = override_cfg.get("arms", {})
+        for arm_name, arm_default in list(merged.get("arms", {}).items()):
+            arm_override = arms_override.get(arm_name)
+            if not arm_override:
+                continue
+            if "base_offset_mm" in arm_override:
+                arm_default.setdefault("base_offset_mm", {}).update(arm_override["base_offset_mm"])
+            if "link_lengths_mm" in arm_override:
+                arm_default.setdefault("link_lengths_mm", {}).update(arm_override["link_lengths_mm"])
+            if "tool_offset_mm" in arm_override:
+                arm_default.setdefault("tool_offset_mm", {}).update(arm_override["tool_offset_mm"])
+            if "joint_offsets_deg" in arm_override:
+                offsets = list(arm_override.get("joint_offsets_deg", []))
+                # Ensure we keep six joints, padding with zeros as needed
+                while len(offsets) < 6:
+                    offsets.append(0.0)
+                arm_default["joint_offsets_deg"] = offsets[:6]
+
+        # Include any additional arms defined in override
+        for arm_name, arm_cfg in arms_override.items():
+            if arm_name not in merged["arms"]:
+                merged["arms"][arm_name] = deepcopy(arm_cfg)
+
+        return merged
+
+    def _apply_single_arm_config(self, arm_name: str, arm_cfg: dict) -> None:
+        """Populate UI fields for a single arm configuration."""
+        base_spins = self.ik_base_offset_spins.get(arm_name)
+        if base_spins:
+            for axis, spin in base_spins.items():
+                spin.setValue(float(arm_cfg.get("base_offset_mm", {}).get(axis, 0.0)))
+
+        link_spins = self.ik_link_length_spins.get(arm_name)
+        if link_spins:
+            for key, spin in link_spins.items():
+                spin.setValue(float(arm_cfg.get("link_lengths_mm", {}).get(key, spin.value())))
+
+        tool_spins = self.ik_tool_offset_spins.get(arm_name)
+        if tool_spins:
+            for axis, spin in tool_spins.items():
+                spin.setValue(float(arm_cfg.get("tool_offset_mm", {}).get(axis, 0.0)))
+
+        joint_spins = self.ik_joint_offset_spins.get(arm_name)
+        if joint_spins:
+            offsets = list(arm_cfg.get("joint_offsets_deg", []))
+            while len(offsets) < len(joint_spins):
+                offsets.append(0.0)
+            for idx, spin in enumerate(joint_spins):
+                spin.setValue(float(offsets[idx]))
+
+    def _apply_ik_config(self, ik_cfg: dict) -> None:
+        """Apply an IK configuration to the UI widgets."""
+        if not self.ik_arm_combo:
+            return
+
+        self.ik_enable_check.setChecked(ik_cfg.get("enabled", False))
+        self.ik_debug_check.setChecked(ik_cfg.get("debug_visualizer", False))
+
+        solver_cfg = ik_cfg.get("solver", {})
+        if self.ik_solver_iter_spin:
+            self.ik_solver_iter_spin.setValue(int(solver_cfg.get("max_iterations", DEFAULT_IK_CONFIG["solver"]["max_iterations"])))
+        if self.ik_solver_tol_spin:
+            self.ik_solver_tol_spin.setValue(float(solver_cfg.get("position_tolerance_mm", DEFAULT_IK_CONFIG["solver"]["position_tolerance_mm"])))
+        if self.ik_solver_damping_spin:
+            self.ik_solver_damping_spin.setValue(float(solver_cfg.get("damping_lambda", DEFAULT_IK_CONFIG["solver"]["damping_lambda"])))
+
+        for arm_name, arm_cfg in ik_cfg.get("arms", {}).items():
+            self._apply_single_arm_config(arm_name, arm_cfg)
+
+        active_arm = ik_cfg.get("active_arm", DEFAULT_IK_CONFIG["active_arm"])
+        index = self.ik_arm_combo.findData(active_arm)
+        if index == -1:
+            index = 0
+        self.ik_arm_combo.setCurrentIndex(index)
+        if self.ik_arm_stack:
+            self.ik_arm_stack.setCurrentIndex(index)
+
+        self._update_ik_summary()
+
+    def _collect_ik_arm_config(self, arm_name: str) -> dict:
+        """Collect arm configuration from UI widgets."""
+        base = {
+            axis: spin.value()
+            for axis, spin in self.ik_base_offset_spins.get(arm_name, {}).items()
+        }
+        links = {
+            key: spin.value()
+            for key, spin in self.ik_link_length_spins.get(arm_name, {}).items()
+        }
+        tool = {
+            axis: spin.value()
+            for axis, spin in self.ik_tool_offset_spins.get(arm_name, {}).items()
+        }
+        joints = [spin.value() for spin in self.ik_joint_offset_spins.get(arm_name, [])]
+
+        return {
+            "base_offset_mm": base,
+            "link_lengths_mm": links,
+            "tool_offset_mm": tool,
+            "joint_offsets_deg": joints,
+        }
+
+    def _on_ik_arm_changed(self, index: int) -> None:
+        """Handle arm selection changes."""
+        if self.ik_arm_stack is not None:
+            self.ik_arm_stack.setCurrentIndex(index)
+        self._update_ik_summary()
+
+    def _reset_current_arm_to_default(self) -> None:
+        """Reset the currently selected arm to default IK parameters."""
+        if not self.ik_arm_combo:
+            return
+
+        arm_name = self.ik_arm_combo.currentData()
+        if not arm_name:
+            return
+
+        defaults = self._get_default_ik_config()
+        arm_defaults = defaults.get("arms", {}).get(arm_name)
+        if not arm_defaults:
+            return
+
+        self._apply_single_arm_config(arm_name, arm_defaults)
+        self._update_ik_summary()
+
+        if self.status_label:
+            self.status_label.setText(f"↩️ {arm_name} defaults restored. Click Save to persist.")
+            self.status_label.setStyleSheet("QLabel { color: #FFB74D; font-size: 15px; padding: 8px; }")
+
+    def _update_ik_summary(self) -> None:
+        """Update the reach summary label."""
+        if not self.ik_reach_label or not self.ik_arm_combo:
+            return
+
+        arm_name = self.ik_arm_combo.currentData()
+        if not arm_name:
+            return
+
+        link_spins = self.ik_link_length_spins.get(arm_name)
+        tool_spins = self.ik_tool_offset_spins.get(arm_name)
+        base_spins = self.ik_base_offset_spins.get(arm_name)
+        if not link_spins or not tool_spins or not base_spins:
+            return
+
+        tool_z = tool_spins["z"].value() if "z" in tool_spins else 0.0
+        total_reach = sum(spin.value() for spin in link_spins.values()) + max(0.0, tool_z)
+        base_xyz = tuple(base_spins[axis].value() for axis in ("x", "y", "z"))
+        self.ik_reach_label.setText(
+            f"{arm_name}: reach≈{total_reach:.1f} mm • base=({base_xyz[0]:+.1f}, {base_xyz[1]:+.1f}, {base_xyz[2]:+.1f}) mm"
+        )
+
+    def run_ik_debug(self) -> None:
+        """Perform a lightweight IK configuration validation."""
+        if not self.ik_arm_combo:
+            return
+
+        arm_name = self.ik_arm_combo.currentData()
+        if not arm_name:
+            return
+
+        arm_cfg = self._collect_ik_arm_config(arm_name)
+        negative_links = [name for name, value in arm_cfg["link_lengths_mm"].items() if value <= 0]
+        if negative_links:
+            message = f"❌ Invalid link lengths for {arm_name}: {', '.join(negative_links)} must be > 0."
+            if self.status_label:
+                self.status_label.setText(message)
+                self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+            print(f"[IK] Validation failed for {arm_name}: {message}")
+            return
+
+        solver_iter = self.ik_solver_iter_spin.value() if self.ik_solver_iter_spin else DEFAULT_IK_CONFIG["solver"]["max_iterations"]
+        solver_tol = self.ik_solver_tol_spin.value() if self.ik_solver_tol_spin else DEFAULT_IK_CONFIG["solver"]["position_tolerance_mm"]
+        solver_damping = self.ik_solver_damping_spin.value() if self.ik_solver_damping_spin else DEFAULT_IK_CONFIG["solver"]["damping_lambda"]
+
+        total_reach = sum(arm_cfg["link_lengths_mm"].values()) + max(0.0, arm_cfg["tool_offset_mm"].get("z", 0.0))
+        base_norm = sum(v * v for v in arm_cfg["base_offset_mm"].values()) ** 0.5
+
+        message = (
+            f"✓ {arm_name} IK OK — reach≈{total_reach:.1f} mm, base offset |r|≈{base_norm:.1f} mm, "
+            f"iter={solver_iter}, tol={solver_tol:.3f} mm, damping={solver_damping:.3f}"
+        )
+
+        print(f"[IK] Debug summary: {message}")
+        if self.status_label:
+            self.status_label.setText(message)
+            self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+
     def create_safety_tab(self) -> QWidget:
         """Create safety settings tab"""
         widget = QWidget()
@@ -1581,7 +2071,11 @@ class SettingsTab(QWidget):
         self.teleop_port_edit.setText(self.config.get("teleop", {}).get("port", "/dev/ttyACM1"))
         self.position_tolerance_spin.setValue(self.config.get("robot", {}).get("position_tolerance", 10))
         self.position_verification_check.setChecked(self.config.get("robot", {}).get("position_verification_enabled", True))
-        
+
+        # IK settings
+        ik_cfg = self._merge_ik_config(self._get_default_ik_config(), self.config.get("ik"))
+        self._apply_ik_config(ik_cfg)
+
         # Camera settings
         front_cam = self.config.get("cameras", {}).get("front", {})
         wrist_cam = self.config.get("cameras", {}).get("wrist", {})
@@ -1647,7 +2141,25 @@ class SettingsTab(QWidget):
         if "teleop" not in self.config:
             self.config["teleop"] = {}
         self.config["teleop"]["port"] = self.teleop_port_edit.text()
-        
+
+        # IK settings
+        ik_config = {
+            "enabled": self.ik_enable_check.isChecked() if self.ik_enable_check else False,
+            "debug_visualizer": self.ik_debug_check.isChecked() if self.ik_debug_check else False,
+            "active_arm": self.ik_arm_combo.currentData() if self.ik_arm_combo else DEFAULT_IK_CONFIG["active_arm"],
+            "solver": {
+                "max_iterations": self.ik_solver_iter_spin.value() if self.ik_solver_iter_spin else DEFAULT_IK_CONFIG["solver"]["max_iterations"],
+                "position_tolerance_mm": self.ik_solver_tol_spin.value() if self.ik_solver_tol_spin else DEFAULT_IK_CONFIG["solver"]["position_tolerance_mm"],
+                "damping_lambda": self.ik_solver_damping_spin.value() if self.ik_solver_damping_spin else DEFAULT_IK_CONFIG["solver"]["damping_lambda"],
+            },
+            "arms": {},
+        }
+
+        for arm_name in self.ik_base_offset_spins.keys():
+            ik_config["arms"][arm_name] = self._collect_ik_arm_config(arm_name)
+
+        self.config["ik"] = ik_config
+
         # Camera settings
         if "cameras" not in self.config:
             self.config["cameras"] = {"front": {}, "wrist": {}}
@@ -1726,7 +2238,9 @@ class SettingsTab(QWidget):
         self.teleop_port_edit.setText("/dev/ttyACM1")
         self.position_tolerance_spin.setValue(10)
         self.position_verification_check.setChecked(True)
-        
+
+        self._apply_ik_config(self._get_default_ik_config())
+
         self.cam_front_edit.setText("/dev/video1")
         self.cam_wrist_edit.setText("/dev/video3")
         self.cam_width_spin.setValue(640)
