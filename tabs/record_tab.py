@@ -1302,14 +1302,23 @@ class RecordTab(QWidget):
         if not self.is_playing:
             print("[PLAYBACK] Stopped")
             return
-        
+
         if self.playback_index >= len(self.playback_actions):
             print(f"[PLAYBACK] ✅ COMPLETE")
-            
+
             # In loop mode, restart
             if self.play_loop:
                 print("[PLAYBACK] 🔁 LOOPING - keeping torque ON")
                 self.playback_index = 0
+                # Ensure the play button stays latched while looping
+                if not self.play_btn.isChecked():
+                    self.play_btn.blockSignals(True)
+                    self.play_btn.setChecked(True)
+                    self.play_btn.blockSignals(False)
+                # Reinforce playing state for any listeners relying on the signal
+                if not self.is_playing:
+                    self.is_playing = True
+                    self.playback_status.emit("playing")
                 self.status_label.setText("🔁 Looping...")
                 QTimer.singleShot(500, self.playback_step)
             else:
@@ -1456,10 +1465,11 @@ class RecordTab(QWidget):
         self.play_btn.setText("▶ PLAY")
         self.set_btn.setEnabled(True)
         self.save_btn.setEnabled(True)
-        
+        self.live_record_btn.setEnabled(True)
+
         # Clear row selection
         self.table.clearSelection()
-        
+
         # Ensure motor connection is closed (unless we're about to loop)
         if not self.play_loop:
             print("[PLAYBACK] Disconnecting motors")
