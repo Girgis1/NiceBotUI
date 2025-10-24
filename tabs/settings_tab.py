@@ -3,16 +3,18 @@ Settings Tab - Configuration Interface
 """
 
 import json
+import math
 import random
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QLineEdit, QScrollArea, QFrame, QSpinBox, QDoubleSpinBox,
-    QTabWidget, QCheckBox, QComboBox, QDialog
+    QTabWidget, QCheckBox, QComboBox, QDialog, QPlainTextEdit,
+    QStackedWidget
 )
 from PySide6.QtCore import Qt, Signal, QTimer
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtGui import QImage, QPixmap, QFont, QTextOption
 
 try:
     import cv2  # type: ignore
@@ -30,6 +32,53 @@ except ImportError:  # pragma: no cover - optional dependency
     YOLO = None
 
 from utils.camera_hub import CameraStreamHub
+
+
+IK_DEFAULTS: Dict[str, Dict[str, Dict[str, float]]] = {
+    "so100": {
+        "link_lengths": {
+            "base_height_mm": 105.0,
+            "shoulder_length_mm": 165.0,
+            "elbow_length_mm": 180.0,
+            "wrist_length_mm": 120.0,
+            "tool_length_mm": 85.0,
+        },
+        "joint_limits_deg": {
+            "base_yaw": (-180.0, 180.0),
+            "shoulder_pitch": (-45.0, 135.0),
+            "elbow_pitch": (-135.0, 135.0),
+            "wrist_pitch": (-150.0, 150.0),
+            "wrist_roll": (-180.0, 180.0),
+            "wrist_yaw": (-180.0, 180.0),
+        },
+    },
+    "so101": {
+        "link_lengths": {
+            "base_height_mm": 120.0,
+            "shoulder_length_mm": 180.0,
+            "elbow_length_mm": 195.0,
+            "wrist_length_mm": 135.0,
+            "tool_length_mm": 95.0,
+        },
+        "joint_limits_deg": {
+            "base_yaw": (-180.0, 180.0),
+            "shoulder_pitch": (-50.0, 140.0),
+            "elbow_pitch": (-140.0, 140.0),
+            "wrist_pitch": (-150.0, 150.0),
+            "wrist_roll": (-180.0, 180.0),
+            "wrist_yaw": (-180.0, 180.0),
+        },
+    },
+}
+
+IK_TARGET_DEFAULT = {
+    "x_mm": 260.0,
+    "y_mm": 0.0,
+    "z_mm": 220.0,
+    "roll_deg": 0.0,
+    "pitch_deg": 45.0,
+    "yaw_deg": 0.0,
+}
 
 
 class HandDetectionTestDialog(QDialog):
@@ -446,7 +495,11 @@ class SettingsTab(QWidget):
         # Policy tab
         policy_tab = self.create_policy_tab()
         self.tab_widget.addTab(policy_tab, "🧠 Policy")
-        
+
+        # IK tab
+        ik_tab = self.create_ik_tab()
+        self.tab_widget.addTab(ik_tab, "🦾 IK")
+
         # Control tab
         control_tab = self.create_control_tab()
         self.tab_widget.addTab(control_tab, "🎮 Control")
@@ -1059,10 +1112,10 @@ class SettingsTab(QWidget):
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)  # No margins
         layout.setSpacing(6)  # Compact spacing
-        
+
         self.policy_base_edit = self.add_setting_row(layout, "Base Path:", "/home/daniel/lerobot/outputs/train")
         self.policy_device_edit = self.add_setting_row(layout, "Device:", "cuda")
-        
+
         # Execution mode toggle
         mode_section = QLabel("Execution Mode:")
         mode_section.setStyleSheet("QLabel { color: #e0e0e0; font-size: 16px; font-weight: bold; padding: 10px 0 5px 0; }")
@@ -1095,7 +1148,520 @@ class SettingsTab(QWidget):
         
         self.async_host_edit = self.add_setting_row(layout, "Server Host:", "127.0.0.1")
         self.async_port_spin = self.add_spinbox_row(layout, "Server Port:", 1024, 65535, 8080)
-        
+
+        layout.addStretch()
+        return widget
+
+    def _build_ik_model_form(self, model_key: str, display_name: str) -> QWidget:
+        """Create configuration pane for a specific IK arm model."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        link_title = QLabel(f"{display_name} Link Geometry (mm)")
+        link_title.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; font-weight: bold; padding: 4px 0; }")
+        layout.addWidget(link_title)
+
+        link_spins: Dict[str, QDoubleSpinBox] = {}
+        defaults = IK_DEFAULTS.get(model_key, {})
+        link_defaults = defaults.get("link_lengths", {})
+
+        for key, label_text in [
+            ("base_height_mm", "Base Height"),
+            ("shoulder_length_mm", "Shoulder Length"),
+            ("elbow_length_mm", "Elbow Length"),
+            ("wrist_length_mm", "Wrist Length"),
+            ("tool_length_mm", "Tool Length"),
+        ]:
+            row = QHBoxLayout()
+            row.setSpacing(6)
+            lbl = QLabel(f"{label_text}:")
+            lbl.setStyleSheet("QLabel { color: #e0e0e0; font-size: 14px; min-width: 150px; }")
+            row.addWidget(lbl)
+
+            spin = QDoubleSpinBox()
+            spin.setRange(0.0, 800.0)
+            spin.setDecimals(1)
+            spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
+            spin.setMinimumHeight(42)
+            spin.setValue(link_defaults.get(key, 0.0))
+            spin.setStyleSheet("""
+                QDoubleSpinBox {
+                    background-color: #505050;
+                    color: #ffffff;
+                    border: 2px solid #707070;
+                    border-radius: 8px;
+                    padding: 8px;
+                    font-size: 14px;
+                }
+                QDoubleSpinBox:focus {
+                    border-color: #4CAF50;
+                    background-color: #555555;
+                }
+            """)
+            spin.setSuffix(" mm")
+            row.addWidget(spin)
+            row.addStretch()
+            layout.addLayout(row)
+            link_spins[key] = spin
+
+        joint_title = QLabel(f"{display_name} Joint Limits (°)")
+        joint_title.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; font-weight: bold; padding: 6px 0 2px 0; }")
+        layout.addWidget(joint_title)
+
+        joint_limits: Dict[str, Tuple[QDoubleSpinBox, QDoubleSpinBox]] = {}
+        limit_defaults = defaults.get("joint_limits_deg", {})
+
+        for key, label_text in [
+            ("base_yaw", "Base Yaw"),
+            ("shoulder_pitch", "Shoulder Pitch"),
+            ("elbow_pitch", "Elbow Pitch"),
+            ("wrist_pitch", "Wrist Pitch"),
+            ("wrist_yaw", "Wrist Yaw"),
+            ("wrist_roll", "Wrist Roll"),
+        ]:
+            row = QHBoxLayout()
+            row.setSpacing(6)
+            lbl = QLabel(f"{label_text}:")
+            lbl.setStyleSheet("QLabel { color: #e0e0e0; font-size: 14px; min-width: 150px; }")
+            row.addWidget(lbl)
+
+            min_spin = QDoubleSpinBox()
+            min_spin.setRange(-360.0, 360.0)
+            min_spin.setDecimals(1)
+            min_spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
+            min_spin.setMinimumHeight(42)
+            min_spin.setStyleSheet("""
+                QDoubleSpinBox {
+                    background-color: #505050;
+                    color: #ffffff;
+                    border: 2px solid #707070;
+                    border-radius: 8px;
+                    padding: 8px;
+                    font-size: 14px;
+                }
+                QDoubleSpinBox:focus {
+                    border-color: #4CAF50;
+                    background-color: #555555;
+                }
+            """)
+            min_spin.setValue(limit_defaults.get(key, (-180.0, 180.0))[0])
+            min_spin.setSuffix("°")
+            row.addWidget(min_spin)
+
+            max_spin = QDoubleSpinBox()
+            max_spin.setRange(-360.0, 360.0)
+            max_spin.setDecimals(1)
+            max_spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
+            max_spin.setMinimumHeight(42)
+            max_spin.setStyleSheet("""
+                QDoubleSpinBox {
+                    background-color: #505050;
+                    color: #ffffff;
+                    border: 2px solid #707070;
+                    border-radius: 8px;
+                    padding: 8px;
+                    font-size: 14px;
+                }
+                QDoubleSpinBox:focus {
+                    border-color: #4CAF50;
+                    background-color: #555555;
+                }
+            """)
+            max_spin.setValue(limit_defaults.get(key, (-180.0, 180.0))[1])
+            max_spin.setSuffix("°")
+            row.addWidget(max_spin)
+            row.addStretch()
+
+            joint_limits[key] = (min_spin, max_spin)
+            layout.addLayout(row)
+
+        info = QLabel(
+            "Joint limits are enforced when computing solutions. Adjust to match calibration data from the robot."
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet("QLabel { color: #909090; font-size: 12px; padding: 2px 4px; }")
+        layout.addWidget(info)
+
+        layout.addSpacing(6)
+        layout.addStretch()
+
+        self.ik_model_spinboxes[model_key] = link_spins
+        self.ik_joint_limit_spinboxes[model_key] = joint_limits
+
+        return widget
+
+    def _on_ik_model_changed(self, index: int) -> None:
+        """Switch between SO-100 and SO-101 forms."""
+        self.ik_model_stack.setCurrentIndex(index)
+        model_key = self.ik_arm_combo.currentData()
+        self.ik_status_label.setText(f"Editing parameters for {self.ik_arm_combo.currentText()}")
+        self.ik_status_label.setStyleSheet("QLabel { color: #b0b0b0; font-size: 13px; padding: 4px 0; }")
+        for key, value in IK_TARGET_DEFAULT.items():
+            if key in self.ik_target_spinboxes and abs(self.ik_target_spinboxes[key].value()) < 1e-6:
+                self.ik_target_spinboxes[key].setValue(value)
+
+    def _apply_ik_defaults(self, model_key: str) -> None:
+        """Apply default link lengths and joint limits for a model."""
+        defaults = IK_DEFAULTS.get(model_key, {})
+        link_defaults = defaults.get("link_lengths", {})
+        for key, spin in self.ik_model_spinboxes.get(model_key, {}).items():
+            spin.setValue(link_defaults.get(key, spin.value()))
+
+        limit_defaults = defaults.get("joint_limits_deg", {})
+        for key, spins in self.ik_joint_limit_spinboxes.get(model_key, {}).items():
+            default_pair = limit_defaults.get(key)
+            if isinstance(default_pair, tuple) and len(default_pair) == 2:
+                min_val, max_val = default_pair
+            else:
+                min_val, max_val = spins[0].value(), spins[1].value()
+            spins[0].setValue(min_val)
+            spins[1].setValue(max_val)
+
+    def reset_ik_model_defaults(self) -> None:
+        """Reset the currently selected model to its defaults."""
+        model_key = self.ik_arm_combo.currentData()
+        if not model_key:
+            return
+        self._apply_ik_defaults(model_key)
+        self.ik_status_label.setText(f"✓ Reset {self.ik_arm_combo.currentText()} defaults")
+        self.ik_status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 13px; padding: 4px 0; }")
+
+    def randomize_ik_target(self) -> None:
+        """Generate a reachable random target pose for quick testing."""
+        model_key = self.ik_arm_combo.currentData()
+        link_spins = self.ik_model_spinboxes.get(model_key)
+        if not link_spins:
+            return
+
+        base_height = link_spins["base_height_mm"].value()
+        l1 = link_spins["shoulder_length_mm"].value()
+        l2 = link_spins["elbow_length_mm"].value()
+        l3 = link_spins["wrist_length_mm"].value()
+        tool = link_spins["tool_length_mm"].value()
+
+        wrist_offset = l3 + tool
+        reach = max(120.0, l1 + l2 + wrist_offset - 20.0)
+        planar = random.uniform(100.0, reach)
+        theta = random.uniform(-math.pi, math.pi)
+        x = planar * math.cos(theta)
+        y = planar * math.sin(theta)
+        z = base_height + random.uniform(-50.0, 260.0)
+
+        self.ik_target_spinboxes["x_mm"].setValue(x)
+        self.ik_target_spinboxes["y_mm"].setValue(y)
+        self.ik_target_spinboxes["z_mm"].setValue(z)
+        self.ik_target_spinboxes["roll_deg"].setValue(random.uniform(-30.0, 30.0))
+        self.ik_target_spinboxes["pitch_deg"].setValue(random.uniform(10.0, 90.0))
+        self.ik_target_spinboxes["yaw_deg"].setValue(random.uniform(-90.0, 90.0))
+
+        self.ik_status_label.setText("🎲 Generated random pose for testing")
+        self.ik_status_label.setStyleSheet("QLabel { color: #FF9800; font-size: 13px; padding: 4px 0; }")
+
+    def _compute_ik_solutions(
+        self,
+        lengths: Dict[str, float],
+        joint_limits: Dict[str, Tuple[float, float]],
+        pose: Dict[str, float],
+    ) -> Tuple[List[Dict[str, Union[str, Dict[str, float], Dict[str, bool]]]], Dict[str, float]]:
+        """Compute analytic IK solutions for a 3-link spherical arm."""
+        x = pose.get("x_mm", 0.0)
+        y = pose.get("y_mm", 0.0)
+        z = pose.get("z_mm", 0.0)
+        roll = pose.get("roll_deg", 0.0)
+        pitch = pose.get("pitch_deg", 0.0)
+        yaw = pose.get("yaw_deg", 0.0)
+
+        base_height = lengths.get("base_height_mm", 0.0)
+        l1 = lengths.get("shoulder_length_mm", 0.0)
+        l2 = lengths.get("elbow_length_mm", 0.0)
+        l3 = lengths.get("wrist_length_mm", 0.0)
+        tool = lengths.get("tool_length_mm", 0.0)
+
+        planar_distance = math.hypot(x, y)
+        wrist_offset = l3 + tool
+        effective_radius = max(planar_distance - wrist_offset, 0.0)
+        vertical_offset = z - base_height
+        distance_to_target = math.hypot(effective_radius, vertical_offset)
+        reach_min = abs(l1 - l2)
+        reach_max = l1 + l2
+
+        cos_elbow = 0.0
+        reachable = True
+        if reach_max == 0:
+            reachable = False
+        else:
+            raw_cos = (distance_to_target ** 2 - l1 ** 2 - l2 ** 2) / (2 * l1 * l2 if l1 and l2 else 1.0)
+            cos_elbow = max(-1.0, min(1.0, raw_cos))
+            if distance_to_target > reach_max + 1e-6 or distance_to_target < reach_min - 1e-6:
+                reachable = False
+
+        sin_component = math.sqrt(max(0.0, 1 - cos_elbow ** 2))
+        base_yaw = math.degrees(math.atan2(y, x)) if planar_distance > 1e-6 else 0.0
+
+        solutions: List[Dict[str, Union[str, Dict[str, float], Dict[str, bool]]]] = []
+        for elbow_sign, label in [(1.0, "Elbow Up"), (-1.0, "Elbow Down")]:
+            elbow_angle = math.degrees(math.atan2(elbow_sign * sin_component, cos_elbow))
+            shoulder_angle = math.degrees(
+                math.atan2(vertical_offset, effective_radius if effective_radius > 1e-6 else 1e-6)
+                - math.atan2(elbow_sign * l2 * sin_component, l1 + l2 * cos_elbow)
+            )
+            wrist_pitch = pitch - shoulder_angle - elbow_angle
+            wrist_yaw = yaw - base_yaw
+            wrist_roll = roll
+
+            joints = {
+                "base_yaw": base_yaw,
+                "shoulder_pitch": shoulder_angle,
+                "elbow_pitch": elbow_angle,
+                "wrist_pitch": wrist_pitch,
+                "wrist_yaw": wrist_yaw,
+                "wrist_roll": wrist_roll,
+            }
+
+            within_limits = {}
+            for key, (limit_min, limit_max) in joint_limits.items():
+                value = joints.get(key, 0.0)
+                within_limits[key] = limit_min <= value <= limit_max
+
+            solutions.append({
+                "label": label,
+                "joints": joints,
+                "within_limits": within_limits,
+            })
+
+        debug_info = {
+            "planar_distance": planar_distance,
+            "wrist_offset": wrist_offset,
+            "effective_radius": effective_radius,
+            "vertical_offset": vertical_offset,
+            "distance_to_target": distance_to_target,
+            "reach_min": reach_min,
+            "reach_max": reach_max,
+            "reachable": reachable,
+        }
+
+        return solutions, debug_info
+
+    def solve_ik_pose(self) -> None:
+        """Solve IK for the configured arm and update the preview."""
+        model_key = self.ik_arm_combo.currentData()
+        link_spins = self.ik_model_spinboxes.get(model_key)
+        joint_spins = self.ik_joint_limit_spinboxes.get(model_key)
+        if not link_spins or not joint_spins:
+            self.ik_status_label.setText("❌ IK configuration incomplete")
+            self.ik_status_label.setStyleSheet("QLabel { color: #f44336; font-size: 13px; padding: 4px 0; }")
+            return
+
+        lengths = {key: spin.value() for key, spin in link_spins.items()}
+        joint_limits = {key: (spins[0].value(), spins[1].value()) for key, spins in joint_spins.items()}
+        pose = {key: spin.value() for key, spin in self.ik_target_spinboxes.items()}
+
+        solutions, debug_info = self._compute_ik_solutions(lengths, joint_limits, pose)
+
+        lines: List[str] = []
+        lines.append(f"Model: {self.ik_arm_combo.currentText()} ({model_key.upper()})")
+        lines.append(
+            "Target Pose: X={x_mm:.1f}mm  Y={y_mm:.1f}mm  Z={z_mm:.1f}mm  Roll={roll_deg:.1f}°  Pitch={pitch_deg:.1f}°  Yaw={yaw_deg:.1f}°".format(
+                **pose
+            )
+        )
+        lines.append(
+            f"Planar Distance: {debug_info['planar_distance']:.1f} mm | Wrist Offset: {debug_info['wrist_offset']:.1f} mm | Effective Radius: {debug_info['effective_radius']:.1f} mm"
+        )
+        lines.append(
+            f"Vertical Offset: {debug_info['vertical_offset']:.1f} mm | Distance to Target: {debug_info['distance_to_target']:.1f} mm"
+        )
+        lines.append(
+            f"Reach Envelope: {debug_info['reach_min']:.1f} mm – {debug_info['reach_max']:.1f} mm"
+        )
+        if not debug_info["reachable"]:
+            lines.append("⚠️ Target lies outside nominal reach – results are clamped to the closest analytic solution.")
+
+        joint_labels = [
+            ("base_yaw", "Base Yaw"),
+            ("shoulder_pitch", "Shoulder Pitch"),
+            ("elbow_pitch", "Elbow Pitch"),
+            ("wrist_pitch", "Wrist Pitch"),
+            ("wrist_yaw", "Wrist Yaw"),
+            ("wrist_roll", "Wrist Roll"),
+        ]
+
+        for solution in solutions:
+            lines.append("")
+            lines.append(f"Solution: {solution['label']}")
+            joints: Dict[str, float] = solution["joints"]  # type: ignore[assignment]
+            within_limits: Dict[str, bool] = solution["within_limits"]  # type: ignore[assignment]
+            for key, label in joint_labels:
+                value = joints.get(key, 0.0)
+                limit = joint_limits.get(key)
+                status_icon = "✓" if within_limits.get(key, True) else "⚠"
+                limit_text = ""
+                if limit:
+                    limit_text = f"[{limit[0]:.1f}, {limit[1]:.1f}]°"
+                lines.append(f"  {label:<14}: {value:8.2f}°  {status_icon} {limit_text}")
+
+        self.ik_result_preview.setPlainText("\n".join(lines))
+
+        if debug_info["reachable"] and all(all(sol["within_limits"].values()) for sol in solutions):
+            self.ik_status_label.setText("✓ IK solution found within joint limits")
+            self.ik_status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 13px; padding: 4px 0; }")
+        elif debug_info["reachable"]:
+            self.ik_status_label.setText("⚠️ IK solution exceeds at least one joint limit")
+            self.ik_status_label.setStyleSheet("QLabel { color: #FF9800; font-size: 13px; padding: 4px 0; }")
+        else:
+            self.ik_status_label.setText("⚠️ Target outside reach envelope – review geometry")
+            self.ik_status_label.setStyleSheet("QLabel { color: #FF5722; font-size: 13px; padding: 4px 0; }")
+
+    def create_ik_tab(self) -> QWidget:
+        """Create inverse kinematics debug tab."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        header = QLabel("🦾 SO-100 / SO-101 IK Setup")
+        header.setStyleSheet("QLabel { color: #4CAF50; font-size: 18px; font-weight: bold; padding: 4px 0; }")
+        layout.addWidget(header)
+
+        description = QLabel(
+            "Configure arm geometry, inspect joint limits, and run quick IK solves to validate reachability."
+        )
+        description.setWordWrap(True)
+        description.setStyleSheet("QLabel { color: #b0b0b0; font-size: 13px; padding-bottom: 4px; }")
+        layout.addWidget(description)
+
+        self.ik_model_spinboxes: Dict[str, Dict[str, QDoubleSpinBox]] = {}
+        self.ik_joint_limit_spinboxes: Dict[str, Dict[str, Tuple[QDoubleSpinBox, QDoubleSpinBox]]] = {}
+
+        model_row = QHBoxLayout()
+        model_label = QLabel("Arm Model:")
+        model_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 14px; min-width: 110px; }")
+        model_row.addWidget(model_label)
+
+        self.ik_arm_combo = QComboBox()
+        self.ik_arm_combo.addItem("SO-100 Arm", "so100")
+        self.ik_arm_combo.addItem("SO-101 Arm", "so101")
+        self.ik_arm_combo.setStyleSheet("QComboBox { background-color: #505050; color: #ffffff; padding: 8px; font-size: 14px; }")
+        self.ik_arm_combo.currentIndexChanged.connect(self._on_ik_model_changed)
+        model_row.addWidget(self.ik_arm_combo)
+        model_row.addStretch()
+        layout.addLayout(model_row)
+
+        self.ik_model_stack = QStackedWidget()
+        for label, key in [("SO-100", "so100"), ("SO-101", "so101")]:
+            self.ik_model_stack.addWidget(self._build_ik_model_form(key, label))
+        layout.addWidget(self.ik_model_stack)
+
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setStyleSheet("QFrame { color: #606060; background-color: #606060; max-height: 2px; }")
+        layout.addWidget(separator)
+
+        pose_header = QLabel("🎯 Target Pose (mm / °)")
+        pose_header.setStyleSheet("QLabel { color: #4CAF50; font-size: 16px; font-weight: bold; padding: 4px 0; }")
+        layout.addWidget(pose_header)
+
+        self.ik_target_spinboxes: Dict[str, QDoubleSpinBox] = {}
+
+        def make_pose_spin(label_text: str, minimum: float, maximum: float, suffix: str = "") -> QDoubleSpinBox:
+            spin = QDoubleSpinBox()
+            spin.setRange(minimum, maximum)
+            spin.setDecimals(2)
+            spin.setValue(0.0)
+            spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
+            spin.setMinimumHeight(45)
+            spin.setStyleSheet("""
+                QDoubleSpinBox {
+                    background-color: #505050;
+                    color: #ffffff;
+                    border: 2px solid #707070;
+                    border-radius: 8px;
+                    padding: 8px;
+                    font-size: 14px;
+                }
+                QDoubleSpinBox:focus {
+                    border-color: #4CAF50;
+                    background-color: #555555;
+                }
+            """)
+            if suffix:
+                spin.setSuffix(suffix)
+            spin.setToolTip(label_text)
+            return spin
+
+        cartesian_row = QHBoxLayout()
+        for key, label_text in [("x_mm", "X (mm)"), ("y_mm", "Y (mm)"), ("z_mm", "Z (mm)")]:
+            column = QVBoxLayout()
+            lbl = QLabel(label_text)
+            lbl.setStyleSheet("QLabel { color: #e0e0e0; font-size: 14px; padding-bottom: 2px; }")
+            column.addWidget(lbl)
+            spin = make_pose_spin(label_text, -500.0, 800.0, " mm")
+            self.ik_target_spinboxes[key] = spin
+            column.addWidget(spin)
+            cartesian_row.addLayout(column)
+        cartesian_row.addStretch()
+        layout.addLayout(cartesian_row)
+
+        orientation_row = QHBoxLayout()
+        for key, label_text in [("roll_deg", "Roll (°)"), ("pitch_deg", "Pitch (°)"), ("yaw_deg", "Yaw (°)")]:
+            column = QVBoxLayout()
+            lbl = QLabel(label_text)
+            lbl.setStyleSheet("QLabel { color: #e0e0e0; font-size: 14px; padding-bottom: 2px; }")
+            column.addWidget(lbl)
+            spin = make_pose_spin(label_text, -360.0, 360.0, "°")
+            self.ik_target_spinboxes[key] = spin
+            column.addWidget(spin)
+            orientation_row.addLayout(column)
+        orientation_row.addStretch()
+        layout.addLayout(orientation_row)
+
+        for key, value in IK_TARGET_DEFAULT.items():
+            if key in self.ik_target_spinboxes:
+                self.ik_target_spinboxes[key].setValue(value)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch()
+
+        self.ik_random_pose_btn = QPushButton("🎲 Random Pose")
+        self.ik_random_pose_btn.setStyleSheet(self.get_button_style("#FF9800", "#F57C00"))
+        self.ik_random_pose_btn.setFixedHeight(45)
+        self.ik_random_pose_btn.clicked.connect(self.randomize_ik_target)
+        button_row.addWidget(self.ik_random_pose_btn)
+
+        self.ik_reset_model_btn = QPushButton("Reset Model Defaults")
+        self.ik_reset_model_btn.setStyleSheet(self.get_button_style("#757575", "#616161"))
+        self.ik_reset_model_btn.setFixedHeight(45)
+        self.ik_reset_model_btn.clicked.connect(self.reset_ik_model_defaults)
+        button_row.addWidget(self.ik_reset_model_btn)
+
+        self.ik_solve_btn = QPushButton("✅ Solve IK")
+        self.ik_solve_btn.setStyleSheet(self.get_button_style("#4CAF50", "#388E3C"))
+        self.ik_solve_btn.setFixedHeight(45)
+        self.ik_solve_btn.clicked.connect(self.solve_ik_pose)
+        button_row.addWidget(self.ik_solve_btn)
+
+        layout.addLayout(button_row)
+
+        self.ik_status_label = QLabel("Ready to solve IK")
+        self.ik_status_label.setStyleSheet("QLabel { color: #b0b0b0; font-size: 13px; padding: 4px 0; }")
+        layout.addWidget(self.ik_status_label)
+
+        self.ik_result_preview = QPlainTextEdit()
+        self.ik_result_preview.setReadOnly(True)
+        self.ik_result_preview.setMinimumHeight(220)
+        self.ik_result_preview.setWordWrapMode(QTextOption.NoWrap)
+        self.ik_result_preview.setFont(QFont("Courier New", 11))
+        self.ik_result_preview.setStyleSheet(
+            "QPlainTextEdit { background-color: #2a2a2a; color: #e0e0e0; border: 2px solid #444444; border-radius: 8px; padding: 10px; }"
+        )
+        self.ik_result_preview.setPlainText("Set a target pose and click 'Solve IK' to view computed joint angles.")
+        layout.addWidget(self.ik_result_preview)
+
+        for model_key in list(self.ik_model_spinboxes.keys()):
+            self._apply_ik_defaults(model_key)
+
         layout.addStretch()
         return widget
     
@@ -1608,7 +2174,42 @@ class SettingsTab(QWidget):
         self.warmup_spin.setValue(control_cfg.get("warmup_time_s", 3.0))
         self.reset_time_spin.setValue(control_cfg.get("reset_time_s", 8.0))
         self.display_data_check.setChecked(control_cfg.get("display_data", True))
-        
+
+        # IK settings
+        ik_cfg = self.config.get("ik", {})
+        selected_model = ik_cfg.get("arm_model", "so100")
+        model_index = self.ik_arm_combo.findData(selected_model)
+        if model_index != -1:
+            self.ik_arm_combo.setCurrentIndex(model_index)
+        else:
+            self.ik_arm_combo.setCurrentIndex(0)
+
+        for model_key, link_spins in self.ik_model_spinboxes.items():
+            model_cfg = ik_cfg.get(model_key, {})
+            link_cfg = model_cfg.get("link_lengths", {})
+            for key, spin in link_spins.items():
+                spin.setValue(link_cfg.get(key, IK_DEFAULTS.get(model_key, {}).get("link_lengths", {}).get(key, spin.value())))
+
+            limit_cfg = model_cfg.get("joint_limits_deg", {})
+            for joint_key, spins in self.ik_joint_limit_spinboxes.get(model_key, {}).items():
+                pair = limit_cfg.get(joint_key)
+                if isinstance(pair, list) and len(pair) == 2:
+                    spins[0].setValue(pair[0])
+                    spins[1].setValue(pair[1])
+                elif isinstance(pair, tuple) and len(pair) == 2:
+                    spins[0].setValue(pair[0])
+                    spins[1].setValue(pair[1])
+                else:
+                    defaults = IK_DEFAULTS.get(model_key, {}).get("joint_limits_deg", {}).get(joint_key)
+                    if isinstance(defaults, tuple) and len(defaults) == 2:
+                        spins[0].setValue(defaults[0])
+                        spins[1].setValue(defaults[1])
+
+        pose_cfg = ik_cfg.get("target_pose", {})
+        for key, spin in self.ik_target_spinboxes.items():
+            default_val = IK_TARGET_DEFAULT.get(key, spin.value())
+            spin.setValue(pose_cfg.get(key, default_val))
+
         # UI settings
         ui_cfg = self.config.get("ui", {})
         self.object_gate_check.setChecked(ui_cfg.get("object_gate", False))
@@ -1681,7 +2282,23 @@ class SettingsTab(QWidget):
         self.config["control"]["warmup_time_s"] = self.warmup_spin.value()
         self.config["control"]["reset_time_s"] = self.reset_time_spin.value()
         self.config["control"]["display_data"] = self.display_data_check.isChecked()
-        
+
+        # IK settings
+        if "ik" not in self.config:
+            self.config["ik"] = {}
+        selected_model = self.ik_arm_combo.currentData()
+        if selected_model:
+            self.config["ik"]["arm_model"] = selected_model
+        for model_key, link_spins in self.ik_model_spinboxes.items():
+            model_cfg = self.config["ik"].setdefault(model_key, {})
+            model_cfg["link_lengths"] = {key: spin.value() for key, spin in link_spins.items()}
+            joint_limits: Dict[str, Tuple[QDoubleSpinBox, QDoubleSpinBox]] = self.ik_joint_limit_spinboxes.get(model_key, {})
+            model_cfg["joint_limits_deg"] = {
+                key: [spins[0].value(), spins[1].value()]
+                for key, spins in joint_limits.items()
+            }
+        self.config["ik"]["target_pose"] = {key: spin.value() for key, spin in self.ik_target_spinboxes.items()}
+
         # UI settings
         if "ui" not in self.config:
             self.config["ui"] = {}
@@ -1745,6 +2362,13 @@ class SettingsTab(QWidget):
         self.reset_time_spin.setValue(8.0)
         self.display_data_check.setChecked(True)
         self.object_gate_check.setChecked(False)
+
+        for model_key in self.ik_model_spinboxes.keys():
+            self._apply_ik_defaults(model_key)
+        for key, value in IK_TARGET_DEFAULT.items():
+            if key in self.ik_target_spinboxes:
+                self.ik_target_spinboxes[key].setValue(value)
+        self.ik_arm_combo.setCurrentIndex(0)
 
         self.motor_temp_monitor_check.setChecked(False)
         self.motor_temp_threshold_spin.setValue(75)
