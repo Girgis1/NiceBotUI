@@ -373,7 +373,247 @@ class DashboardTab(QWidget):
         self.throbber_update_timer = QTimer()
         self.throbber_update_timer.timeout.connect(self.update_throbber_progress)
         self.throbber_update_timer.start(100)
-    
+
+    def _add_log_entry(self, message: str, level: str = "info") -> None:
+        """Append a formatted message to the dashboard log."""
+        if not message:
+            return
+
+        icons = {
+            "info": "ℹ️",
+            "warning": "⚠️",
+            "error": "❌",
+            "success": "✅",
+            "vision": "👀",
+        }
+
+        icon = icons.get(level, icons["info"])
+        text = message.strip()
+        if not text:
+            return
+
+        entry = f"{icon} {text}" if icon else text
+        self.log_text.append(entry)
+        self.log_text.verticalScrollBar().setValue(
+            self.log_text.verticalScrollBar().maximum()
+        )
+
+    def _translate_log_message(self, level: str, message: str) -> Optional[Tuple[str, str]]:
+        """Convert worker log messages into user-friendly dashboard messages."""
+        text = (message or "").strip()
+        if not text:
+            return None
+
+        normalized = text.lower()
+
+        # Skip low-level diagnostic noise
+        skip_phrases = [
+            "launching client:",
+            "traceback",
+            "[lerobot]",
+            "output reading error",
+            "force killing process",
+            "point ",
+            "positions",
+            "progress%",
+            "[{",
+            "===",
+            "→",
+            "total steps",
+            "step types",
+            "step complete",
+            "loop iteration",
+            "playing",
+            "waiting for vision trigger",
+            "holding position",
+            "hold position",
+            "cleaning up",
+            "policy server for",
+            "waypoints",
+            "episode",
+            "eval folder",
+            "delay ",
+        ]
+        for phrase in skip_phrases:
+            if phrase in normalized:
+                return None
+
+        # Friendly translations
+        if "starting policy server" in normalized:
+            return ("info", "Preparing robot control software...")
+        if "policy server ready" in normalized:
+            return ("success", "Robot control software is ready.")
+        if "policy server stopped" in normalized:
+            return ("info", "Robot control software has stopped.")
+        if "policy server failed" in normalized or "failed to start policy server" in normalized:
+            return (
+                "error",
+                "Couldn't start the robot control software. Check the terminal for more details.",
+            )
+        if "starting robot client" in normalized:
+            return ("info", "Connecting to the robot...")
+        if "robot client failed" in normalized:
+            return (
+                "error",
+                "The robot client failed to start. Make sure the robot is powered and connected.",
+            )
+        if "run completed successfully" in normalized or "model execution completed" in normalized:
+            return ("success", "Run completed successfully.")
+        if "episode completed successfully" in normalized:
+            return ("success", "Episode completed successfully.")
+        if "stopped by user" in normalized or "stopping by user" in normalized:
+            return ("info", "Run cancelled by user.")
+        if "execution stopped by user" in normalized:
+            return ("info", "Run cancelled by user.")
+        if "execution error" in normalized:
+            return (
+                "error",
+                "Something went wrong during the run. Check the terminal for details and try again.",
+            )
+        if "model execution failed" in normalized:
+            return (
+                "error",
+                "The model run failed. Review the terminal output for the exact error and try again.",
+            )
+        if "process exited with code" in normalized:
+            return (
+                "error",
+                "The run stopped unexpectedly. Review the terminal for more information.",
+            )
+        if "monitor error" in normalized:
+            return (
+                "error",
+                "Robot monitor encountered a problem. Restart the run and check connections.",
+            )
+        if normalized.startswith("loading model"):
+            return ("info", "Loading the selected model...")
+        if normalized.startswith("loading recording"):
+            return ("info", "Loading the selected action...")
+        if normalized.startswith("loading sequence"):
+            return ("info", "Loading the selected sequence...")
+        if normalized.startswith("executing ") and "steps" in normalized:
+            return ("info", text.replace("Executing", "Running", 1))
+        if "sequence not found" in normalized:
+            return (
+                "error",
+                "Sequence not found. Verify it exists in the Sequence tab and try again.",
+            )
+        if "recording not found" in normalized:
+            return (
+                "error",
+                "Action not found. Confirm it exists in the Actions tab and try again.",
+            )
+        if "model not found" in normalized:
+            return (
+                "error",
+                "Model files are missing. Check the model folder and settings.",
+            )
+        if "connecting to motors" in normalized:
+            return ("info", "Connecting to the robot motors...")
+        if "failed to connect to motors" in normalized:
+            return (
+                "error",
+                "Couldn't connect to the robot motors. Ensure the robot is powered and the USB cable is secure.",
+            )
+        if "no permission to access" in normalized:
+            return (
+                "error",
+                "Permission denied while accessing the robot port. Adjust device permissions and try again.",
+            )
+        if "failed to reach home" in normalized:
+            return (
+                "error",
+                "The robot didn't reach the home position. Check for obstacles and try again.",
+            )
+        if normalized.startswith("returning to home position") or "moving to home position" in normalized:
+            return ("info", "Moving the robot to the home position...")
+        if "reached home position" in normalized:
+            return ("success", "Robot is at the home position.")
+        if "safety]" in normalized:
+            body = text.replace("[SAFETY]", "").strip()
+            if "emergency" in body.lower():
+                return (
+                    "error",
+                    "Safety stop activated. Clear the workspace and reset the system to continue.",
+                )
+            if "workspace clear" in body.lower():
+                return (
+                    "info",
+                    "Safety check is complete. Restart the run when ready.",
+                )
+            if "failed to initialize" in body.lower():
+                return (
+                    "error",
+                    "Safety monitor could not start. Verify camera connections and try again.",
+                )
+            if "safety monitoring disabled" in body.lower():
+                return (
+                    "warning",
+                    "Safety monitoring is turned off in settings.",
+                )
+            if "no cameras configured" in body.lower():
+                return (
+                    "warning",
+                    "No safety cameras are configured. Add them in Settings for monitoring.",
+                )
+            if "safety monitor initialized" in body.lower():
+                return ("info", "Safety monitoring is active.")
+            if "failed to start monitor" in body.lower() or "failed to stop monitor" in body.lower():
+                return (
+                    "error",
+                    "Safety monitor encountered an issue. Check camera connections and retry.",
+                )
+            return ("info", body)
+
+        if "using local mode" in normalized:
+            return ("info", "Running directly from this computer.")
+        if "using server mode" in normalized:
+            return ("info", "Running using the NiceBot server.")
+        if "pausing shared camera streams" in normalized:
+            return ("info", "Pausing shared camera streams during the model run.")
+        if "resumed shared camera streams" in normalized:
+            return ("info", "Camera streams resumed.")
+        if "failed to cleanup eval folders" in normalized:
+            return (
+                "warning",
+                "Could not clean up temporary files. You can remove them manually later.",
+            )
+        if "vision step has no zones configured" in normalized:
+            return (
+                "warning",
+                "A vision step has no zones configured. Open the Vision tab to add zones.",
+            )
+        if "camera '" in normalized and "unavailable in hub" in normalized:
+            return (
+                "warning",
+                "A vision camera is unavailable. Check the camera connection and settings.",
+            )
+        if "camera" in normalized and "unavailable" in normalized and "demo feed" in normalized:
+            return (
+                "warning",
+                "Camera feed not available. Showing a demo preview instead.",
+            )
+        if "vision trigger confirmed" in normalized:
+            friendly = text[0].upper() + text[1:] if text else "Vision trigger confirmed"
+            if not friendly.endswith("."):
+                friendly += "."
+            return ("vision", friendly)
+        if "vision step skipped due to error" in normalized:
+            return (
+                "warning",
+                "A vision step was skipped because of an error. Review the vision configuration.",
+            )
+
+        if text.startswith("✓"):
+            return ("success", text.lstrip("✓ "))
+
+        # Default fallback based on level
+        if level == "critical":
+            level = "error"
+
+        friendly_level = level if level in {"info", "warning", "error", "success"} else "info"
+        return (friendly_level, text)
+
     def init_ui(self):
         """Initialize UI - same as original app.py"""
         layout = QVBoxLayout(self)
@@ -788,8 +1028,7 @@ class DashboardTab(QWidget):
         self._refresh_active_camera_label()
 
         # Welcome message
-        self.log_text.append("=== NICE LABS Robotics ===")
-        self.log_text.append("Dashboard ready. Select Record or Sequence tabs to get started.")
+        self._add_log_entry("NiceBot dashboard is ready. Choose an Action, Model, or Sequence to begin.", "success")
 
         # Populate run selector
         self.refresh_run_selector()
@@ -898,8 +1137,10 @@ class DashboardTab(QWidget):
         self._refresh_loop_button()
         control_cfg = self.config.setdefault("control", {})
         control_cfg["loop_enabled"] = checked
-        state_text = "Loop enabled" if checked else "Loop disabled"
-        self.log_text.append(f"[info] {state_text}")
+        if checked:
+            self._add_log_entry("Loop mode is on. The run will restart automatically.")
+        else:
+            self._add_log_entry("Loop mode is off. The run will stop after one pass.")
 
     def on_speed_slider_changed(self, value: int):
         aligned = max(10, min(120, 5 * round(value / 5)))
@@ -978,7 +1219,10 @@ class DashboardTab(QWidget):
         if self.camera_view_active:
             return
         if cv2 is None:
-            self.log_text.append("[warning] Camera preview unavailable (OpenCV missing)")
+            self._add_log_entry(
+                "Live camera preview is unavailable on this device. Install the camera software to enable previews.",
+                "warning",
+            )
             self.camera_toggle_btn.blockSignals(True)
             self.camera_toggle_btn.setChecked(False)
             self.camera_toggle_btn.blockSignals(False)
@@ -1347,7 +1591,7 @@ class DashboardTab(QWidget):
     def start_run(self):
         """Start robot run - unified execution for models, recordings, and sequences"""
         if self.is_running:
-            self.log_text.append("[warning] Already running")
+            self._add_log_entry("A run is already in progress. Please stop it before starting another.", "warning")
             return
 
         # Get selected item
@@ -1361,41 +1605,47 @@ class DashboardTab(QWidget):
             self.update_camera_previews(force=True)
         
         if selected.startswith("--"):
-            self.log_text.append("[warning] No item selected")
+            self._add_log_entry("Select a Model, Sequence, or Action before pressing Start.", "warning")
             self.start_stop_btn.setChecked(False)
             return
-        
+
         # Parse selection
         execution_type, execution_name = self._parse_run_selection(selected)
-        
+
         if not execution_type or not execution_name:
-            self.log_text.append("[error] Invalid selection")
+            self._add_log_entry("We couldn't read that selection. Please choose an item from the list.", "error")
             self.start_stop_btn.setChecked(False)
             return
-        
+
         # Update UI
         self.start_stop_btn.setText("STOP")
         self.is_running = True
         self.start_time = datetime.now()
         self.timer.start(1000)  # Update elapsed time every second
-        
-        self.log_text.append(f"[info] Starting {execution_type}: {execution_name}")
-        self.log_text.append(f"[info] Speed override {int(self.master_speed * 100)}%")
+
+        type_labels = {
+            "model": "model",
+            "recording": "action",
+            "sequence": "sequence",
+        }
+        friendly_type = type_labels.get(execution_type, execution_type)
+        self._add_log_entry(f"Starting {friendly_type} “{execution_name}”.")
+        self._add_log_entry(f"Speed set to {int(self.master_speed * 100)}% for this run.")
         self.action_label.setText(f"Starting {execution_type}...")
-        
+
         # Handle models based on execution mode
         if execution_type == "model":
             local_mode = self.config.get("policy", {}).get("local_mode", True)
-            
+
             if local_mode:
                 # Local mode: Use ExecutionWorker (which uses lerobot-record)
-                self.log_text.append("[info] Using local mode (lerobot-record)")
+                self._add_log_entry("Running directly from this computer.")
                 # Get checkpoint and episode settings from UI
                 checkpoint_name = self.checkpoint_combo.currentData() if self.checkpoint_combo.isVisible() else "last"
-                
+
                 if self.loop_enabled:
                     num_episodes = -1  # Infinite loop
-                    self.log_text.append("[info] Loop mode enabled (∞ episodes)")
+                    self._add_log_entry("Loop mode is on. This model will repeat until you stop it.")
                 else:
                     num_episodes = 1
 
@@ -1406,7 +1656,7 @@ class DashboardTab(QWidget):
                 })
             else:
                 # Server mode: Use RobotWorker (async inference)
-                self.log_text.append("[info] Using server mode (async inference)")
+                self._add_log_entry("Running using the NiceBot server.")
                 self._start_model_execution(execution_name)
         else:
             # For recordings and sequences, use ExecutionWorker
@@ -1421,17 +1671,19 @@ class DashboardTab(QWidget):
         try:
             train_dir = Path(self.config["policy"].get("base_path", ""))
             checkpoint_path = train_dir / model_name / "checkpoints" / checkpoint_name / "pretrained_model"
-            
+
             # Update config for this run
             model_config = self.config.copy()
             model_config.setdefault("control", {})["speed_multiplier"] = self.master_speed
             model_config["policy"]["path"] = str(checkpoint_path)
-            
-            self.log_text.append(f"[info] Loading model: {checkpoint_path}")
-            
+
+            self._add_log_entry(
+                f"Loading model “{model_name}” (checkpoint: {checkpoint_name})."
+            )
+
             # Stop any existing worker first
             if self.worker and self.worker.isRunning():
-                self.log_text.append("[warning] Stopping previous worker...")
+                self._add_log_entry("Stopping the previous model run...", "warning")
                 self.worker.stop()
                 self.worker.wait(2000)
             
@@ -1450,8 +1702,12 @@ class DashboardTab(QWidget):
             
         except Exception as e:
             import traceback
-            self.log_text.append(f"[error] Failed to start model: {e}")
-            self.log_text.append(f"[error] Traceback: {traceback.format_exc()}")
+            self._add_log_entry(
+                "Couldn't start the model. Check that the files are present and try again.",
+                "error",
+            )
+            print("Failed to start model:", e)
+            print(traceback.format_exc())
             self._reset_ui_after_run()
     
     def _start_execution_worker(self, execution_type: str, execution_name: str, options: dict = None):
@@ -1488,10 +1744,11 @@ class DashboardTab(QWidget):
             loop: Whether to loop the sequence
         """
         if self.is_running:
-            self.log_text.append("[warning] Already running, please stop first")
+            self._add_log_entry("A run is already in progress. Please stop it before starting another.", "warning")
             return
         
-        self.log_text.append(f"[info] Starting sequence: {sequence_name} (loop={loop})")
+        loop_text = " (repeats)" if loop else ""
+        self._add_log_entry(f"Starting sequence “{sequence_name}”{loop_text}.")
 
         # Update UI state
         self.is_running = True
@@ -1509,7 +1766,7 @@ class DashboardTab(QWidget):
         if not self.is_running:
             return
         
-        self.log_text.append("[info] Stopping...")
+        self._add_log_entry("Stopping the current run...")
         self.action_label.setText("Stopping...")
         
         # Stop execution worker (for recordings/sequences)
@@ -1565,9 +1822,10 @@ class DashboardTab(QWidget):
 
         message = detail
         if countdown is not None:
-            message = f"{detail} • {countdown}s"
+            message = detail.split("•")[0].strip()
         if metric is not None and state == "triggered":
-            message = f"{detail} • metric={metric:.3f}"
+            message = detail.split("•")[0].strip()
+        message = message or state.replace("_", " ").title()
 
         if state in {"idle", "watching", "triggered"}:
             self._vision_state_active = True
@@ -1579,17 +1837,30 @@ class DashboardTab(QWidget):
 
         self.action_label.setText(message)
 
-        signature = (state, countdown, tuple(zones))
+        signature = (state, tuple(zones))
         if signature != self._last_vision_signature:
-            log_message = message
+            zone_suffix = ""
             if zones:
                 zone_list = ", ".join(zones)
-                log_message = f"{message} [{zone_list}]"
-            self.log_text.append(f"[vision] {log_message}")
-            self.log_text.verticalScrollBar().setValue(
-                self.log_text.verticalScrollBar().maximum()
-            )
-            self._last_vision_signature = signature
+                zone_suffix = f" (Zone {zone_list})"
+
+            friendly_message = None
+            level = "vision"
+            cleaned = message.capitalize()
+
+            if state == "triggered":
+                friendly_message = f"Vision alert: {cleaned}{zone_suffix}."
+            elif state == "error":
+                friendly_message = f"Vision error: {cleaned}{zone_suffix}. Check the camera connection and settings."
+                level = "error"
+            elif state == "complete":
+                friendly_message = f"Vision check complete{zone_suffix}."
+            elif state == "clear":
+                friendly_message = f"Vision reset{zone_suffix}."
+
+            if friendly_message:
+                self._add_log_entry(friendly_message, level)
+                self._last_vision_signature = signature
 
     def _on_status_update(self, status: str):
         """Handle status update from worker"""
@@ -1600,11 +1871,11 @@ class DashboardTab(QWidget):
 
     def _on_log_message(self, level: str, message: str):
         """Handle log message from worker"""
-        self.log_text.append(f"[{level}] {message}")
-        # Auto-scroll to bottom
-        self.log_text.verticalScrollBar().setValue(
-            self.log_text.verticalScrollBar().maximum()
-        )
+        translation = self._translate_log_message(level, message)
+        if not translation:
+            return
+        friendly_level, friendly_message = translation
+        self._add_log_entry(friendly_message, friendly_level)
     
     def _on_progress_update(self, current: int, total: int):
         """Handle progress update from worker"""
@@ -1638,8 +1909,10 @@ class DashboardTab(QWidget):
     
     def _on_execution_completed(self, success: bool, summary: str):
         """Handle execution completion (for recordings/sequences)"""
-        self.log_text.append(f"[info] {'✓' if success else '✗'} {summary}")
-        
+        message_text = summary or ("Run completed successfully." if success else "Run ended with an error.")
+        level = "success" if success else "error"
+        self._add_log_entry(message_text, level)
+
         if success:
             self.action_label.setText("✓ Completed")
         else:
@@ -1654,16 +1927,19 @@ class DashboardTab(QWidget):
     def _on_model_completed(self, success: bool, summary: str):
         """Handle model execution completion"""
         try:
-            self.log_text.append(f"[info] {'✓' if success else '✗'} {summary}")
-            
+            message_text = summary or ("Model completed successfully." if success else "Model run ended with an error.")
+            level = "success" if success else "error"
+            self._add_log_entry(message_text, level)
+
             if success:
                 self.action_label.setText("✓ Model completed")
             else:
                 self.action_label.setText("✗ Model failed")
                 # Show user-friendly message
-                self.log_text.append("[info] Check robot connection and policy path")
+                self._add_log_entry("Check the robot connection and the model path, then try again.", "warning")
         except Exception as e:
-            self.log_text.append(f"[error] Error handling completion: {e}")
+            self._add_log_entry("We couldn't update the completion status. See the terminal for details.", "error")
+            print("Error handling completion:", e)
         finally:
             # Always reset UI, even if there's an error
             self._reset_ui_after_run()
@@ -1679,12 +1955,15 @@ class DashboardTab(QWidget):
     def _on_worker_thread_finished(self):
         """Handle worker thread finished (cleanup)"""
         try:
-            self.log_text.append("[debug] Worker thread finished")
             # Give worker time to clean up
             if self.worker:
                 self.worker.deleteLater()
         except Exception as e:
-            self.log_text.append(f"[error] Error in thread cleanup: {e}")
+            self._add_log_entry(
+                "Background cleanup encountered a problem. Restart the app if the issue continues.",
+                "warning",
+            )
+            print("Error in thread cleanup:", e)
     
     def _reset_ui_after_run(self):
         """Reset UI state after run completes or stops"""
@@ -1721,17 +2000,25 @@ class DashboardTab(QWidget):
                     # Let Qt handle the cleanup
                     self.worker.deleteLater()
                 except Exception as e:
-                    self.log_text.append(f"[warning] Worker cleanup: {e}")
+                    self._add_log_entry(
+                        "Background cleanup took longer than expected. Restart the app if the robot stops responding.",
+                        "warning",
+                    )
+                    print("Worker cleanup warning:", e)
                 finally:
                     self.worker = None
         except Exception as e:
-            self.log_text.append(f"[error] Error resetting UI: {e}")
+            self._add_log_entry(
+                "We couldn't fully reset the dashboard. Restart the app if controls look incorrect.",
+                "error",
+            )
+            print("Error resetting UI:", e)
     
     def go_home(self):
         """Go to home position"""
         self.action_label.setText("Moving to home...")
-        self.log_text.append("[info] Moving to home position...")
-        self.log_text.append(f"[info] Speed override {int(self.master_speed * 100)}%")
+        self._add_log_entry("Moving the robot to the home position.")
+        self._add_log_entry(f"Speed set to {int(self.master_speed * 100)}% for this move.")
 
         try:
             env = os.environ.copy()
@@ -1743,16 +2030,24 @@ class DashboardTab(QWidget):
                 timeout=30,
                 env=env
             )
-            
+
             if result.returncode == 0:
                 self.action_label.setText("✓ At home position")
-                self.log_text.append("[info] ✓ Home position reached")
+                self._add_log_entry("Robot is at the home position.", "success")
             else:
                 self.action_label.setText("⚠️ Home failed")
-                self.log_text.append(f"[error] Home failed: {result.stderr}")
+                self._add_log_entry(
+                    "Home move failed. Check the robot connection and clear the workspace, then try again.",
+                    "error",
+                )
+                print("Home command failed:", result.stderr)
         except Exception as e:
             self.action_label.setText("⚠️ Home error")
-            self.log_text.append(f"[error] Home error: {e}")
+            self._add_log_entry(
+                "We couldn't move to the home position. Check the robot and try again.",
+                "error",
+            )
+            print("Home command error:", e)
     
     def run_from_dashboard(self):
         """Execute the selected RUN item (same as pressing START)"""
@@ -1838,8 +2133,8 @@ class DashboardTab(QWidget):
     
     def on_discovery_log(self, message: str):
         """Handle discovery log messages from device manager
-        
+
         Args:
             message: Log message to display
         """
-        self.log_text.append(f"[info] {message}")
+        self._add_log_entry(message)
