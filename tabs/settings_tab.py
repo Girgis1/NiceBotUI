@@ -365,17 +365,44 @@ class SettingsTab(QWidget):
         self.config = config
         self.config_path = Path(__file__).parent.parent / "config.json"
         self.device_manager = device_manager
-        
+
         # Device status tracking (synced with device_manager)
         self.robot_status = "empty"          # empty/online/offline
         self.camera_front_status = "empty"   # empty/online/offline
         self.camera_wrist_status = "empty"   # empty/online/offline
-        
+
         # Status circle widgets (will be set during init_ui)
         self.robot_status_circle = None
         self.camera_front_circle = None
         self.camera_wrist_circle = None
-        
+
+        # IK preset metadata and widget storage
+        self.ik_presets: Dict[str, Dict[str, float]] = {
+            "SO-100": {
+                "base_height_mm": 105.0,
+                "shoulder_offset_mm": 32.0,
+                "upper_arm_length_mm": 185.0,
+                "forearm_length_mm": 210.0,
+                "wrist_offset_mm": 95.0,
+                "tool_length_mm": 60.0,
+                "elbow_offset_mm": 0.0,
+            },
+            "SO-101": {
+                "base_height_mm": 110.0,
+                "shoulder_offset_mm": 28.0,
+                "upper_arm_length_mm": 200.0,
+                "forearm_length_mm": 230.0,
+                "wrist_offset_mm": 105.0,
+                "tool_length_mm": 70.0,
+                "elbow_offset_mm": 5.0,
+            },
+        }
+        self._loading_ik = False
+        self.ik_spins: Dict[str, QDoubleSpinBox] = {}
+        self.ik_arm_combo: Optional[QComboBox] = None
+        self.ik_summary_label: Optional[QLabel] = None
+        self.ik_debug_output: Optional[QLabel] = None
+
         self.init_ui()
         self.load_settings()
         
@@ -450,6 +477,10 @@ class SettingsTab(QWidget):
         # Control tab
         control_tab = self.create_control_tab()
         self.tab_widget.addTab(control_tab, "🎮 Control")
+
+        # IK tab
+        ik_tab = self.create_ik_tab()
+        self.tab_widget.addTab(ik_tab, "🦾 IK")
 
         # Safety tab
         safety_tab = self.create_safety_tab()
@@ -1123,6 +1154,94 @@ class SettingsTab(QWidget):
         layout.addStretch()
         return widget
 
+    def create_ik_tab(self) -> QWidget:
+        """Create inverse kinematics configuration tab"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        header = QLabel("SO-Series IK Setup")
+        header.setStyleSheet("QLabel { color: #4CAF50; font-size: 18px; font-weight: bold; }")
+        layout.addWidget(header)
+
+        description = QLabel(
+            "Tune the geometric parameters used by the IK solver for the SO-100 and SO-101 arms. "
+            "Select a preset and adjust any link lengths or offsets before running a quick reachability check."
+        )
+        description.setWordWrap(True)
+        description.setStyleSheet("QLabel { color: #e0e0e0; font-size: 14px; }")
+        layout.addWidget(description)
+
+        combo_row = QHBoxLayout()
+        combo_label = QLabel("Arm Model:")
+        combo_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 160px; }")
+        combo_row.addWidget(combo_label)
+
+        self.ik_arm_combo = QComboBox()
+        self.ik_arm_combo.addItem("SO-100 Arm", "SO-100")
+        self.ik_arm_combo.addItem("SO-101 Arm", "SO-101")
+        self.ik_arm_combo.currentIndexChanged.connect(self.on_ik_model_changed)
+        combo_row.addWidget(self.ik_arm_combo, stretch=1)
+
+        self.ik_load_preset_btn = QPushButton("Load Preset")
+        self.ik_load_preset_btn.setMinimumWidth(130)
+        self.ik_load_preset_btn.setStyleSheet(self.get_button_style("#9C27B0", "#7B1FA2"))
+        self.ik_load_preset_btn.clicked.connect(self.on_ik_load_preset_clicked)
+        combo_row.addWidget(self.ik_load_preset_btn)
+
+        layout.addLayout(combo_row)
+
+        section_label = QLabel("Link Lengths & Offsets (mm)")
+        section_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 16px; font-weight: bold; margin-top: 4px; }")
+        layout.addWidget(section_label)
+
+        self.ik_spins = {
+            "base_height_mm": self.add_doublespinbox_row(layout, "Base Height:", 0.0, 400.0, 105.0),
+            "shoulder_offset_mm": self.add_doublespinbox_row(layout, "Shoulder Offset:", 0.0, 200.0, 32.0),
+            "upper_arm_length_mm": self.add_doublespinbox_row(layout, "Upper Arm Length:", 50.0, 400.0, 185.0),
+            "forearm_length_mm": self.add_doublespinbox_row(layout, "Forearm Length:", 50.0, 400.0, 210.0),
+            "wrist_offset_mm": self.add_doublespinbox_row(layout, "Wrist Offset:", 0.0, 200.0, 95.0),
+            "tool_length_mm": self.add_doublespinbox_row(layout, "Tool Length:", 0.0, 200.0, 60.0),
+            "elbow_offset_mm": self.add_doublespinbox_row(layout, "Elbow Offset:", -50.0, 50.0, 0.0),
+        }
+
+        for spin in self.ik_spins.values():
+            spin.setDecimals(1)
+            spin.setSingleStep(1.0)
+            spin.valueChanged.connect(self.update_ik_summary)
+
+        self.ik_summary_label = QLabel("Select an arm preset to view reach estimates.")
+        self.ik_summary_label.setWordWrap(True)
+        self.ik_summary_label.setStyleSheet(
+            "QLabel { color: #e0e0e0; font-size: 14px; padding: 6px; border-radius: 6px; "
+            "background-color: #3f3f3f; border: 1px solid #555555; }"
+        )
+        layout.addWidget(self.ik_summary_label)
+
+        debug_row = QHBoxLayout()
+        debug_row.addStretch()
+        self.ik_debug_btn = QPushButton("Run IK Debug")
+        self.ik_debug_btn.setMinimumHeight(45)
+        self.ik_debug_btn.setStyleSheet(self.get_button_style("#FF9800", "#F57C00"))
+        self.ik_debug_btn.clicked.connect(self.run_ik_debug_check)
+        debug_row.addWidget(self.ik_debug_btn)
+        layout.addLayout(debug_row)
+
+        self.ik_debug_output = QLabel(
+            "Press \"Run IK Debug\" to compute reach and compare against the active preset."
+        )
+        self.ik_debug_output.setWordWrap(True)
+        self.ik_debug_output.setAlignment(Qt.AlignTop)
+        self.ik_debug_output.setStyleSheet(
+            "QLabel { color: #d0d0d0; font-size: 13px; padding: 10px; border-radius: 6px; "
+            "background-color: #2f2f2f; border: 1px dashed #666666; }"
+        )
+        layout.addWidget(self.ik_debug_output)
+
+        layout.addStretch()
+        return widget
+
     def create_safety_tab(self) -> QWidget:
         """Create safety settings tab"""
         widget = QWidget()
@@ -1456,7 +1575,124 @@ class SettingsTab(QWidget):
 
         layout.addStretch()
         return widget
-    
+
+    def get_active_arm_model(self) -> str:
+        """Return the currently selected arm identifier."""
+        if self.ik_arm_combo is None:
+            return "SO-100"
+        data = self.ik_arm_combo.currentData()
+        return str(data) if data else "SO-100"
+
+    def set_ik_values(self, values: Dict[str, float]) -> None:
+        """Populate IK spin boxes with the provided values."""
+        for key, spin in self.ik_spins.items():
+            target = values.get(key)
+            if spin is None or target is None:
+                continue
+            spin.blockSignals(True)
+            spin.setValue(float(target))
+            spin.blockSignals(False)
+        self.update_ik_summary()
+
+    def apply_ik_preset(self, arm_model: str) -> None:
+        """Apply stored preset values for the requested arm."""
+        preset = self.ik_presets.get(arm_model)
+        if not preset:
+            return
+        self.set_ik_values(preset)
+        if self.ik_debug_output:
+            self.ik_debug_output.setText(
+                f"{arm_model} preset loaded. Adjust the dimensions if your hardware differs, then run the debug check."
+            )
+
+    def on_ik_model_changed(self, index: int) -> None:  # pylint: disable=unused-argument
+        """Handle arm selection changes."""
+        if self._loading_ik:
+            return
+        arm_model = self.get_active_arm_model()
+        self.apply_ik_preset(arm_model)
+
+    def on_ik_load_preset_clicked(self) -> None:
+        """Manually reload the preset for the current arm."""
+        arm_model = self.get_active_arm_model()
+        self.apply_ik_preset(arm_model)
+
+    def get_current_ik_params(self) -> Dict[str, float]:
+        """Collect the IK parameter values from the UI."""
+        params = {key: spin.value() for key, spin in self.ik_spins.items()}
+        params["arm_model"] = self.get_active_arm_model()
+        return params
+
+    def update_ik_summary(self) -> None:
+        """Update the compact summary banner for IK settings."""
+        if self.ik_summary_label is None:
+            return
+        params = self.get_current_ik_params()
+        reach = (
+            params.get("shoulder_offset_mm", 0.0)
+            + params.get("upper_arm_length_mm", 0.0)
+            + params.get("forearm_length_mm", 0.0)
+            + params.get("wrist_offset_mm", 0.0)
+            + params.get("tool_length_mm", 0.0)
+        )
+        preset = self.ik_presets.get(params["arm_model"], {})
+        is_custom = any(
+            abs(params.get(name, 0.0) - float(preset.get(name, params.get(name, 0.0)))) > 0.05
+            for name in self.ik_spins.keys()
+        )
+        status = "Customized" if is_custom else "Preset"
+        summary = (
+            f"{params['arm_model']} • Total reach ≈ {reach:.1f} mm | "
+            f"Base height {params.get('base_height_mm', 0.0):.1f} mm | "
+            f"Elbow offset {params.get('elbow_offset_mm', 0.0):.1f} mm | {status} values"
+        )
+        self.ik_summary_label.setText(summary)
+
+    def run_ik_debug_check(self) -> None:
+        """Summarize the IK configuration to assist with quick validation."""
+        if self.ik_debug_output is None:
+            return
+        params = self.get_current_ik_params()
+        reach = (
+            params.get("shoulder_offset_mm", 0.0)
+            + params.get("upper_arm_length_mm", 0.0)
+            + params.get("forearm_length_mm", 0.0)
+            + params.get("wrist_offset_mm", 0.0)
+            + params.get("tool_length_mm", 0.0)
+        )
+        preset = self.ik_presets.get(params["arm_model"], {})
+        labels = {
+            "base_height_mm": "Base height",
+            "shoulder_offset_mm": "Shoulder offset",
+            "upper_arm_length_mm": "Upper arm",
+            "forearm_length_mm": "Forearm",
+            "wrist_offset_mm": "Wrist",
+            "tool_length_mm": "Tool",
+            "elbow_offset_mm": "Elbow offset",
+        }
+        lines = [
+            f"Arm: {params['arm_model']}",
+            f"Estimated planar reach: {reach:.1f} mm",
+            "",
+            "Link metrics:",
+        ]
+        for key, label in labels.items():
+            value = params.get(key, 0.0)
+            preset_value = preset.get(key)
+            if preset_value is None:
+                delta_text = ""
+            else:
+                delta = value - float(preset_value)
+                delta_text = " (preset)" if abs(delta) <= 0.05 else f" (Δ {delta:+.1f} mm)"
+            lines.append(f"- {label}: {value:.1f} mm{delta_text}")
+
+        clearance = reach - params.get("base_height_mm", 0.0)
+        lines.append("")
+        lines.append(f"Approx. horizontal clearance from base: {clearance:.1f} mm")
+        lines.append("Use these numbers to confirm the solver matches your physical hardware.")
+
+        self.ik_debug_output.setText("\n".join(lines))
+
     def add_setting_row(self, layout: QVBoxLayout, label_text: str, default_value: str) -> QLineEdit:
         """Add a text input setting row"""
         row = QHBoxLayout()
@@ -1608,7 +1844,30 @@ class SettingsTab(QWidget):
         self.warmup_spin.setValue(control_cfg.get("warmup_time_s", 3.0))
         self.reset_time_spin.setValue(control_cfg.get("reset_time_s", 8.0))
         self.display_data_check.setChecked(control_cfg.get("display_data", True))
-        
+
+        # IK settings
+        ik_cfg = self.config.get("ik", {})
+        arm_model = str(ik_cfg.get("arm_model", "SO-100"))
+        self._loading_ik = True
+        if self.ik_arm_combo is not None:
+            self.ik_arm_combo.blockSignals(True)
+            index = self.ik_arm_combo.findData(arm_model)
+            if index == -1:
+                index = 0
+            self.ik_arm_combo.setCurrentIndex(index)
+            self.ik_arm_combo.blockSignals(False)
+        active_model = self.get_active_arm_model()
+        if ik_cfg:
+            values = {
+                key: float(ik_cfg.get(key, self.ik_presets.get(active_model, {}).get(key, 0.0)))
+                for key in self.ik_spins.keys()
+            }
+            self.set_ik_values(values)
+        else:
+            self.apply_ik_preset(active_model)
+        self._loading_ik = False
+        self.update_ik_summary()
+
         # UI settings
         ui_cfg = self.config.get("ui", {})
         self.object_gate_check.setChecked(ui_cfg.get("object_gate", False))
@@ -1681,7 +1940,16 @@ class SettingsTab(QWidget):
         self.config["control"]["warmup_time_s"] = self.warmup_spin.value()
         self.config["control"]["reset_time_s"] = self.reset_time_spin.value()
         self.config["control"]["display_data"] = self.display_data_check.isChecked()
-        
+
+        # IK settings
+        if "ik" not in self.config:
+            self.config["ik"] = {}
+        ik_params = self.get_current_ik_params()
+        arm_model = ik_params.pop("arm_model", "SO-100")
+        self.config["ik"]["arm_model"] = arm_model
+        for key, value in ik_params.items():
+            self.config["ik"][key] = value
+
         # UI settings
         if "ui" not in self.config:
             self.config["ui"] = {}
@@ -1745,6 +2013,15 @@ class SettingsTab(QWidget):
         self.reset_time_spin.setValue(8.0)
         self.display_data_check.setChecked(True)
         self.object_gate_check.setChecked(False)
+
+        if self.ik_arm_combo is not None:
+            self.ik_arm_combo.blockSignals(True)
+            index = self.ik_arm_combo.findData("SO-100")
+            if index == -1:
+                index = 0
+            self.ik_arm_combo.setCurrentIndex(index)
+            self.ik_arm_combo.blockSignals(False)
+        self.apply_ik_preset("SO-100")
 
         self.motor_temp_monitor_check.setChecked(False)
         self.motor_temp_threshold_spin.setValue(75)
