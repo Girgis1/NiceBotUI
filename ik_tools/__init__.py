@@ -1,5 +1,6 @@
-"""Inverse kinematics tooling for SO-series arms."""
+"""Public entry points for IK tooling."""
 
-from .panel import IKToolDialog
+from .panel import IKToolDialog, IKToolWidget
+from .solver import IKSolver
 
-__all__ = ["IKToolDialog"]
+__all__ = ["IKToolDialog", "IKToolWidget", "IKSolver"]

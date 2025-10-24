@@ -30,7 +30,7 @@ except ImportError:  # pragma: no cover - optional dependency
     YOLO = None
 
 from utils.camera_hub import CameraStreamHub
-from ik_tools import IKToolDialog
+from ik_tools import IKToolWidget
 
 
 class HandDetectionTestDialog(QDialog):
@@ -455,6 +455,10 @@ class SettingsTab(QWidget):
         control_tab = self.wrap_tab(self.create_control_tab())
         self.tab_widget.addTab(control_tab, "🎮 Control")
 
+        # IK tab
+        ik_tab = self.wrap_tab(IKToolWidget(self.config, self))
+        self.tab_widget.addTab(ik_tab, "🦾 IK")
+
         # Safety tab
         safety_tab = self.wrap_tab(self.create_safety_tab())
         self.tab_widget.addTab(safety_tab, "🛡️ Safety")
@@ -483,7 +487,6 @@ class SettingsTab(QWidget):
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
         self._status_default_style = "QLabel { color: #4CAF50; font-size: 14px; padding: 6px; }"
-        self._status_info_style = "QLabel { color: #909090; font-size: 14px; padding: 6px; }"
         self.status_label.setStyleSheet(self._status_default_style)
         self.status_label.setAlignment(Qt.AlignCenter)
         main_layout.addWidget(self.status_label)
@@ -725,16 +728,6 @@ class SettingsTab(QWidget):
         
         self.teleop_port_edit = self.add_setting_row(layout, "Teleop Port:", "/dev/ttyACM1")
         
-        ik_row = QHBoxLayout()
-        ik_row.setSpacing(6)
-        ik_row.addSpacing(20)
-        self.open_ik_btn = QPushButton("🦾 Open IK Tools")
-        self.open_ik_btn.setFixedHeight(44)
-        self.open_ik_btn.setStyleSheet(self.get_button_style("#673AB7", "#512DA8"))
-        self.open_ik_btn.clicked.connect(self.open_ik_tools)
-        ik_row.addWidget(self.open_ik_btn)
-        ik_row.addStretch()
-        layout.addLayout(ik_row)
         
         # Position verification settings
         label = QLabel("🎯 Position Accuracy")
@@ -1877,18 +1870,6 @@ class SettingsTab(QWidget):
         except Exception as e:
             self.status_label.setText(f"❌ Error: {str(e)}")
             self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
-
-    def open_ik_tools(self):
-        """Launch the standalone IK tool dialog."""
-        dialog = IKToolDialog(self.config, self)
-        dialog.exec()
-
-        if dialog.applied_settings:
-            self.status_label.setStyleSheet(self._status_default_style)
-            self.status_label.setText("🦾 IK parameters updated. Click Save to persist.")
-        else:
-            self.status_label.setStyleSheet(self._status_info_style)
-            self.status_label.setText("IK tools closed without applying changes.")
 
     # ========== PORT DETECTION METHODS ==========
     
