@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QFrame, QTextEdit, QComboBox, QSizePolicy, QSpinBox, QSlider,
     QStackedWidget, QDialog
 )
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal, QThread
 from PySide6.QtGui import QFont, QColor, QPainter, QPen, QImage, QPixmap
 
 # Add parent directory to path
@@ -75,7 +75,7 @@ class CircularProgress(QWidget):
 
 class StatusIndicator(QLabel):
     """Colored dot indicator"""
-    
+
     def __init__(self, text="", parent=None):
         super().__init__(text, parent)
         self.connected = False
@@ -140,6 +140,36 @@ class StatusIndicator(QLabel):
                     border-radius: 10px;
                 }}
             """)
+
+
+class HomeWorker(QThread):
+    """Background worker for running the home position script."""
+
+    completed = Signal(bool, str, str)
+
+    def __init__(self, speed_multiplier: float, parent=None):
+        super().__init__(parent)
+        self.speed_multiplier = speed_multiplier
+
+    def run(self) -> None:  # pragma: no cover - threading
+        env = os.environ.copy()
+        env["LEROBOT_SPEED_MULTIPLIER"] = f"{self.speed_multiplier:.2f}"
+
+        try:
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "HomePos.py"), "--go"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=env,
+            )
+            self.completed.emit(
+                result.returncode == 0,
+                result.stdout or "",
+                result.stderr or "",
+            )
+        except Exception as exc:  # pragma: no cover - safety
+            self.completed.emit(False, "", str(exc))
 
 
 class CameraPreviewWidget(QFrame):
@@ -346,6 +376,7 @@ class DashboardTab(QWidget):
         self.active_camera_name: Optional[str] = self.camera_order[0] if self.camera_order else None
         self.active_vision_zones: Dict[str, List[dict]] = {}
         self._last_preview_timestamp = 0.0
+        self.home_thread: Optional[HomeWorker] = None
 
         self.camera_preview_timer = QTimer(self)
         self.camera_preview_timer.timeout.connect(self.update_camera_previews)
@@ -1729,30 +1760,36 @@ class DashboardTab(QWidget):
     
     def go_home(self):
         """Go to home position"""
+        if self.home_thread and self.home_thread.isRunning():
+            self.log_text.append("[warning] Home command already running")
+            return
+
         self.action_label.setText("Moving to home...")
         self.log_text.append("[info] Moving to home position...")
         self.log_text.append(f"[info] Speed override {int(self.master_speed * 100)}%")
 
-        try:
-            env = os.environ.copy()
-            env["LEROBOT_SPEED_MULTIPLIER"] = f"{self.master_speed:.2f}"
-            result = subprocess.run(
-                [sys.executable, str(ROOT / "HomePos.py"), "--go"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                env=env
-            )
-            
-            if result.returncode == 0:
-                self.action_label.setText("✓ At home position")
-                self.log_text.append("[info] ✓ Home position reached")
-            else:
-                self.action_label.setText("⚠️ Home failed")
-                self.log_text.append(f"[error] Home failed: {result.stderr}")
-        except Exception as e:
-            self.action_label.setText("⚠️ Home error")
-            self.log_text.append(f"[error] Home error: {e}")
+        self.home_btn.setEnabled(False)
+
+        worker = HomeWorker(self.master_speed, self)
+        worker.completed.connect(self._on_home_completed)
+        worker.finished.connect(worker.deleteLater)
+        self.home_thread = worker
+        worker.start()
+
+    def _on_home_completed(self, success: bool, stdout: str, stderr: str) -> None:
+        """Handle completion of the home-position worker."""
+        self.home_btn.setEnabled(True)
+        self.home_thread = None
+
+        if success:
+            self.action_label.setText("✓ At home position")
+            self.log_text.append("[info] ✓ Home position reached")
+            if stdout.strip():
+                self.log_text.append(f"[debug] Home output: {stdout.strip()}")
+        else:
+            error_text = stderr.strip() or stdout.strip() or "Unknown error"
+            self.action_label.setText("⚠️ Home failed")
+            self.log_text.append(f"[error] Home failed: {error_text}")
     
     def run_from_dashboard(self):
         """Execute the selected RUN item (same as pressing START)"""
