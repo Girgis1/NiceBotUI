@@ -1748,7 +1748,6 @@ class DashboardTab(QWidget):
         request = HomeMoveRequest(
             config=self.config,
             velocity_override=rest_config.get("velocity"),
-            speed_multiplier=self.master_speed,
         )
 
         self._home_worker = HomeMoveWorker(request)
