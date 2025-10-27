@@ -81,27 +81,40 @@ class StatusIndicator(QLabel):
         self.connected = False
         self.warning = False
         self.null = False  # Initialize null attribute
+        self.alert = False
         self.update_style()
-    
+
     def set_connected(self, connected):
         self.connected = connected
         self.warning = False
         self.null = False  # Clear null state when setting connected
+        self.alert = False
         self.update_style()
-    
+
     def set_warning(self):
         self.connected = False
         self.warning = True
         self.null = False  # Clear null state when setting warning
+        self.alert = False
         self.update_style()
-    
+
     def set_null(self):
         """Set as null/empty indicator"""
         self.connected = False
         self.warning = False
         self.null = True
+        self.alert = False
         self.update_style()
-    
+
+    def set_alert(self, active: bool):
+        """Show a red alert indicator (used for vision warnings)."""
+        self.alert = active
+        if active:
+            self.connected = False
+            self.warning = False
+            self.null = False
+        self.update_style()
+
     def update_style(self):
         if hasattr(self, 'null') and self.null:
             # Null indicator - unfilled black circle
@@ -112,6 +125,15 @@ class StatusIndicator(QLabel):
                     border: 2px solid #606060;
                     border-radius: 10px;
                 }
+            """)
+        elif getattr(self, "alert", False):
+            color = "#f44336"
+            self.setFixedSize(20, 20)
+            self.setStyleSheet(f"""
+                QLabel {{
+                    background-color: {color};
+                    border-radius: 10px;
+                }}
             """)
         elif self.warning:
             color = "#FF9800"
@@ -341,6 +363,8 @@ class DashboardTab(QWidget):
         self.camera_indicator1: Optional[StatusIndicator] = None
         self.camera_indicator2: Optional[StatusIndicator] = None
         self.camera_indicator3: Optional[StatusIndicator] = None
+        self.hand_indicator: Optional[StatusIndicator] = None
+        self.hand_lbl: Optional[QLabel] = None
         self.camera_front_circle: Optional[StatusIndicator] = None
         self.camera_wrist_circle: Optional[StatusIndicator] = None
         self.compact_throbber: Optional[CircularProgress] = None
@@ -354,6 +378,8 @@ class DashboardTab(QWidget):
         self.active_camera_name: Optional[str] = self.camera_order[0] if self.camera_order else None
         self.active_vision_zones: Dict[str, List[dict]] = {}
         self._last_preview_timestamp = 0.0
+        self._vision_overlays: Dict[str, Tuple["np.ndarray", str]] = {}
+        self._hand_active = False
 
         self.camera_preview_timer = QTimer(self)
         self.camera_preview_timer.timeout.connect(self.update_camera_previews)
@@ -437,6 +463,16 @@ class DashboardTab(QWidget):
 
         self.camera_front_circle = self.camera_indicator1
         self.camera_wrist_circle = self.camera_indicator2
+
+        hand_group = QHBoxLayout()
+        hand_group.setSpacing(6)
+        self.hand_lbl = QLabel("Hands")
+        self.hand_lbl.setStyleSheet("color: #a0a0a0; font-size: 11px;")
+        hand_group.addWidget(self.hand_lbl)
+        self.hand_indicator = StatusIndicator()
+        self.hand_indicator.set_null()
+        hand_group.addWidget(self.hand_indicator)
+        normal_status_layout.addLayout(hand_group)
 
         status_bar.addWidget(self.normal_status_container, stretch=0)
 
@@ -1335,6 +1371,11 @@ class DashboardTab(QWidget):
         image = QImage(rgb.data, width, height, channel * width, QImage.Format_RGB888)
         return QPixmap.fromImage(image)
 
+    def _blend_preview_frame(self, base: "np.ndarray", overlay: "np.ndarray") -> "np.ndarray":
+        if cv2 is not None:
+            return cv2.addWeighted(base, 0.5, overlay, 0.5, 0)
+        return ((base.astype(np.float32) + overlay.astype(np.float32)) / 2.0).astype(np.uint8)
+
     def _get_preview_zones(self, camera_name: str) -> List[dict]:
         zones = self.active_vision_zones.get(camera_name)
         if zones:
@@ -1363,6 +1404,20 @@ class DashboardTab(QWidget):
 
         zones = self._get_preview_zones(self.active_camera_name)
         render_frame, status = self._render_camera_frame(self.active_camera_name, frame.copy(), zones)
+        overlay_entry = self._vision_overlays.get(self.active_camera_name)
+        status_override: Optional[str] = None
+        if overlay_entry:
+            overlay_frame, overlay_status = overlay_entry
+            try:
+                if overlay_frame.shape != render_frame.shape and cv2 is not None:
+                    overlay_frame = cv2.resize(overlay_frame, (render_frame.shape[1], render_frame.shape[0]))
+                elif overlay_frame.shape != render_frame.shape:
+                    overlay_frame = overlay_frame[: render_frame.shape[0], : render_frame.shape[1]]
+                render_frame = self._blend_preview_frame(render_frame, overlay_frame)
+                if overlay_status:
+                    status_override = overlay_status
+            except Exception:
+                pass
         pixmap = self._frame_to_pixmap(render_frame)
         status_text = {
             "triggered": "Triggered",
@@ -1371,6 +1426,8 @@ class DashboardTab(QWidget):
             "offline": "Offline",
             "no_vision": "No vision",
         }.get(status, "")
+        if status_override:
+            status_text = status_override
         self.single_camera_preview.update_preview(pixmap, status=status_text)
         self._last_preview_timestamp = timestamp
 
@@ -2179,6 +2236,38 @@ class DashboardTab(QWidget):
         camera_total = len(self._camera_status)
         camera_online = sum(1 for state in self._camera_status.values() if state == "online")
         self.camera_summary_label.setText(f"C:{camera_online}/{camera_total}")
+
+    # ------------------------------------------------------------------
+    # Vision integration hooks (hand detection + overlays)
+
+    def set_hand_presence_state(self, camera_name: str, active: bool) -> None:
+        """Update the dashboard indicator for background hand detection."""
+        self._hand_active = active
+        if not self.hand_indicator:
+            return
+
+        if active:
+            self.hand_indicator.set_alert(True)
+            if self.hand_lbl:
+                self.hand_lbl.setStyleSheet("color: #ff8a80; font-size: 11px; font-weight: bold;")
+        else:
+            self.hand_indicator.set_alert(False)
+            self.hand_indicator.set_connected(True)
+            if self.hand_lbl:
+                self.hand_lbl.setStyleSheet("color: #a0a0a0; font-size: 11px;")
+
+    def set_vision_overlay(self, camera_name: str, frame: "np.ndarray", status: str) -> None:  # pragma: no cover - requires numpy
+        if np is None or frame is None:
+            return
+        self._vision_overlays[camera_name] = (frame.copy(), status)
+        if self.camera_view_active and camera_name == self.active_camera_name:
+            self.update_camera_previews(force=True)
+
+    def clear_vision_overlay(self, camera_name: str) -> None:
+        if camera_name in self._vision_overlays:
+            del self._vision_overlays[camera_name]
+            if self.camera_view_active and camera_name == self.active_camera_name:
+                self.update_camera_previews(force=True)
     
     def on_discovery_log(self, message: str):
         """Handle discovery log messages from device manager

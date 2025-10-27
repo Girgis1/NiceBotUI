@@ -7,6 +7,7 @@ Touch-friendly interface for SO-100/101 robot control with action recording
 import sys
 import json
 from pathlib import Path
+from typing import Optional
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -26,6 +27,10 @@ from utils.camera_hub import shutdown_camera_hub
 ROOT = Path(__file__).parent
 CONFIG_PATH = ROOT / "config.json"
 
+sys.path.insert(0, str(ROOT / "src"))
+
+from vision.pipeline_manager import VisionPipelineManager  # type: ignore
+
 
 class MainWindow(QMainWindow):
     """Main application window with tab system"""
@@ -37,10 +42,11 @@ class MainWindow(QMainWindow):
         
         self.setWindowTitle("LeRobot Operator Console")
         self.setMinimumSize(1024, 600)
-        
+
         # Create device manager (shared across all tabs)
         self.device_manager = DeviceManager(self.config)
-        
+        self.vision_manager: Optional[VisionPipelineManager] = None
+
         self.init_ui()
         
         # Set fullscreen if requested
@@ -168,11 +174,13 @@ class MainWindow(QMainWindow):
         self.dashboard_tab = DashboardTab(self.config, self, self.device_manager)
         self.sequence_tab = SequenceTab(self.config, self)
         self.record_tab = RecordTab(self.config, self)
-        
+
         # Connect sequence execution signal
         self.sequence_tab.execute_sequence_signal.connect(self.dashboard_tab.run_sequence)
         self.settings_tab = SettingsTab(self.config, self, self.device_manager)
-        
+        self.settings_tab.config_changed.connect(self._on_settings_changed)
+        self.vision_manager = VisionPipelineManager.instance(self.config, self.dashboard_tab)
+
         # Add tabs to stacked widget
         self.content_stack.addWidget(self.dashboard_tab)
         self.content_stack.addWidget(self.sequence_tab)
@@ -241,7 +249,17 @@ class MainWindow(QMainWindow):
         """Save configuration to JSON"""
         with open(CONFIG_PATH, 'w') as f:
             json.dump(self.config, f, indent=2)
-    
+
+    def _on_settings_changed(self):
+        """Handle updates coming from the Settings tab."""
+        self.config = self.load_config()
+        self.dashboard_tab.config = self.config
+        self.sequence_tab.config = self.config
+        self.record_tab.config = self.config
+        self.settings_tab.config = self.config
+        if self.vision_manager:
+            self.vision_manager.update_config(self.config)
+
     def create_default_config(self):
         """Create default configuration"""
         return {
@@ -285,6 +303,36 @@ class MainWindow(QMainWindow):
                 "object_gate": False,
                 "roi": [220, 140, 200, 180],
                 "presence_threshold": 0.12
+            },
+            "vision": {
+                "cameras": {
+                    "front": {
+                        "interval_s": 0.25,
+                        "pipeline": [
+                            {
+                                "model": "hand_presence",
+                                "enabled": True,
+                                "show_overlay": False,
+                                "save_to_training": False,
+                                "debug_overlay": False,
+                                "dashboard_indicator": True,
+                            },
+                            {
+                                "model": "beauty_product_mask",
+                                "enabled": True,
+                                "show_overlay": True,
+                                "save_to_training": True,
+                            },
+                            {
+                                "model": "product_defect",
+                                "enabled": False,
+                                "show_overlay": True,
+                                "save_to_training": True,
+                            },
+                        ],
+                    }
+                },
+                "model_settings": {},
             },
             "safety": {
                 "soft_limits_deg": [
@@ -343,6 +391,8 @@ class MainWindow(QMainWindow):
         finally:
             # Always accept the close event
             try:
+                if self.vision_manager:
+                    self.vision_manager.shutdown()
                 shutdown_camera_hub()
             except Exception:
                 pass
