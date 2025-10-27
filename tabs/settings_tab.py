@@ -30,6 +30,7 @@ except ImportError:  # pragma: no cover - optional dependency
     YOLO = None
 
 from utils.camera_hub import CameraStreamHub
+from utils.home_workers import MotorHomeWorker
 
 
 class HandDetectionTestDialog(QDialog):
@@ -365,6 +366,8 @@ class SettingsTab(QWidget):
         self.config = config
         self.config_path = Path(__file__).parent.parent / "config.json"
         self.device_manager = device_manager
+        self.home_worker: Optional[MotorHomeWorker] = None
+        self._pending_home_velocity: Optional[int] = None
         
         # Device status tracking (synced with device_manager)
         self.robot_status = "empty"          # empty/online/offline
@@ -1825,46 +1828,56 @@ class SettingsTab(QWidget):
             self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
     
     def go_home(self):
-        """Move arm to saved Home position (same as Dashboard Home button)"""
-        try:
-            from utils.motor_controller import MotorController
-            
-            # Check if Home position exists
-            rest_config = self.config.get("rest_position", {})
-            rest_positions = rest_config.get("positions")
-            
-            if not rest_positions:
-                self.status_label.setText("❌ No home position saved. Click 'Set Home' first.")
-                self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
-                return
-            
-            self.status_label.setText("🏠 Moving to home position...")
-            self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
-            
-            # Initialize motor controller
-            motor_config = self.config.get("robot", {})
-            motor_controller = MotorController(motor_config)
-            
-            # Connect and move
-            if not motor_controller.connect():
-                self.status_label.setText("❌ Failed to connect to motors")
-                self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
-                return
-            
-            velocity = self.rest_velocity_spin.value()
-            motor_controller.set_positions(
-                rest_positions,
-                velocity=velocity,
-                wait=True,
-                keep_connection=False
-            )
-            
-            self.status_label.setText(f"✓ Moved to home position at velocity {velocity}")
-            self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
-            
-        except Exception as e:
-            self.status_label.setText(f"❌ Error: {str(e)}")
+        """Move arm to saved Home position without blocking the UI thread."""
+        if self.home_worker and self.home_worker.isRunning():
+            self.status_label.setText("⏳ Already moving to home...")
+            self.status_label.setStyleSheet("QLabel { color: #FFB74D; font-size: 15px; padding: 8px; }")
+            return
+
+        rest_config = self.config.get("rest_position", {})
+        if not rest_config.get("positions"):
+            self.status_label.setText("❌ No home position saved. Click 'Set Home' first.")
             self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+            return
+
+        velocity = int(self.rest_velocity_spin.value())
+        self._pending_home_velocity = velocity
+        self.status_label.setText("🏠 Moving to home position...")
+        self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
+        self.home_btn.setEnabled(False)
+
+        self.home_worker = MotorHomeWorker(self.config, velocity, parent=self)
+        self.home_worker.progress.connect(self._on_settings_home_progress)
+        self.home_worker.completed.connect(self._on_settings_home_completed)
+        self.home_worker.finished.connect(self._on_settings_home_worker_finished)
+        self.home_worker.start()
+
+    def _on_settings_home_progress(self, message: str) -> None:
+        """Update status label from the background worker."""
+        self.status_label.setText(message)
+        self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
+
+    def _on_settings_home_completed(self, success: bool, message: str) -> None:
+        """Handle completion of the asynchronous home move."""
+        self.home_btn.setEnabled(True)
+
+        if success:
+            velocity = self._pending_home_velocity or self.rest_velocity_spin.value()
+            detail = message or f"✓ Moved to home position at velocity {velocity}"
+            self.status_label.setText(detail)
+            self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+        else:
+            detail = message or "Unknown error"
+            self.status_label.setText(f"❌ Error: {detail}")
+            self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+
+        self._pending_home_velocity = None
+
+    def _on_settings_home_worker_finished(self) -> None:
+        """Clean up worker references when it finishes."""
+        if self.home_worker:
+            self.home_worker.deleteLater()
+        self.home_worker = None
 
     # ========== PORT DETECTION METHODS ==========
     
