@@ -4,9 +4,7 @@ This is the existing UI refactored as a tab
 """
 
 import sys
-import os
 import json
-import subprocess
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, List, Tuple
@@ -24,7 +22,7 @@ from PySide6.QtWidgets import (
     QFrame, QTextEdit, QComboBox, QSizePolicy, QSpinBox, QSlider,
     QStackedWidget, QDialog
 )
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal, QThread
 from PySide6.QtGui import QFont, QColor, QPainter, QPen, QImage, QPixmap
 
 # Add parent directory to path
@@ -33,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from robot_worker import RobotWorker
 from utils.execution_manager import ExecutionWorker
 from utils.camera_hub import CameraStreamHub
+from utils.home_move_worker import HomeMoveWorker, HomeMoveRequest
 
 # Timezone
 TIMEZONE = pytz.timezone('Australia/Sydney')
@@ -303,6 +302,8 @@ class DashboardTab(QWidget):
         self.device_manager = device_manager
         self.worker = None
         self.execution_worker = None  # New unified execution worker
+        self._home_thread: Optional[QThread] = None
+        self._home_worker: Optional[HomeMoveWorker] = None
         self.start_time = None
         self.elapsed_seconds = 0
         self.is_running = False
@@ -1728,31 +1729,56 @@ class DashboardTab(QWidget):
             self.log_text.append(f"[error] Error resetting UI: {e}")
     
     def go_home(self):
-        """Go to home position"""
+        """Go to home position without blocking the UI thread."""
+        if self._home_thread and self._home_thread.isRunning():
+            self.log_text.append("[warning] Home move already in progress")
+            return
+
+        rest_config = self.config.get("rest_position", {}) if self.config else {}
+        if not rest_config.get("positions"):
+            self.action_label.setText("⚠️ No home position configured")
+            self.log_text.append("[error] No home position configured. Set home first.")
+            return
+
         self.action_label.setText("Moving to home...")
         self.log_text.append("[info] Moving to home position...")
         self.log_text.append(f"[info] Speed override {int(self.master_speed * 100)}%")
+        self.home_btn.setEnabled(False)
 
-        try:
-            env = os.environ.copy()
-            env["LEROBOT_SPEED_MULTIPLIER"] = f"{self.master_speed:.2f}"
-            result = subprocess.run(
-                [sys.executable, str(ROOT / "HomePos.py"), "--go"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                env=env
-            )
-            
-            if result.returncode == 0:
-                self.action_label.setText("✓ At home position")
-                self.log_text.append("[info] ✓ Home position reached")
-            else:
-                self.action_label.setText("⚠️ Home failed")
-                self.log_text.append(f"[error] Home failed: {result.stderr}")
-        except Exception as e:
-            self.action_label.setText("⚠️ Home error")
-            self.log_text.append(f"[error] Home error: {e}")
+        request = HomeMoveRequest(
+            config=self.config,
+            velocity_override=rest_config.get("velocity"),
+            speed_multiplier=self.master_speed,
+        )
+
+        self._home_worker = HomeMoveWorker(request)
+        self._home_thread = QThread(self)
+        self._home_worker.moveToThread(self._home_thread)
+
+        self._home_thread.started.connect(self._home_worker.run)
+        self._home_worker.progress.connect(self._on_home_progress)
+        self._home_worker.finished.connect(self._on_home_finished)
+        self._home_worker.finished.connect(self._home_thread.quit)
+        self._home_worker.finished.connect(self._home_worker.deleteLater)
+        self._home_thread.finished.connect(self._on_home_thread_finished)
+
+        self._home_thread.start()
+
+    def _on_home_progress(self, message: str) -> None:
+        self.action_label.setText(message)
+        self.log_text.append(f"[info] {message}")
+
+    def _on_home_finished(self, success: bool, message: str) -> None:
+        self.home_btn.setEnabled(True)
+        self.action_label.setText(message)
+        level = "info" if success else "error"
+        self.log_text.append(f"[{level}] {message}")
+
+    def _on_home_thread_finished(self) -> None:
+        if self._home_thread:
+            self._home_thread.deleteLater()
+        self._home_thread = None
+        self._home_worker = None
     
     def run_from_dashboard(self):
         """Execute the selected RUN item (same as pressing START)"""
