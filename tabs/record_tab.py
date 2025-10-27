@@ -50,6 +50,7 @@ class RecordTab(QWidget):
         self.live_position_threshold = 3  # INDUSTRIAL: 3 units for tighter precision
         self.live_recorded_data = []  # Store {positions, timestamp, velocity}
         self.live_record_start_time = None
+        self._live_record_connected_locally = False
 
         # Touch teleop state
         self.teleop_step = 10
@@ -243,7 +244,7 @@ class RecordTab(QWidget):
                 background-color: #FF9800;
             }
         """)
-        self.loop_btn.clicked.connect(self.toggle_loop)
+        self.loop_btn.toggled.connect(self.toggle_loop)
         control_bar.addWidget(self.loop_btn)
         
         # Delay button removed - delays now handled per-step in composite manifest
@@ -936,6 +937,19 @@ class RecordTab(QWidget):
     def toggle_live_recording(self):
         """Toggle INDUSTRIAL precision live recording - creates ONE complete action"""
         if not self.is_live_recording:
+            self._live_record_connected_locally = False
+            try:
+                if not self.motor_controller.bus:
+                    if not self.motor_controller.connect():
+                        self.status_label.setText("❌ Failed to connect for live recording")
+                        self.live_record_btn.setChecked(False)
+                        return
+                    self._live_record_connected_locally = True
+            except Exception as exc:
+                self.status_label.setText(f"❌ Live record error: {exc}")
+                self.live_record_btn.setChecked(False)
+                return
+
             # Start live recording
             self.is_live_recording = True
             self.last_recorded_position = None
@@ -975,7 +989,14 @@ class RecordTab(QWidget):
         self.live_record_btn.setChecked(False)
         self.live_record_btn.setText("🔴 LIVE RECORD")
         self.live_record_btn.setEnabled(True)  # Re-enable for next use!
-        
+
+        if self._live_record_connected_locally:
+            try:
+                self.motor_controller.disconnect()
+            except Exception:
+                pass
+        self._live_record_connected_locally = False
+
         # Create ONE complete live recording action
         point_count = len(self.live_recorded_data)
         if point_count > 0:
@@ -1018,7 +1039,10 @@ class RecordTab(QWidget):
                 self.live_record_start_time = time.time()
             
             # Read current position with high precision
-            positions = self.motor_controller.read_positions()
+            positions = self.motor_controller.read_positions_from_bus()
+
+            if not positions:
+                positions = self.motor_controller.read_positions()
             
             if not positions or len(positions) != 6:
                 print("[LIVE RECORD] ⚠️ Failed to read positions")
@@ -1259,9 +1283,9 @@ class RecordTab(QWidget):
         else:
             self.stop_playback()
     
-    def toggle_loop(self):
+    def toggle_loop(self, checked: bool):
         """Toggle loop mode"""
-        self.play_loop = self.loop_btn.isChecked()
+        self.play_loop = checked
         if self.play_loop:
             self.status_label.setText("🔁 Loop enabled")
         else:
@@ -1279,7 +1303,10 @@ class RecordTab(QWidget):
             self.status_label.setText("❌ No actions to play")
             self.play_btn.setChecked(False)
             return
-        
+
+        # Capture the loop toggle at start to avoid stale state later
+        self.play_loop = self.loop_btn.isChecked()
+
         self.is_playing = True
         self.play_btn.setText("⏹ STOP")
         self.set_btn.setEnabled(False)
@@ -1305,11 +1332,18 @@ class RecordTab(QWidget):
         
         if self.playback_index >= len(self.playback_actions):
             print(f"[PLAYBACK] ✅ COMPLETE")
-            
+
             # In loop mode, restart
             if self.play_loop:
                 print("[PLAYBACK] 🔁 LOOPING - keeping torque ON")
                 self.playback_index = 0
+                if not self.play_btn.isChecked():
+                    self.play_btn.blockSignals(True)
+                    self.play_btn.setChecked(True)
+                    self.play_btn.blockSignals(False)
+                if not self.is_playing:
+                    self.is_playing = True
+                    self.playback_status.emit("playing")
                 self.status_label.setText("🔁 Looping...")
                 QTimer.singleShot(500, self.playback_step)
             else:
@@ -1456,7 +1490,8 @@ class RecordTab(QWidget):
         self.play_btn.setText("▶ PLAY")
         self.set_btn.setEnabled(True)
         self.save_btn.setEnabled(True)
-        
+        self.live_record_btn.setEnabled(True)
+
         # Clear row selection
         self.table.clearSelection()
         
