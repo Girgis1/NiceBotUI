@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QScrollArea, QFrame, QSpinBox, QDoubleSpinBox,
     QTabWidget, QCheckBox, QComboBox, QDialog, QSizePolicy
 )
-from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtCore import Qt, Signal, QTimer, QThread
 from PySide6.QtGui import QImage, QPixmap
 
 try:
@@ -30,6 +30,7 @@ except ImportError:  # pragma: no cover - optional dependency
     YOLO = None
 
 from utils.camera_hub import CameraStreamHub
+from utils.home_move_worker import HomeMoveWorker, HomeMoveRequest
 
 
 class HandDetectionTestDialog(QDialog):
@@ -365,6 +366,9 @@ class SettingsTab(QWidget):
         self.config = config
         self.config_path = Path(__file__).parent.parent / "config.json"
         self.device_manager = device_manager
+        self._home_thread: Optional[QThread] = None
+        self._home_worker: Optional[HomeMoveWorker] = None
+        self._pending_home_velocity: Optional[int] = None
         
         # Device status tracking (synced with device_manager)
         self.robot_status = "empty"          # empty/online/offline
@@ -1825,46 +1829,73 @@ class SettingsTab(QWidget):
             self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
     
     def go_home(self):
-        """Move arm to saved Home position (same as Dashboard Home button)"""
-        try:
-            from utils.motor_controller import MotorController
-            
-            # Check if Home position exists
-            rest_config = self.config.get("rest_position", {})
-            rest_positions = rest_config.get("positions")
-            
-            if not rest_positions:
-                self.status_label.setText("❌ No home position saved. Click 'Set Home' first.")
-                self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
-                return
-            
-            self.status_label.setText("🏠 Moving to home position...")
-            self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
-            
-            # Initialize motor controller
-            motor_config = self.config.get("robot", {})
-            motor_controller = MotorController(motor_config)
-            
-            # Connect and move
-            if not motor_controller.connect():
-                self.status_label.setText("❌ Failed to connect to motors")
-                self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
-                return
-            
-            velocity = self.rest_velocity_spin.value()
-            motor_controller.set_positions(
-                rest_positions,
-                velocity=velocity,
-                wait=True,
-                keep_connection=False
-            )
-            
-            self.status_label.setText(f"✓ Moved to home position at velocity {velocity}")
-            self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
-            
-        except Exception as e:
-            self.status_label.setText(f"❌ Error: {str(e)}")
+        """Move the arm to the saved home position without blocking the UI thread."""
+        if self._home_thread and self._home_thread.isRunning():
+            self.status_label.setText("⏳ Already moving to home...")
+            self.status_label.setStyleSheet("QLabel { color: #FFB74D; font-size: 15px; padding: 8px; }")
+            return
+
+        rest_config = self.config.get("rest_position", {}) if self.config else {}
+        if not rest_config.get("positions"):
+            self.status_label.setText("❌ No home position saved. Click 'Set Home' first.")
             self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+            return
+
+        velocity = int(self.rest_velocity_spin.value())
+        self._pending_home_velocity = velocity
+
+        self.status_label.setText("🏠 Moving to home position...")
+        self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
+        self.home_btn.setEnabled(False)
+
+        request = HomeMoveRequest(
+            config=self.config,
+            velocity_override=velocity,
+        )
+
+        worker = HomeMoveWorker(request)
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._on_home_progress)
+        worker.finished.connect(self._on_home_finished)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._on_home_thread_finished)
+
+        self._home_thread = thread
+        self._home_worker = worker
+
+        thread.start()
+
+    def _on_home_progress(self, message: str) -> None:
+        self.status_label.setText(message)
+        self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
+
+    def _on_home_finished(self, success: bool, message: str) -> None:
+        self.home_btn.setEnabled(True)
+
+        if success:
+            detail = message or f"✓ Moved to home position at velocity {self._pending_home_velocity or self.rest_velocity_spin.value()}"
+            color = "#4CAF50"
+        else:
+            detail = message or "Unknown error"
+            if not detail.startswith("❌"):
+                detail = f"❌ Error: {detail}"
+            color = "#f44336"
+
+        self.status_label.setText(detail)
+        self.status_label.setStyleSheet(f"QLabel {{ color: {color}; font-size: 15px; padding: 8px; }}")
+        self._pending_home_velocity = None
+
+    def _on_home_thread_finished(self) -> None:
+        if self._home_thread:
+            self._home_thread.deleteLater()
+        self._home_thread = None
+        self._home_worker = None
+        if self._pending_home_velocity is not None:
+            # Ensure we clear pending velocity if the thread ended unexpectedly.
+            self._pending_home_velocity = None
 
     # ========== PORT DETECTION METHODS ==========
     

@@ -4,9 +4,7 @@ This is the existing UI refactored as a tab
 """
 
 import sys
-import os
 import json
-import subprocess
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, List, Tuple
@@ -24,7 +22,7 @@ from PySide6.QtWidgets import (
     QFrame, QTextEdit, QComboBox, QSizePolicy, QSpinBox, QSlider,
     QStackedWidget, QDialog
 )
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal, QThread
 from PySide6.QtGui import QFont, QColor, QPainter, QPen, QImage, QPixmap
 
 # Add parent directory to path
@@ -33,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from robot_worker import RobotWorker
 from utils.execution_manager import ExecutionWorker
 from utils.camera_hub import CameraStreamHub
+from utils.home_move_worker import HomeMoveWorker, HomeMoveRequest
 
 # Timezone
 TIMEZONE = pytz.timezone('Australia/Sydney')
@@ -308,15 +307,19 @@ class DashboardTab(QWidget):
         self.is_running = False
         self._vision_state_active = False
         self._last_vision_signature = None
+        self._home_thread: Optional[QThread] = None
+        self._home_worker: Optional[HomeMoveWorker] = None
 
         control_cfg = self.config.setdefault("control", {})
         self.master_speed = float(control_cfg.get("speed_multiplier", 1.0))
         if not 0.1 <= self.master_speed <= 1.2:
             self.master_speed = 1.0
-        control_cfg["speed_multiplier"] = self.master_speed
 
         self.loop_enabled = control_cfg.get("loop_enabled", True)
-        control_cfg["loop_enabled"] = self.loop_enabled
+
+        self._restoring_run_selection = False
+        self._initial_run_selection: str = ""
+        self._apply_saved_dashboard_state()
 
         self._speed_initialized = False
 
@@ -799,6 +802,76 @@ class DashboardTab(QWidget):
         self.speed_slider.setValue(initial_speed)
         self.speed_slider.blockSignals(False)
         self.on_speed_slider_changed(initial_speed)
+
+    def _apply_saved_dashboard_state(self) -> None:
+        """Load persisted dashboard preferences or apply safe defaults."""
+        state = self.config.setdefault("dashboard_state", {})
+
+        speed_percent = state.get("speed_percent")
+        if isinstance(speed_percent, int) and 10 <= speed_percent <= 120:
+            self.master_speed = speed_percent / 100.0
+        else:
+            speed_percent = 100
+            self.master_speed = speed_percent / 100.0
+            state["speed_percent"] = speed_percent
+
+        loop_value = state.get("loop_enabled")
+        if isinstance(loop_value, bool):
+            self.loop_enabled = loop_value
+        else:
+            self.loop_enabled = True
+            state["loop_enabled"] = True
+
+        saved_run = state.get("run_selection")
+        if isinstance(saved_run, str) and saved_run:
+            self._initial_run_selection = saved_run
+        else:
+            self._initial_run_selection = ""
+            state.pop("run_selection", None)
+
+        control_cfg = self.config.setdefault("control", {})
+        control_cfg["speed_multiplier"] = self.master_speed
+        control_cfg["loop_enabled"] = self.loop_enabled
+
+    def _restore_run_selection(self) -> bool:
+        """Attempt to re-select the last run item; return True if successful."""
+        target = self._initial_run_selection or ""
+        self._restoring_run_selection = True
+        try:
+            if target:
+                index = self.run_combo.findText(target, Qt.MatchExactly)
+                if index != -1:
+                    self.run_combo.setCurrentIndex(index)
+                    return True
+            # Default to placeholder entry
+            self.run_combo.setCurrentIndex(0)
+            self._initial_run_selection = ""
+            return False
+        finally:
+            self._restoring_run_selection = False
+
+    def _persist_dashboard_state(self) -> None:
+        """Persist loop, speed, and run preferences to config.json."""
+        state = self.config.setdefault("dashboard_state", {})
+        state["speed_percent"] = int(round(self.master_speed * 100))
+        state["loop_enabled"] = bool(self.loop_enabled)
+
+        current_run = self.run_combo.currentText() if self.run_combo.count() else ""
+        if current_run and not current_run.startswith("--"):
+            state["run_selection"] = current_run
+        else:
+            state.pop("run_selection", None)
+
+        control_cfg = self.config.setdefault("control", {})
+        control_cfg["speed_multiplier"] = self.master_speed
+        control_cfg["loop_enabled"] = self.loop_enabled
+
+        window = self.window()
+        if hasattr(window, "save_config"):
+            try:
+                window.save_config()
+            except Exception as exc:
+                self.log_text.append(f"[warning] Failed to persist dashboard state: {exc}")
     
     def refresh_run_selector(self):
         """Populate RUN dropdown with Models, Sequences, and Actions"""
@@ -858,6 +931,9 @@ class DashboardTab(QWidget):
             self.single_camera_preview.update_preview(None, "No camera configured.")
 
         self._update_status_summaries()
+        restored = self._restore_run_selection()
+        if not restored:
+            self._persist_dashboard_state()
 
     def _refresh_loop_button(self):
         if self.loop_enabled:
@@ -900,6 +976,7 @@ class DashboardTab(QWidget):
         control_cfg["loop_enabled"] = checked
         state_text = "Loop enabled" if checked else "Loop disabled"
         self.log_text.append(f"[info] {state_text}")
+        self._persist_dashboard_state()
 
     def on_speed_slider_changed(self, value: int):
         aligned = max(10, min(120, 5 * round(value / 5)))
@@ -924,9 +1001,9 @@ class DashboardTab(QWidget):
                 self.worker.set_speed_multiplier(self.master_speed)
             except Exception:
                 pass
-
         if not self._speed_initialized:
             self._speed_initialized = True
+        self._persist_dashboard_state()
 
     def _camera_display_name(self, camera_name: str) -> str:
         return camera_name.replace("_", " ").title()
@@ -1244,6 +1321,14 @@ class DashboardTab(QWidget):
             # Hide checkpoint dropdown for sequences and actions
             self.checkpoint_combo.hide()
             self.checkpoint_combo.clear()
+
+        if text and not text.startswith("--"):
+            self._initial_run_selection = text
+        else:
+            self._initial_run_selection = ""
+
+        if not self._restoring_run_selection:
+            self._persist_dashboard_state()
     
     def load_checkpoints_for_model(self, model_name: str):
         """Load checkpoints for the selected model"""
@@ -1728,31 +1813,61 @@ class DashboardTab(QWidget):
             self.log_text.append(f"[error] Error resetting UI: {e}")
     
     def go_home(self):
-        """Go to home position"""
+        """Move to the configured home position without blocking the UI thread."""
+        if self._home_thread and self._home_thread.isRunning():
+            self.log_text.append("[warning] Home command already running")
+            return
+
+        rest_config = self.config.get("rest_position", {}) if self.config else {}
+        if not rest_config.get("positions"):
+            self.action_label.setText("⚠️ No home position configured")
+            self.log_text.append("[error] No home position configured. Set home first.")
+            return
+
         self.action_label.setText("Moving to home...")
         self.log_text.append("[info] Moving to home position...")
         self.log_text.append(f"[info] Speed override {int(self.master_speed * 100)}%")
+        self.home_btn.setEnabled(False)
 
-        try:
-            env = os.environ.copy()
-            env["LEROBOT_SPEED_MULTIPLIER"] = f"{self.master_speed:.2f}"
-            result = subprocess.run(
-                [sys.executable, str(ROOT / "HomePos.py"), "--go"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                env=env
-            )
-            
-            if result.returncode == 0:
-                self.action_label.setText("✓ At home position")
-                self.log_text.append("[info] ✓ Home position reached")
-            else:
-                self.action_label.setText("⚠️ Home failed")
-                self.log_text.append(f"[error] Home failed: {result.stderr}")
-        except Exception as e:
-            self.action_label.setText("⚠️ Home error")
-            self.log_text.append(f"[error] Home error: {e}")
+        request = HomeMoveRequest(
+            config=self.config,
+            velocity_override=rest_config.get("velocity"),
+            speed_multiplier=self.master_speed,
+        )
+
+        worker = HomeMoveWorker(request)
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._on_home_progress)
+        worker.finished.connect(self._on_home_finished)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._on_home_thread_finished)
+
+        self._home_thread = thread
+        self._home_worker = worker
+
+        thread.start()
+
+    def _on_home_progress(self, message: str) -> None:
+        self.action_label.setText(message)
+        self.log_text.append(f"[info] {message}")
+
+    def _on_home_finished(self, success: bool, message: str) -> None:
+        self.home_btn.setEnabled(True)
+        if not message:
+            message = "✓ At home position" if success else "⚠️ Home failed"
+        self.action_label.setText(message)
+        level = "info" if success else "error"
+        self.log_text.append(f"[{level}] {message}")
+
+    def _on_home_thread_finished(self) -> None:
+        if self._home_thread:
+            self._home_thread.deleteLater()
+        self._home_thread = None
+        self._home_worker = None
+        self.log_text.append("[debug] Home worker finished")
     
     def run_from_dashboard(self):
         """Execute the selected RUN item (same as pressing START)"""
