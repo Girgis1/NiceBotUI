@@ -76,13 +76,23 @@ class HomeMoveWorker(QObject):
                 self.finished.emit(False, "Failed to connect to motors.")
                 return
 
+            disable_torque = bool(rest_config.get("disable_torque_on_arrival"))
+
             self.progress.emit(f"Moving to home @ velocity {velocity}")
             controller.set_positions(
                 positions,
                 velocity=velocity,
                 wait=True,
-                keep_connection=False,
+                keep_connection=disable_torque,
             )
+
+            if disable_torque:
+                try:
+                    self.progress.emit("Disabling torque...")
+                    controller.emergency_stop()
+                except Exception as exc:  # pragma: no cover - hardware dependent
+                    self.finished.emit(False, f"Home reached but torque disable failed: {exc}")
+                    return
         except Exception as exc:  # pragma: no cover - hardware dependent
             self.finished.emit(False, f"Failed to reach home: {exc}")
         else:
