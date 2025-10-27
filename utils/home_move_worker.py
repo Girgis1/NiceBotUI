@@ -40,6 +40,7 @@ class HomeMoveWorker(QObject):
         config = dict(self._request.config or {})
         rest_config = config.get("rest_position", {}) or {}
         positions = rest_config.get("positions")
+        disable_torque = bool(rest_config.get("disable_torque_on_arrival", True))
 
         if not positions:
             self.finished.emit(False, "No home position saved. Set home before moving.")
@@ -83,6 +84,14 @@ class HomeMoveWorker(QObject):
                 wait=True,
                 keep_connection=False,
             )
+
+            if disable_torque and controller.bus:
+                self.progress.emit("Disabling motor torque...")
+                try:
+                    for name in controller.motor_names:
+                        controller.bus.write("Torque_Enable", name, 0, normalize=False)
+                except Exception as exc:  # pragma: no cover - hardware dependent
+                    self.progress.emit(f"⚠️ Failed to disable torque: {exc}")
         except Exception as exc:  # pragma: no cover - dependent on hardware
             self.finished.emit(False, f"Failed to reach home: {exc}")
         else:
