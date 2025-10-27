@@ -50,6 +50,7 @@ class RecordTab(QWidget):
         self.live_position_threshold = 3  # INDUSTRIAL: 3 units for tighter precision
         self.live_recorded_data = []  # Store {positions, timestamp, velocity}
         self.live_record_start_time = None
+        self._live_record_connected_locally = False
 
         # Touch teleop state
         self.teleop_step = 10
@@ -243,7 +244,7 @@ class RecordTab(QWidget):
                 background-color: #FF9800;
             }
         """)
-        self.loop_btn.clicked.connect(self.toggle_loop)
+        self.loop_btn.toggled.connect(self.toggle_loop)
         control_bar.addWidget(self.loop_btn)
         
         # Delay button removed - delays now handled per-step in composite manifest
@@ -936,6 +937,19 @@ class RecordTab(QWidget):
     def toggle_live_recording(self):
         """Toggle INDUSTRIAL precision live recording - creates ONE complete action"""
         if not self.is_live_recording:
+            self._live_record_connected_locally = False
+            try:
+                if not self.motor_controller.bus:
+                    if not self.motor_controller.connect():
+                        self.status_label.setText("❌ Failed to connect for live recording")
+                        self.live_record_btn.setChecked(False)
+                        return
+                    self._live_record_connected_locally = True
+            except Exception as exc:
+                self.status_label.setText(f"❌ Live record error: {exc}")
+                self.live_record_btn.setChecked(False)
+                return
+
             # Start live recording
             self.is_live_recording = True
             self.last_recorded_position = None
@@ -997,6 +1011,12 @@ class RecordTab(QWidget):
         self.live_recorded_data = []
         self.live_record_start_time = None
         self.last_recorded_position = None  # Reset this too!
+        if self._live_record_connected_locally:
+            try:
+                self.motor_controller.disconnect()
+            except Exception:
+                pass
+        self._live_record_connected_locally = False
     
     def capture_live_position(self):
         """INDUSTRIAL precision position capture at 20Hz with timestamps
@@ -1018,8 +1038,11 @@ class RecordTab(QWidget):
                 self.live_record_start_time = time.time()
             
             # Read current position with high precision
-            positions = self.motor_controller.read_positions()
-            
+            positions = self.motor_controller.read_positions_from_bus()
+
+            if not positions:
+                positions = self.motor_controller.read_positions()
+
             if not positions or len(positions) != 6:
                 print("[LIVE RECORD] ⚠️ Failed to read positions")
                 return
@@ -1259,9 +1282,9 @@ class RecordTab(QWidget):
         else:
             self.stop_playback()
     
-    def toggle_loop(self):
+    def toggle_loop(self, checked: bool):
         """Toggle loop mode"""
-        self.play_loop = self.loop_btn.isChecked()
+        self.play_loop = checked
         if self.play_loop:
             self.status_label.setText("🔁 Loop enabled")
         else:
@@ -1456,7 +1479,8 @@ class RecordTab(QWidget):
         self.play_btn.setText("▶ PLAY")
         self.set_btn.setEnabled(True)
         self.save_btn.setEnabled(True)
-        
+        self.live_record_btn.setEnabled(True)
+
         # Clear row selection
         self.table.clearSelection()
         
