@@ -2046,23 +2046,25 @@ class DashboardTab(QWidget):
             )
             return
 
+        home_velocity = rest_config.get("velocity")
+
         self.action_label.setText("Moving to home...")
         self._append_log_entry(
             "info",
             "Moving to the home position…",
             code="home_start",
         )
-        self._append_log_entry(
-            "speed",
-            f"Robot speed set to {int(self.master_speed * 100)}% for homing.",
-            code="home_speed",
-        )
+        if home_velocity is not None:
+            self._append_log_entry(
+                "speed",
+                f"Home velocity set to {home_velocity}.",
+                code="home_speed",
+            )
         self.home_btn.setEnabled(False)
 
         request = HomeMoveRequest(
             config=self.config,
-            velocity_override=rest_config.get("velocity"),
-            speed_multiplier=self.master_speed,
+            velocity_override=home_velocity,
         )
 
         worker = HomeMoveWorker(request)

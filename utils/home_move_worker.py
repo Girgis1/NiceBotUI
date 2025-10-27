@@ -16,7 +16,6 @@ class HomeMoveRequest:
 
     config: Mapping[str, Any]
     velocity_override: Optional[int] = None
-    speed_multiplier: Optional[float] = None
 
 
 class HomeMoveWorker(QObject):
@@ -33,40 +32,31 @@ class HomeMoveWorker(QObject):
     def run(self) -> None:
         """Perform the home move while emitting progress updates."""
 
-        base_config = dict(self._request.config or {})
-        rest_config = dict(base_config.get("rest_position") or {})
+        config = dict(self._request.config or {})
+        rest_config = dict(config.get("rest_position") or {})
         positions = rest_config.get("positions")
 
         if not positions:
             self.finished.emit(False, "No home position configured. Set home first.")
             return
 
-        robot_cfg = base_config.get("robot") or {}
+        robot_cfg = config.get("robot") or {}
         if not robot_cfg.get("port"):
             self.finished.emit(False, "Robot port not configured. Check settings.")
             return
 
+        base_velocity = rest_config.get("velocity", 600)
+        velocity = self._request.velocity_override or base_velocity
+
         try:
-            velocity = self._resolve_velocity(rest_config)
-        except ValueError as exc:
-            self.finished.emit(False, str(exc))
-            return
-
-        control_cfg = dict(base_config.get("control") or {})
-        multiplier = self._resolve_multiplier(control_cfg.get("speed_multiplier"))
-        if self._request.speed_multiplier is not None:
-            multiplier = self._resolve_multiplier(self._request.speed_multiplier)
-        control_cfg["speed_multiplier"] = multiplier
-
-        # Prepare an isolated config for the motor controller so we avoid mutating caller state.
-        run_config = dict(base_config)
-        run_config["control"] = control_cfg
-        run_config["rest_position"] = rest_config
+            velocity = int(max(50, min(1200, velocity)))
+        except Exception:
+            velocity = int(max(50, min(1200, base_velocity)))
 
         self.progress.emit("Connecting to motors...")
 
         try:
-            controller = MotorController(run_config)
+            controller = MotorController(config)
         except Exception as exc:  # pragma: no cover - controller init touches hardware libs
             self.finished.emit(False, f"Motor controller initialisation failed: {exc}")
             return
@@ -92,31 +82,3 @@ class HomeMoveWorker(QObject):
                 controller.disconnect()
             except Exception:
                 pass
-
-    def _resolve_velocity(self, rest_config: Mapping[str, Any]) -> int:
-        """Return the target velocity for the move."""
-
-        candidate = self._request.velocity_override
-        if candidate is None:
-            candidate = rest_config.get("velocity", 600)
-
-        try:
-            velocity = int(candidate)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"Invalid home velocity: {candidate}") from exc
-
-        return max(50, min(2000, velocity))
-
-    def _resolve_multiplier(self, default: Optional[float]) -> float:
-        """Clamp the supplied speed multiplier to a safe range."""
-
-        candidate = self._request.speed_multiplier
-        if candidate is None:
-            candidate = default if default is not None else 1.0
-
-        try:
-            multiplier = float(candidate)
-        except (TypeError, ValueError):
-            multiplier = 1.0
-
-        return max(0.2, min(1.5, multiplier))
