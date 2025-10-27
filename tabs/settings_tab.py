@@ -4,12 +4,15 @@ Settings Tab - Configuration Interface
 
 import json
 import random
+import sys
+from functools import partial
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QLineEdit, QScrollArea, QFrame, QSpinBox, QDoubleSpinBox,
-    QTabWidget, QCheckBox, QComboBox, QDialog, QSizePolicy
+    QTabWidget, QCheckBox, QComboBox, QDialog, QSizePolicy,
+    QGroupBox, QFormLayout
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QThread
 from PySide6.QtGui import QImage, QPixmap
@@ -28,6 +31,10 @@ try:
     from ultralytics import YOLO  # type: ignore
 except ImportError:  # pragma: no cover - optional dependency
     YOLO = None
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+from vision.models import MODEL_REGISTRY  # type: ignore
 
 from utils.camera_hub import CameraStreamHub
 from utils.home_move_worker import HomeMoveWorker, HomeMoveRequest
@@ -369,17 +376,25 @@ class SettingsTab(QWidget):
         self._home_thread: Optional[QThread] = None
         self._home_worker: Optional[HomeMoveWorker] = None
         self._pending_home_velocity: Optional[int] = None
+        self._loading_settings = False
         
         # Device status tracking (synced with device_manager)
         self.robot_status = "empty"          # empty/online/offline
         self.camera_front_status = "empty"   # empty/online/offline
         self.camera_wrist_status = "empty"   # empty/online/offline
-        
+
         # Status circle widgets (will be set during init_ui)
         self.robot_status_circle = None
         self.camera_front_circle = None
         self.camera_wrist_circle = None
-        
+
+        # Vision configuration caches
+        self.vision_slot_controls: Dict[str, List[Dict[str, object]]] = {}
+        self.vision_camera_interval: Dict[str, QDoubleSpinBox] = {}
+        self.vision_model_controls: Dict[str, Dict[str, object]] = {}
+
+        self._ensure_vision_defaults()
+
         self.init_ui()
         self.load_settings()
         
@@ -449,7 +464,11 @@ class SettingsTab(QWidget):
         # Camera tab
         camera_tab = self.wrap_tab(self.create_camera_tab())
         self.tab_widget.addTab(camera_tab, "📷 Camera")
-        
+
+        # Vision tab
+        vision_tab = self.wrap_tab(self.create_vision_tab())
+        self.tab_widget.addTab(vision_tab, "👁️ Vision")
+
         # Policy tab
         policy_tab = self.wrap_tab(self.create_policy_tab())
         self.tab_widget.addTab(policy_tab, "🧠 Policy")
@@ -511,6 +530,40 @@ class SettingsTab(QWidget):
                 background: {color2};
             }}
         """
+
+    # ------------------------------------------------------------------
+    # Vision configuration helpers
+
+    def _default_slot_config(self, model_key: str) -> Dict[str, object]:
+        spec = MODEL_REGISTRY.get(model_key)
+        if not spec:
+            return {"model": model_key, "enabled": False}
+        slot = dict(spec.default_slot)
+        slot["model"] = model_key
+        return slot
+
+    def _ensure_vision_defaults(self) -> None:
+        vision_cfg = self.config.setdefault("vision", {})
+        cameras_cfg = vision_cfg.setdefault("cameras", {})
+        camera_names = list(self.config.get("cameras", {}).keys())
+        if not camera_names:
+            camera_names = ["front"]
+            self.config.setdefault("cameras", {}).setdefault(
+                "front", {"index_or_path": 0, "width": 640, "height": 480, "fps": 30}
+            )
+
+        for name in camera_names:
+            if name not in cameras_cfg:
+                cameras_cfg[name] = {
+                    "interval_s": 0.25,
+                    "pipeline": [
+                        self._default_slot_config("hand_presence"),
+                        self._default_slot_config("beauty_product_mask"),
+                        self._default_slot_config("product_defect"),
+                    ],
+                }
+
+        vision_cfg.setdefault("model_settings", {})
 
     def wrap_tab(self, content_widget: QWidget) -> QScrollArea:
         """Place tab contents inside a scroll area for small displays."""
@@ -768,6 +821,330 @@ class SettingsTab(QWidget):
         
         layout.addStretch()
         return widget
+
+    def create_vision_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setSpacing(12)
+        layout.setContentsMargins(12, 12, 12, 12)
+
+        intro = QLabel(
+            "Configure up to three lightweight vision models per camera. "
+            "Masks and metadata are persisted for training, and the hand monitor updates the dashboard indicator."
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color: #e0e0e0; font-size: 13px;")
+        layout.addWidget(intro)
+
+        cameras_cfg = self.config.get("vision", {}).get("cameras", {})
+        camera_names = list(self.config.get("cameras", {}).keys()) or ["front"]
+
+        for camera_name in camera_names:
+            group = QGroupBox(f"Camera: {camera_name.title()}")
+            group.setStyleSheet(
+                "QGroupBox { color: #ffffff; font-size: 14px; font-weight: bold; border: 1px solid #505050; border-radius: 6px; margin-top: 6px; padding: 6px; }"
+            )
+            group_layout = QVBoxLayout(group)
+            group_layout.setSpacing(10)
+
+            interval_row = QHBoxLayout()
+            interval_row.setSpacing(8)
+            interval_label = QLabel("Update interval (s):")
+            interval_label.setStyleSheet("color: #cfd8dc; font-size: 12px;")
+            interval_spin = QDoubleSpinBox()
+            interval_spin.setRange(0.05, 5.0)
+            interval_spin.setDecimals(2)
+            interval_spin.setSingleStep(0.05)
+            interval_spin.setValue(cameras_cfg.get(camera_name, {}).get("interval_s", 0.25))
+            interval_row.addWidget(interval_label)
+            interval_row.addWidget(interval_spin)
+            interval_row.addStretch()
+            group_layout.addLayout(interval_row)
+            self.vision_camera_interval[camera_name] = interval_spin
+
+            slot_controls: List[Dict[str, object]] = []
+            for slot_index in range(3):
+                slot_widget, controls = self._build_vision_slot(camera_name, slot_index)
+                group_layout.addWidget(slot_widget)
+                slot_controls.append(controls)
+            self.vision_slot_controls[camera_name] = slot_controls
+
+            layout.addWidget(group)
+
+        layout.addWidget(self._build_vision_model_settings())
+        layout.addStretch()
+        return widget
+
+    def _build_vision_slot(self, camera_name: str, slot_index: int) -> Tuple[QWidget, Dict[str, object]]:
+        frame = QFrame()
+        frame.setFrameShape(QFrame.StyledPanel)
+        frame.setStyleSheet("QFrame { background-color: #2f2f2f; border: 1px solid #505050; border-radius: 6px; }")
+
+        vbox = QVBoxLayout(frame)
+        vbox.setContentsMargins(10, 10, 10, 10)
+        vbox.setSpacing(6)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        title = QLabel(f"Slot {slot_index + 1}")
+        title.setStyleSheet("color: #f5f5f5; font-size: 13px; font-weight: bold;")
+        header.addWidget(title)
+
+        combo = QComboBox()
+        combo.addItem("Unused", "none")
+        for key, spec in MODEL_REGISTRY.items():
+            combo.addItem(spec.name, key)
+        combo.setMinimumWidth(220)
+        header.addWidget(combo, stretch=1)
+        vbox.addLayout(header)
+
+        options_layout = QHBoxLayout()
+        options_layout.setSpacing(12)
+
+        enabled_check = QCheckBox("Enabled")
+        enabled_check.setChecked(True)
+        options_layout.addWidget(enabled_check)
+
+        overlay_check = QCheckBox("Show overlay")
+        options_layout.addWidget(overlay_check)
+
+        training_check = QCheckBox("Save to training")
+        options_layout.addWidget(training_check)
+
+        debug_check = QCheckBox("Debug overlay")
+        debug_check.hide()
+        options_layout.addWidget(debug_check)
+
+        dashboard_check = QCheckBox("Dashboard indicator")
+        dashboard_check.hide()
+        options_layout.addWidget(dashboard_check)
+
+        options_layout.addStretch()
+        vbox.addLayout(options_layout)
+
+        controls: Dict[str, object] = {
+            "model_combo": combo,
+            "enabled": enabled_check,
+            "overlay": overlay_check,
+            "training": training_check,
+            "debug": debug_check,
+            "dashboard": dashboard_check,
+        }
+
+        combo.currentIndexChanged.connect(partial(self._on_vision_model_changed, camera_name, slot_index))
+        self._update_vision_slot_capabilities(camera_name, slot_index, controls)
+        return frame, controls
+
+    def _build_vision_model_settings(self) -> QGroupBox:
+        group = QGroupBox("Model tuning")
+        group.setStyleSheet(
+            "QGroupBox { color: #ffffff; font-size: 14px; font-weight: bold; border: 1px solid #505050; border-radius: 6px; margin-top: 6px; padding: 6px; }"
+        )
+        layout = QVBoxLayout(group)
+        layout.setSpacing(10)
+
+        for key, spec in MODEL_REGISTRY.items():
+            box = QGroupBox(spec.name)
+            box.setStyleSheet(
+                "QGroupBox { color: #e0e0e0; font-size: 13px; font-weight: bold; border: 1px solid #444; border-radius: 6px; margin-top: 4px; padding: 6px; }"
+            )
+            form = QFormLayout(box)
+            form.setSpacing(6)
+            form.setLabelAlignment(Qt.AlignLeft)
+
+            controls: Dict[str, object] = {}
+            for setting_key, default_value in spec.default_settings.items():
+                label = setting_key.replace("_", " ").title()
+                if isinstance(default_value, float):
+                    spin = QDoubleSpinBox()
+                    if any(token in setting_key for token in ("threshold", "confidence", "brightness", "contrast")):
+                        spin.setRange(0.0, 1.0)
+                        spin.setSingleStep(0.01)
+                    else:
+                        spin.setRange(0.0, 5.0)
+                        spin.setSingleStep(0.05)
+                    spin.setDecimals(3)
+                    spin.setValue(float(default_value))
+                    form.addRow(label + ":", spin)
+                    controls[setting_key] = spin
+                elif isinstance(default_value, int):
+                    spin_i = QSpinBox()
+                    if "kernel" in setting_key:
+                        spin_i.setRange(1, 25)
+                        spin_i.setSingleStep(2)
+                    else:
+                        spin_i.setRange(0, 200)
+                    spin_i.setValue(int(default_value))
+                    form.addRow(label + ":", spin_i)
+                    controls[setting_key] = spin_i
+                else:
+                    edit = QLineEdit(str(default_value))
+                    form.addRow(label + ":", edit)
+                    controls[setting_key] = edit
+
+            self.vision_model_controls[key] = controls
+            layout.addWidget(box)
+
+        return group
+
+    def _on_vision_model_changed(self, camera_name: str, slot_index: int) -> None:
+        controls = self.vision_slot_controls.get(camera_name, [])
+        if slot_index >= len(controls):
+            return
+        slot_controls = controls[slot_index]
+        model_key = slot_controls["model_combo"].currentData()
+        spec = MODEL_REGISTRY.get(model_key)
+        if spec and not self._loading_settings:
+            slot_controls["enabled"].setChecked(bool(spec.default_slot.get("enabled", True)))
+            slot_controls["overlay"].setChecked(bool(spec.default_slot.get("show_overlay", False)))
+            slot_controls["training"].setChecked(bool(spec.default_slot.get("save_to_training", False)))
+            if slot_controls.get("debug"):
+                slot_controls["debug"].setChecked(bool(spec.default_slot.get("debug_overlay", False)))
+            if slot_controls.get("dashboard"):
+                slot_controls["dashboard"].setChecked(bool(spec.default_slot.get("dashboard_indicator", True)))
+
+        self._update_vision_slot_capabilities(camera_name, slot_index, slot_controls)
+
+    def _update_vision_slot_capabilities(
+        self, camera_name: str, slot_index: int, slot_controls: Optional[Dict[str, object]] = None
+    ) -> None:
+        if slot_controls is not None:
+            controls = slot_controls
+        else:
+            slots = self.vision_slot_controls.get(camera_name, [])
+            if slot_index >= len(slots):
+                return
+            controls = slots[slot_index]
+        if not controls:
+            return
+        combo: QComboBox = controls["model_combo"]  # type: ignore[assignment]
+        model_key = combo.currentData()
+        spec = MODEL_REGISTRY.get(model_key)
+
+        enabled_check: QCheckBox = controls["enabled"]  # type: ignore[assignment]
+        overlay_check: QCheckBox = controls["overlay"]  # type: ignore[assignment]
+        training_check: QCheckBox = controls["training"]  # type: ignore[assignment]
+        debug_check: QCheckBox = controls["debug"]  # type: ignore[assignment]
+        dashboard_check: QCheckBox = controls["dashboard"]  # type: ignore[assignment]
+
+        if not spec:
+            enabled_check.setChecked(False)
+            enabled_check.setEnabled(False)
+            overlay_check.setVisible(False)
+            training_check.setVisible(False)
+            debug_check.setVisible(False)
+            dashboard_check.setVisible(False)
+            return
+
+        enabled_check.setEnabled(True)
+        overlay_check.setVisible(spec.supports_overlay)
+        overlay_check.setEnabled(spec.supports_overlay)
+        if not spec.supports_overlay:
+            overlay_check.setChecked(False)
+
+        training_capable = spec.supports_training or spec.supports_masks
+        training_check.setVisible(training_capable)
+        training_check.setEnabled(training_capable)
+        if not training_capable:
+            training_check.setChecked(False)
+
+        debug_check.setVisible(spec.has_debug_toggle)
+        debug_check.setEnabled(spec.has_debug_toggle)
+        if not spec.has_debug_toggle:
+            debug_check.setChecked(False)
+
+        is_hand_model = model_key == "hand_presence"
+        dashboard_check.setVisible(is_hand_model)
+        dashboard_check.setEnabled(is_hand_model)
+        if not is_hand_model:
+            dashboard_check.setChecked(False)
+
+    def _load_vision_settings(self) -> None:
+        vision_cfg = self.config.get("vision", {})
+        camera_cfgs = vision_cfg.get("cameras", {})
+
+        for camera_name, controls_list in self.vision_slot_controls.items():
+            pipeline_cfg = camera_cfgs.get(camera_name, {})
+            interval = float(pipeline_cfg.get("interval_s", 0.25))
+            interval_spin = self.vision_camera_interval.get(camera_name)
+            if interval_spin:
+                interval_spin.setValue(interval)
+
+            pipeline = pipeline_cfg.get("pipeline", [])
+            for idx, controls in enumerate(controls_list):
+                slot_cfg = pipeline[idx] if idx < len(pipeline) else {}
+                combo: QComboBox = controls["model_combo"]  # type: ignore[assignment]
+                model_key = slot_cfg.get("model", "none")
+                combo.blockSignals(True)
+                target_index = combo.findData(model_key)
+                combo.setCurrentIndex(target_index if target_index >= 0 else 0)
+                combo.blockSignals(False)
+
+                controls["enabled"].setChecked(slot_cfg.get("enabled", True))  # type: ignore[index]
+                controls["overlay"].setChecked(slot_cfg.get("show_overlay", False))  # type: ignore[index]
+                controls["training"].setChecked(slot_cfg.get("save_to_training", False))  # type: ignore[index]
+                if controls.get("debug"):
+                    controls["debug"].setChecked(slot_cfg.get("debug_overlay", False))  # type: ignore[index]
+                if controls.get("dashboard"):
+                    controls["dashboard"].setChecked(slot_cfg.get("dashboard_indicator", True))  # type: ignore[index]
+
+                self._update_vision_slot_capabilities(camera_name, idx)
+
+        model_settings = vision_cfg.get("model_settings", {})
+        for key, controls in self.vision_model_controls.items():
+            spec = MODEL_REGISTRY.get(key)
+            defaults = dict(spec.default_settings) if spec else {}
+            values = defaults
+            values.update(model_settings.get(key, {}))
+            for setting_key, widget in controls.items():
+                value = values.get(setting_key)
+                if isinstance(widget, QDoubleSpinBox):
+                    widget.setValue(float(value if value is not None else widget.value()))
+                elif isinstance(widget, QSpinBox):
+                    widget.setValue(int(value if value is not None else widget.value()))
+                elif isinstance(widget, QLineEdit):
+                    widget.setText(str(value or ""))
+
+    def _collect_vision_settings(self) -> None:
+        vision_cfg = self.config.setdefault("vision", {})
+        cameras_cfg = vision_cfg.setdefault("cameras", {})
+
+        for camera_name, controls_list in self.vision_slot_controls.items():
+            pipeline: List[Dict[str, object]] = []
+            for controls in controls_list:
+                combo: QComboBox = controls["model_combo"]  # type: ignore[assignment]
+                model_key = combo.currentData()
+                if not model_key or model_key == "none":
+                    continue
+                slot_payload: Dict[str, object] = {
+                    "model": model_key,
+                    "enabled": controls["enabled"].isChecked(),  # type: ignore[index]
+                    "show_overlay": controls["overlay"].isChecked(),  # type: ignore[index]
+                    "save_to_training": controls["training"].isChecked(),  # type: ignore[index]
+                }
+                if controls.get("debug"):
+                    slot_payload["debug_overlay"] = controls["debug"].isChecked()  # type: ignore[index]
+                if controls.get("dashboard"):
+                    slot_payload["dashboard_indicator"] = controls["dashboard"].isChecked()  # type: ignore[index]
+                pipeline.append(slot_payload)
+
+            interval_spin = self.vision_camera_interval.get(camera_name)
+            cameras_cfg[camera_name] = {
+                "pipeline": pipeline,
+                "interval_s": interval_spin.value() if interval_spin else 0.25,
+            }
+
+        model_settings = vision_cfg.setdefault("model_settings", {})
+        for key, controls in self.vision_model_controls.items():
+            payload: Dict[str, object] = {}
+            for setting_key, widget in controls.items():
+                if isinstance(widget, QDoubleSpinBox):
+                    payload[setting_key] = widget.value()
+                elif isinstance(widget, QSpinBox):
+                    payload[setting_key] = widget.value()
+                elif isinstance(widget, QLineEdit):
+                    payload[setting_key] = widget.text().strip()
+            model_settings[key] = payload
 
     def run_temperature_self_test(self):
         """Simulate a temperature diagnostic and surface results."""
@@ -1595,6 +1972,7 @@ class SettingsTab(QWidget):
     
     def load_settings(self):
         """Load settings from config"""
+        self._loading_settings = True
         # Robot settings
         self.robot_port_edit.setText(self.config.get("robot", {}).get("port", "/dev/ttyACM0"))
         self.robot_fps_spin.setValue(self.config.get("robot", {}).get("fps", 30))
@@ -1653,6 +2031,9 @@ class SettingsTab(QWidget):
         self.hand_safety_confidence_spin.setValue(safety_cfg.get("detection_confidence", 0.4))
         self.hand_safety_resume_delay_spin.setValue(safety_cfg.get("resume_delay_s", 1.0))
         self.hand_safety_frame_width_spin.setValue(safety_cfg.get("frame_width", 320))
+
+        self._load_vision_settings()
+        self._loading_settings = False
     
     def save_settings(self):
         """Save settings to config file"""
@@ -1725,7 +2106,9 @@ class SettingsTab(QWidget):
         self.config["safety"]["frame_width"] = self.hand_safety_frame_width_spin.value()
         self.config["safety"]["frame_height"] = int(self.hand_safety_frame_width_spin.value() * 0.75)  # 4:3 aspect
         self.config["safety"]["yolo_model"] = "yolov8n.pt"  # Use nano model for speed
-        
+
+        self._collect_vision_settings()
+
         # Write to file
         try:
             with open(self.config_path, 'w') as f:
