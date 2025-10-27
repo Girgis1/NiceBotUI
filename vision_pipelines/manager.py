@@ -106,27 +106,42 @@ class VisionPipelineManager:
         if hub is None:
             return
         interval = 0.2
+        last_run_times: Dict[str, float] = {}
         while self._running and not stop_event.is_set():
             frame = hub.get_frame(camera_name, preview=False) if hub else None
             if frame is None:
                 time.sleep(0.5)
                 continue
             timestamp = time.time()
-            min_interval = 0.2
+            min_interval: Optional[float] = None
             for pipeline in pipelines:
+                freq = getattr(pipeline, "config", {}).get("frequency_hz", 5.0)
+                try:
+                    interval_candidate = 1.0 / max(0.5, float(freq))
+                except Exception:
+                    interval_candidate = 0.2
+                last_run = last_run_times.get(pipeline.pipeline_id, 0.0)
+                elapsed = timestamp - last_run
+                if elapsed < interval_candidate:
+                    remaining = interval_candidate - elapsed
+                    if min_interval is None:
+                        min_interval = remaining
+                    else:
+                        min_interval = min(min_interval, remaining)
+                    continue
                 try:
                     result = pipeline.process(frame.copy() if np is not None else frame, timestamp)
                 except Exception as exc:  # pragma: no cover - safety net
                     print(f"[VISION][ERROR] Pipeline {pipeline.pipeline_id} crashed: {exc}")
                     continue
                 self._handle_result(camera_name, frame, result)
-                freq = getattr(pipeline, "config", {}).get("frequency_hz", 5.0)
-                try:
-                    interval_candidate = 1.0 / max(0.5, float(freq))
-                except Exception:
-                    interval_candidate = 0.2
-                min_interval = min(min_interval, interval_candidate)
-            time.sleep(max(0.05, min_interval))
+                last_run_times[pipeline.pipeline_id] = time.time()
+                if min_interval is None:
+                    min_interval = interval_candidate
+                else:
+                    min_interval = min(min_interval, interval_candidate)
+            sleep_for = min_interval if min_interval is not None else interval
+            time.sleep(max(0.05, sleep_for))
 
     def _handle_result(self, camera_name: str, frame: "np.ndarray", result: VisionResult) -> None:
         if result.metadata.get("dashboard_indicator"):
