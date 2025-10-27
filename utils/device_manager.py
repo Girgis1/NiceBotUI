@@ -113,6 +113,74 @@ class DeviceManager(QObject):
         sys.stdout.flush()
         
         return results
+
+    def refresh_status(self) -> bool:
+        """Refresh device status without a full discovery scan.
+
+        Returns:
+            bool: True if any status changed, False otherwise.
+        """
+
+        status_changed = False
+
+        # Robot status
+        try:
+            robot_port = self.config.get("robot", {}).get("port")
+            if robot_port:
+                new_status = "online" if Path(robot_port).exists() else "offline"
+            else:
+                new_status = "empty"
+
+            if new_status != self.robot_status:
+                self.robot_status = new_status
+                self.robot_status_changed.emit(new_status)
+                status_changed = True
+        except Exception as exc:  # pragma: no cover - defensive
+            if self.robot_status != "empty":
+                self.robot_status = "empty"
+                self.robot_status_changed.emit("empty")
+                status_changed = True
+            self.discovery_log.emit(f"Device check error (robot): {exc}")
+
+        # Camera statuses
+        cameras_cfg = self.config.get("cameras", {}) or {}
+        for camera_name, camera_cfg in cameras_cfg.items():
+            status = self._probe_camera_status(camera_cfg.get("index_or_path"))
+            attr_name = f"camera_{camera_name}_status"
+            previous = getattr(self, attr_name, "empty")
+            if status != previous:
+                setattr(self, attr_name, status)
+                self.camera_status_changed.emit(camera_name, status)
+                status_changed = True
+
+        return status_changed
+
+    def _probe_camera_status(self, source) -> str:
+        """Check whether a configured camera source appears online."""
+
+        if source is None:
+            return "empty"
+
+        # Handle integer indices passed as strings
+        probe_source = source
+        if isinstance(source, str) and source.isdigit():
+            probe_source = int(source)
+
+        # Try OpenCV if available for a reliable check
+        try:
+            import cv2  # type: ignore
+
+            cap = cv2.VideoCapture(probe_source)
+            if cap.isOpened():
+                cap.release()
+                return "online"
+            cap.release()
+            return "offline"
+        except Exception:
+            # Fall back to filesystem check for path-based sources
+            if isinstance(source, str) and Path(source).exists():
+                return "online"
+            return "offline"
     
     def _discover_robot(self) -> Optional[Dict]:
         """Scan serial ports for robot arm
@@ -282,4 +350,3 @@ class DeviceManager(QObject):
         elif camera_name == "wrist":
             return self.camera_wrist_status
         return "empty"
-

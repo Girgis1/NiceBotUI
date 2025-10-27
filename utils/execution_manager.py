@@ -253,30 +253,52 @@ class ExecutionWorker(QThread):
             self.execution_completed.emit(False, "Motor connection failed")
             return
         
+        loop_enabled = bool(self.options.get("loop", False))
+        iteration = 0
+        completed_once = False
+        recording_failed = False
+
         try:
-            # Execute based on recording type
-            recording_type = recording.get("type", "position")
-            
-            if recording_type == "composite_recording":
-                # New composite format with multiple steps
-                self._execute_composite_recording(recording)
-            elif recording_type == "live_recording":
-                # Legacy single live recording (shouldn't happen with new system)
-                self._playback_live_recording(recording)
-            else:
-                # Legacy position recording (shouldn't happen with new system)
-                self._playback_position_recording(recording)
-            
-            # Success
-            if not self._stop_requested:
-                self.log_message.emit('info', "✓ Recording completed successfully")
-                self.execution_completed.emit(True, "Recording completed")
-            else:
-                self.log_message.emit('warning', "Recording stopped by user")
-                self.execution_completed.emit(False, "Stopped by user")
-                
+            while True:
+                iteration += 1
+                if loop_enabled and not self._stop_requested:
+                    self.log_message.emit('info', f"Starting loop iteration {iteration}…")
+
+                recording_type = recording.get("type", "position")
+
+                try:
+                    if recording_type == "composite_recording":
+                        self._execute_composite_recording(recording)
+                    elif recording_type == "live_recording":
+                        self._playback_live_recording(recording)
+                    else:
+                        self._playback_position_recording(recording)
+                except Exception as exc:  # pragma: no cover - hardware dependent
+                    self.log_message.emit('error', f"Recording failed: {exc}")
+                    recording_failed = True
+                    break
+
+                if self._stop_requested:
+                    break
+
+                completed_once = True
+
+                if not loop_enabled:
+                    break
+
+                self.log_message.emit('info', f"Loop iteration {iteration} complete. Repeating…")
+
         finally:
             self.motor_controller.disconnect()
+
+        if self._stop_requested:
+            self.log_message.emit('warning', "Recording stopped by user")
+            self.execution_completed.emit(False, "Stopped by user")
+        elif recording_failed:
+            self.execution_completed.emit(False, "Recording failed")
+        else:
+            self.log_message.emit('info', "✓ Recording completed successfully")
+            self.execution_completed.emit(True, "Recording completed")
     
     def _execute_composite_recording(self, recording: dict):
         """Execute a composite recording with multiple steps

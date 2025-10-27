@@ -381,6 +381,10 @@ class DashboardTab(QWidget):
         self.throbber_update_timer = QTimer()
         self.throbber_update_timer.timeout.connect(self.update_throbber_progress)
         self.throbber_update_timer.start(100)
+
+        self.connection_check_timer = QTimer()
+        self.connection_check_timer.timeout.connect(self.check_connections_background)
+        self.connection_check_timer.start(10000)
     
     def init_ui(self):
         """Initialize UI - same as original app.py"""
@@ -1492,8 +1496,17 @@ class DashboardTab(QWidget):
     
     def check_connections_background(self):
         """Check connections - now handled by device_manager"""
-        # Connection checking is now centralized in device_manager
-        pass
+        if not self.device_manager:
+            return
+        try:
+            self.device_manager.refresh_status()
+        except Exception as exc:  # pragma: no cover - defensive
+            self._append_log_entry(
+                "warning",
+                "Device status check failed.",
+                action=f"Details: {exc}",
+                code="device_refresh_failed",
+            )
     
     
     def toggle_start_stop(self):
@@ -1606,7 +1619,9 @@ class DashboardTab(QWidget):
                 self._start_model_execution(execution_name)
         else:
             # For recordings and sequences, use ExecutionWorker
-            options = {"loop": self.loop_enabled} if execution_type == "sequence" else {}
+            options = {}
+            if execution_type in {"sequence", "recording"}:
+                options["loop"] = self.loop_enabled
             self._start_execution_worker(execution_type, execution_name, options)
     
     def _start_model_execution(self, model_name: str):
