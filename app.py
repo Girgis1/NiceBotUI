@@ -172,7 +172,8 @@ class MainWindow(QMainWindow):
         # Connect sequence execution signal
         self.sequence_tab.execute_sequence_signal.connect(self.dashboard_tab.run_sequence)
         self.settings_tab = SettingsTab(self.config, self, self.device_manager)
-        
+        self.settings_tab.config_changed.connect(self.dashboard_tab.on_settings_updated)
+
         # Add tabs to stacked widget
         self.content_stack.addWidget(self.dashboard_tab)
         self.content_stack.addWidget(self.sequence_tab)

@@ -102,6 +102,7 @@ qtwidgets_stub = types.SimpleNamespace(
     QDoubleSpinBox=_make_dummy("QDoubleSpinBox"),
     QFormLayout=_make_dummy("QFormLayout"),
     QFrame=_make_dummy("QFrame"),
+    QAbstractItemView=_make_dummy("QAbstractItemView"),
     QGroupBox=_make_dummy("QGroupBox"),
     QHBoxLayout=_make_dummy("QHBoxLayout"),
     QLabel=_make_dummy("QLabel"),
@@ -114,6 +115,8 @@ qtwidgets_stub = types.SimpleNamespace(
     QSizePolicy=_make_dummy("QSizePolicy"),
     QSlider=_make_dummy("QSlider"),
     QSpinBox=_make_dummy("QSpinBox"),
+    QTableWidget=_make_dummy("QTableWidget"),
+    QTableWidgetItem=_make_dummy("QTableWidgetItem"),
     QVBoxLayout=_make_dummy("QVBoxLayout"),
     QWidget=_make_dummy("QWidget"),
 )

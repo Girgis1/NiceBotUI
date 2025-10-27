@@ -5,9 +5,10 @@ This is the existing UI refactored as a tab
 
 import sys
 import json
+import time
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Tuple, Union
 import pytz
 
 try:
@@ -22,7 +23,7 @@ from PySide6.QtWidgets import (
     QFrame, QTextEdit, QComboBox, QSizePolicy, QSpinBox, QSlider,
     QStackedWidget, QDialog
 )
-from PySide6.QtCore import Qt, QTimer, Signal, QThread
+from PySide6.QtCore import Qt, QTimer, Signal, QThread, QObject
 from PySide6.QtGui import QFont, QColor, QPainter, QPen, QImage, QPixmap
 
 # Add parent directory to path
@@ -33,6 +34,7 @@ from utils.execution_manager import ExecutionWorker
 from utils.camera_hub import CameraStreamHub
 from utils.home_move_worker import HomeMoveWorker, HomeMoveRequest
 from utils.log_messages import LogEntry, translate_worker_message
+from utils.vision_models import get_model_info, resolve_model_path
 
 # Timezone
 TIMEZONE = pytz.timezone('Australia/Sydney')
@@ -81,29 +83,41 @@ class StatusIndicator(QLabel):
         self.connected = False
         self.warning = False
         self.null = False  # Initialize null attribute
+        self.alert = False
         self.update_style()
-    
+
     def set_connected(self, connected):
         self.connected = connected
         self.warning = False
         self.null = False  # Clear null state when setting connected
+        self.alert = False
         self.update_style()
-    
+
     def set_warning(self):
         self.connected = False
         self.warning = True
         self.null = False  # Clear null state when setting warning
+        self.alert = False
         self.update_style()
-    
+
     def set_null(self):
         """Set as null/empty indicator"""
         self.connected = False
         self.warning = False
         self.null = True
+        self.alert = False
         self.update_style()
-    
+
+    def set_alert(self):
+        """Highlight as alert (red)."""
+        self.connected = False
+        self.warning = False
+        self.null = False
+        self.alert = True
+        self.update_style()
+
     def update_style(self):
-        if hasattr(self, 'null') and self.null:
+        if getattr(self, 'null', False):
             # Null indicator - unfilled black circle
             self.setFixedSize(20, 20)
             self.setStyleSheet("""
@@ -112,6 +126,15 @@ class StatusIndicator(QLabel):
                     border: 2px solid #606060;
                     border-radius: 10px;
                 }
+            """)
+        elif getattr(self, 'alert', False):
+            color = "#f44336"
+            self.setFixedSize(20, 20)
+            self.setStyleSheet(f"""
+                QLabel {{
+                    background-color: {color};
+                    border-radius: 10px;
+                }}
             """)
         elif self.warning:
             color = "#FF9800"
@@ -142,6 +165,144 @@ class StatusIndicator(QLabel):
             """)
 
 
+class HandDetectionWorker(QObject):
+    """Background worker that monitors hand detection and emits state changes."""
+
+    state_changed = Signal(bool, float)
+    status_message = Signal(str)
+    finished = Signal()
+
+    def __init__(self, app_config: dict, task_cfg: Dict[str, object], parent=None) -> None:
+        super().__init__(parent)
+        self.app_config = app_config
+        self.task_cfg = task_cfg
+        self._running = False
+        self._camera_names = self._resolve_camera_names(task_cfg.get("camera", "front"))
+        self._interval = max(0.15, 1.0 / float(task_cfg.get("fps", 6.0) or 6.0))
+        self._confidence = float(task_cfg.get("confidence", 0.35) or 0.35)
+        classes = task_cfg.get("classes")
+        if isinstance(classes, (list, tuple)):
+            self._classes = [int(c) for c in classes]
+        else:
+            self._classes = [0]
+        self._model_path = task_cfg.get("model_path")
+        self._model_id = task_cfg.get("model")
+        self._camera_hub = None
+        self._captures: Dict[str, Optional["cv2.VideoCapture"]] = {}
+
+    def _resolve_camera_names(self, selection: str) -> List[str]:
+        cameras = list(self.app_config.get("cameras", {}).keys()) if isinstance(self.app_config, dict) else []
+        if selection == "both":
+            return [name for name in ("front", "wrist") if name in cameras]
+        if selection == "all":
+            return cameras
+        if selection in cameras:
+            return [selection]
+        if cameras:
+            return [cameras[0]]
+        return []
+
+    def _resolve_identifier(self, name: str) -> Union[int, str]:
+        cameras = self.app_config.get("cameras", {}) if isinstance(self.app_config, dict) else {}
+        cfg = cameras.get(name, {})
+        return cfg.get("index_or_path", name)
+
+    def _get_frame(self) -> Optional[np.ndarray]:
+        if self._camera_hub is not None:
+            for name in self._camera_names:
+                frame = self._camera_hub.get_frame(name, preview=False)
+                if frame is not None:
+                    return frame.copy()
+        if cv2 is None:
+            return None
+        for name in self._camera_names:
+            cap = self._captures.get(name)
+            if cap is None:
+                identifier = self._resolve_identifier(name)
+                cap = cv2.VideoCapture(identifier)
+                if not cap or not cap.isOpened():
+                    self._captures[name] = None
+                    continue
+                self._captures[name] = cap
+            ret, frame = cap.read()
+            if ret and frame is not None:
+                return frame
+        return None
+
+    def stop(self) -> None:
+        self._running = False
+        for cap in self._captures.values():
+            if cap is not None:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+        self._captures.clear()
+
+    def run(self) -> None:  # noqa: D401 - Qt thread entry point
+        if cv2 is None or YOLO is None:
+            self.status_message.emit("Hand detection disabled: install OpenCV + ultralytics.")
+            self.finished.emit()
+            return
+
+        model_source = self._model_path or self._model_id or "yolov8n.pt"
+        try:
+            model = YOLO(model_source)
+            model.overrides['verbose'] = False
+        except Exception as exc:
+            self.status_message.emit(f"Failed to load hand detector: {exc}")
+            self.finished.emit()
+            return
+
+        try:
+            self._camera_hub = CameraStreamHub.instance(self.app_config)
+        except Exception:
+            self._camera_hub = None
+
+        if not self._camera_names:
+            self.status_message.emit("No cameras configured for hand detection")
+            self.finished.emit()
+            return
+
+        self._running = True
+        last_state = False
+
+        while self._running:
+            frame = self._get_frame()
+            if frame is None:
+                time.sleep(self._interval)
+                continue
+
+            try:
+                results = model(frame, conf=self._confidence, verbose=False)
+            except Exception as exc:  # pragma: no cover - runtime safeguard
+                self.status_message.emit(f"Detection error: {exc}")
+                time.sleep(self._interval)
+                continue
+
+            detected = False
+            best_conf = 0.0
+            for result in results or []:
+                if not result.boxes:
+                    continue
+                for box in result.boxes:
+                    conf = float(box.conf[0])
+                    if conf < self._confidence:
+                        continue
+                    cls = int(box.cls[0])
+                    if self._classes and cls not in self._classes:
+                        continue
+                    detected = True
+                    best_conf = max(best_conf, conf)
+
+            if detected != last_state:
+                last_state = detected
+
+            self.state_changed.emit(detected, best_conf)
+            time.sleep(self._interval)
+
+        self.state_changed.emit(False, 0.0)
+        self.finished.emit()
 class CameraPreviewWidget(QFrame):
     """Single camera preview with overlay-ready QLabel."""
 
@@ -343,6 +504,12 @@ class DashboardTab(QWidget):
         self.camera_indicator3: Optional[StatusIndicator] = None
         self.camera_front_circle: Optional[StatusIndicator] = None
         self.camera_wrist_circle: Optional[StatusIndicator] = None
+        self.hand_indicator: Optional[StatusIndicator] = None
+        self.hand_indicator_label: Optional[QLabel] = None
+        self.hand_detection_thread: Optional[QThread] = None
+        self.hand_detection_worker: Optional[HandDetectionWorker] = None
+        self._hand_detection_active = False
+        self._hand_detection_last_state = False
         self.compact_throbber: Optional[CircularProgress] = None
         self.camera_hub: Optional[CameraStreamHub] = None
         if cv2 is not None and np is not None:
@@ -361,6 +528,7 @@ class DashboardTab(QWidget):
         self.init_ui()
         self._update_status_summaries()
         self.validate_config()
+        self.apply_vision_config()
         
         # Connect device manager signals if available
         if self.device_manager:
@@ -437,6 +605,16 @@ class DashboardTab(QWidget):
 
         self.camera_front_circle = self.camera_indicator1
         self.camera_wrist_circle = self.camera_indicator2
+
+        hand_group = QHBoxLayout()
+        hand_group.setSpacing(6)
+        self.hand_indicator_label = QLabel("Hands")
+        self.hand_indicator_label.setStyleSheet("color: #a0a0a0; font-size: 11px;")
+        hand_group.addWidget(self.hand_indicator_label)
+        self.hand_indicator = StatusIndicator()
+        self.hand_indicator.set_null()
+        hand_group.addWidget(self.hand_indicator)
+        normal_status_layout.addLayout(hand_group)
 
         status_bar.addWidget(self.normal_status_container, stretch=0)
 
@@ -1507,6 +1685,109 @@ class DashboardTab(QWidget):
                 action=f"Details: {exc}",
                 code="device_refresh_failed",
             )
+
+    def apply_vision_config(self) -> None:
+        """Apply hand detection configuration from settings."""
+
+        vision_cfg = self.config.get("vision", {}) if isinstance(self.config, dict) else {}
+        hand_cfg = vision_cfg.get("hand_detection", {}) if isinstance(vision_cfg, dict) else {}
+        indicator_enabled = bool(hand_cfg.get("dashboard_indicator", True))
+        monitor_enabled = bool(hand_cfg.get("enabled", False)) and indicator_enabled
+
+        if monitor_enabled:
+            self.start_hand_detection_monitor(hand_cfg)
+        else:
+            self.stop_hand_detection_monitor()
+            if self.hand_indicator:
+                self.hand_indicator.set_null()
+            if self.hand_indicator_label:
+                self.hand_indicator_label.setStyleSheet("color: #a0a0a0; font-size: 11px;")
+
+    def start_hand_detection_monitor(self, cfg: Dict[str, object]) -> None:
+        """Start background hand detection monitor."""
+
+        if not self.hand_indicator:
+            return
+
+        self.stop_hand_detection_monitor()
+
+        classes = []
+        model_info = get_model_info("hand_detection", cfg.get("model"))
+        if model_info and model_info.default_classes:
+            classes = list(model_info.default_classes)
+        cfg = dict(cfg)
+        cfg["classes"] = classes or [0]
+        if model_info and not cfg.get("model_path"):
+            candidate = resolve_model_path(model_info)
+            if candidate.exists():
+                cfg["model_path"] = str(candidate)
+
+        worker = HandDetectionWorker(self.config, cfg)
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.state_changed.connect(self.on_hand_detection_state)
+        worker.status_message.connect(self.on_hand_detection_status)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._on_hand_detection_thread_finished)
+
+        self.hand_detection_worker = worker
+        self.hand_detection_thread = thread
+        self._hand_detection_active = True
+        self._hand_detection_last_state = False
+
+        if self.hand_indicator_label:
+            self.hand_indicator_label.setStyleSheet("color: #a0a0a0; font-size: 11px; font-weight: bold;")
+        thread.start()
+
+    def stop_hand_detection_monitor(self) -> None:
+        if self.hand_detection_worker:
+            self.hand_detection_worker.stop()
+        if self.hand_detection_thread:
+            self.hand_detection_thread.quit()
+            self.hand_detection_thread.wait(300)
+            self.hand_detection_thread = None
+        self.hand_detection_worker = None
+        self._hand_detection_active = False
+        self._hand_detection_last_state = False
+
+    def on_hand_detection_state(self, detected: bool, confidence: float) -> None:
+        if not self.hand_indicator or not self._hand_detection_active:
+            return
+
+        if detected:
+            self.hand_indicator.set_alert()
+            if self.hand_indicator_label:
+                self.hand_indicator_label.setStyleSheet("color: #f44336; font-size: 11px; font-weight: bold;")
+        else:
+            self.hand_indicator.set_connected(True)
+            if self.hand_indicator_label:
+                self.hand_indicator_label.setStyleSheet("color: #4CAF50; font-size: 11px; font-weight: bold;")
+
+        self._hand_detection_last_state = detected
+
+    def on_hand_detection_status(self, message: str) -> None:
+        if message:
+            print(f"[VISION] {message}")
+
+    def _on_hand_detection_thread_finished(self) -> None:
+        self.hand_detection_thread = None
+        self.hand_detection_worker = None
+        self._hand_detection_active = False
+        if self.hand_indicator and not self._hand_detection_last_state:
+            self.hand_indicator.set_null()
+        if self.hand_indicator_label and not self._hand_detection_last_state:
+            self.hand_indicator_label.setStyleSheet("color: #a0a0a0; font-size: 11px;")
+
+    def on_settings_updated(self) -> None:
+        """React to settings save events."""
+
+        self.apply_vision_config()
+
+    def closeEvent(self, event):  # noqa: D401 - Qt override
+        self.stop_hand_detection_monitor()
+        super().closeEvent(event)
     
     
     def toggle_start_stop(self):

@@ -1,15 +1,16 @@
-"""
-Settings Tab - Configuration Interface
-"""
+"""Settings Tab - Configuration Interface."""
 
 import json
 import random
+import time
+from functools import partial
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QLineEdit, QScrollArea, QFrame, QSpinBox, QDoubleSpinBox,
-    QTabWidget, QCheckBox, QComboBox, QDialog, QSizePolicy
+    QTabWidget, QCheckBox, QComboBox, QDialog, QSizePolicy, QProgressBar
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QThread
 from PySide6.QtGui import QImage, QPixmap
@@ -29,16 +30,48 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     YOLO = None
 
+try:  # pragma: no cover - optional dependency
+    import pytesseract  # type: ignore
+except ImportError:
+    pytesseract = None
+
 from utils.camera_hub import CameraStreamHub
 from utils.home_move_worker import HomeMoveWorker, HomeMoveRequest
+from utils.vision_models import (
+    VisionModelInfo,
+    download_model,
+    format_size,
+    get_model_info,
+    get_models_for_task,
+    resolve_model_path,
+)
 
 
 class HandDetectionTestDialog(QDialog):
-    """Live camera preview with YOLOv8 hand detection overlay."""
+    """Live camera preview supporting multiple lightweight vision modes."""
 
-    def __init__(self, camera_sources: List[Tuple[str, Union[int, str]]], config: dict, parent=None):
+    def __init__(
+        self,
+        camera_sources: List[Tuple[str, Union[int, str]]],
+        config: dict,
+        parent=None,
+        *,
+        mode: str = "hand_detection",
+        model_info: Optional[VisionModelInfo] = None,
+        model_path: Optional[str] = None,
+        show_overlay: bool = True,
+        confidence: float = 0.4,
+        mask_training: bool = False,
+        defect_threshold: float = 0.5,
+        label_options: Optional[dict] = None,
+    ):
         super().__init__(parent)
-        self.setWindowTitle("YOLOv8 Hand Detection Test")
+        self.setWindowTitle({
+            "hand_detection": "Hand Detection Preview",
+            "product_detection": "Product Masking Preview",
+            "defect_detection": "Defect Detection Preview",
+            "label_reading": "Label Reading Preview",
+        }.get(mode, "Vision Preview"))
         self.setModal(True)
         self.resize(900, 600)
 
@@ -48,6 +81,15 @@ class HandDetectionTestDialog(QDialog):
         self.current_camera_name: Optional[str] = None
         self.cap = None
         self.timer = QTimer(self)
+        self.mode = mode
+        self.model_info = model_info
+        self.model_path_override = model_path
+        self.show_overlay = show_overlay
+        self.confidence = confidence
+        self.mask_training = mask_training
+        self.defect_threshold = defect_threshold
+        self.label_options = label_options or {}
+
         self.timer.setInterval(120)  # ~8 FPS keeps CPU light
         self.timer.timeout.connect(self._update_frame)
         self.camera_hub: Optional[CameraStreamHub] = None
@@ -63,6 +105,8 @@ class HandDetectionTestDialog(QDialog):
         self.detected_any = False
         self.error_message: Optional[str] = None
         self.result_summary = "Camera preview not started."
+        self._yolo_model = None
+        self._yolo_classes: Optional[List[int]] = None
 
         self._build_camera_name_map()
 
@@ -97,21 +141,41 @@ class HandDetectionTestDialog(QDialog):
         for idx, (_label, identifier) in enumerate(self.camera_sources):
             self.camera_name_map[idx] = self._resolve_camera_name(identifier)
 
-        # Initialize YOLO detector
-        self.yolo_model = None
-        if YOLO is not None:
+        # Initialize detectors lazily based on mode
+        if self.mode in {"hand_detection", "product_detection", "label_reading"} and YOLO is not None:
+            model_source: Optional[str] = None
+            if self.model_path_override:
+                model_source = self.model_path_override
+            elif self.model_info is not None:
+                candidate_path = resolve_model_path(self.model_info)
+                if candidate_path.exists():
+                    model_source = str(candidate_path)
+                else:
+                    model_source = self.model_info.filename or self.model_info.model_id
+            else:
+                model_source = "yolov8n.pt"
+
             try:
-                self.yolo_model = YOLO("yolov8n.pt")
-                self.yolo_model.overrides['verbose'] = False
+                self._yolo_model = YOLO(model_source)
+                self._yolo_model.overrides['verbose'] = False
+                if self.model_info and self.model_info.default_classes:
+                    self._yolo_classes = list(self.model_info.default_classes)
             except Exception as e:
-                self.error_message = f"Failed to load YOLO: {e}"
-                print(f"[SAFETY] YOLO initialization error: {e}")
+                self.error_message = f"Failed to load model: {e}"
+                print(f"[VISION] Model initialization error for {self.mode}: {e}")
+
+        info_text = {
+            "hand_detection": "Live feed with background hand/person guard.",
+            "product_detection": "Preview product masking and segmentation for training feeds.",
+            "defect_detection": "Surface defect heuristic preview. Adjust threshold to tune sensitivity.",
+            "label_reading": "Text region detection and OCR confidence preview.",
+        }.get(self.mode, "Live camera preview.")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
-        info_label = QLabel("Live feed with YOLOv8 person detection. Move into view to verify detection.")
+        info_label = QLabel(info_text)
         info_label.setWordWrap(True)
         info_label.setStyleSheet("color: #e0e0e0; font-size: 14px;")
         layout.addWidget(info_label)
@@ -255,20 +319,32 @@ class HandDetectionTestDialog(QDialog):
                 return
             frame = raw_frame
 
-        detected, confidence, annotated = self._detect_hand(frame)
+        detected, confidence, annotated, detail = self._run_inference(frame)
 
         if self.last_detection is None or detected != self.last_detection:
             camera_label = self.camera_sources[self.current_source_index][0] if self.current_source_index is not None else "camera"
             state = "DETECTED" if detected else "clear"
-            print(f"[SAFETY] Person {state} on {camera_label} (confidence {confidence:.2%}).")
+            print(
+                f"[VISION] {self.mode} {state} on {camera_label} (score {confidence:.2%})."
+            )
 
         self.last_detection = detected
         self.last_confidence = confidence
         if detected:
             self.detected_any = True
 
-        state_text = "Person detected ✅" if detected else "No person detected"
-        conf_text = f"confidence {confidence:.1%}" if detected else "waiting..."
+        state_text = {
+            "hand_detection": "Hand present ✅" if detected else "No hands detected",
+            "product_detection": "Product found ✅" if detected else "No products",
+            "defect_detection": "Defect flagged ⚠️" if detected else "Surface clean",
+            "label_reading": "Label issue detected" if detected else "Labels OK",
+        }.get(self.mode, "Detection running")
+
+        if detected:
+            conf_text = f"score {confidence:.1%}"
+        else:
+            conf_text = detail or "waiting…"
+
         self.status_label.setText(f"{state_text} — {conf_text}")
         self.result_summary = self.status_label.text()
 
@@ -279,65 +355,152 @@ class HandDetectionTestDialog(QDialog):
         image = QImage(rgb.data, width, height, bytes_per_line, QImage.Format_RGB888)
         self.video_label.setPixmap(QPixmap.fromImage(image))
 
-    def _detect_hand(self, frame):
-        """Return (detected, confidence, annotated_frame) using YOLOv8."""
+    def _run_inference(self, frame):
+        """Return (detected, score, annotated_frame, detail)."""
+
         if cv2 is None or np is None:  # pragma: no cover - handled earlier
-            return False, 0.0, frame
-        
-        if self.yolo_model is None:
-            return False, 0.0, frame
+            return False, 0.0, frame, "OpenCV missing"
+
+        if self.mode in {"hand_detection", "product_detection", "label_reading"} and self._yolo_model is None:
+            return False, 0.0, frame, "Model unavailable"
 
         annotated = frame.copy()
         detected = False
-        best_confidence = 0.0
+        score = 0.0
+        detail = ""
 
         try:
-            # Run YOLO detection
-            results = self.yolo_model(frame, conf=0.4, verbose=False)
-            
-            if results and len(results) > 0:
-                for result in results:
-                    if result.boxes is None or len(result.boxes) == 0:
+            if self.mode == "hand_detection":
+                results = self._yolo_model(frame, conf=self.confidence, verbose=False)  # type: ignore[arg-type]
+                classes = self._yolo_classes or [0]
+                for result in results or []:
+                    if not result.boxes:
                         continue
-                    
                     for box in result.boxes:
                         cls = int(box.cls[0])
+                        if cls not in classes:
+                            continue
                         conf = float(box.conf[0])
-                        
-                        # Class 0 is 'person' in COCO dataset
-                        if cls == 0:
-                            detected = True
-                            best_confidence = max(best_confidence, conf)
-                            
-                            # Draw bounding box
+                        if conf < self.confidence:
+                            continue
+                        detected = True
+                        score = max(score, conf)
+                        if self.show_overlay:
                             x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-                            
-                            # Draw red box for detection
+                            x1, y1, x2, y2 = map(int, (x1, y1, x2, y2))
                             cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 0, 255), 3)
-                            
-                            # Draw label
-                            label = f"Person {conf:.2f}"
+                            label = f"Hand/Person {conf:.2f}"
                             label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
-                            cv2.rectangle(annotated, (x1, y1 - label_size[1] - 10), 
-                                        (x1 + label_size[0], y1), (0, 0, 255), -1)
-                            cv2.putText(annotated, label, (x1, y1 - 5), 
-                                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            
-            # Overall status text
-            status_text = f"YOLO: {'PERSON DETECTED' if detected else 'Clear'}"
-            if detected:
-                status_text += f" (conf: {best_confidence:.2f})"
-            
-            cv2.putText(annotated, status_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 
-                       0.8, (0, 255, 0) if not detected else (0, 0, 255), 2, cv2.LINE_AA)
-            
-        except Exception as e:
-            print(f"[SAFETY] YOLO detection error: {e}")
-            cv2.putText(annotated, f"Error: {str(e)[:50]}", (10, 30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                            cv2.rectangle(annotated, (x1, y1 - label_size[1] - 10),
+                                          (x1 + label_size[0], y1), (0, 0, 255), -1)
+                            cv2.putText(annotated, label, (x1, y1 - 5),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                detail = "monitoring"
 
-        return detected, best_confidence, annotated
+            elif self.mode == "product_detection":
+                results = self._yolo_model(frame, conf=self.confidence, verbose=False)  # type: ignore[arg-type]
+                overlay_color = (60, 180, 255)
+                for result in results or []:
+                    if result.masks is not None and result.masks.data is not None:
+                        masks = result.masks.data.cpu().numpy()
+                        for mask in masks:
+                            detected = True
+                            mask_img = (mask * 255).astype("uint8")
+                            mask_img = cv2.resize(mask_img, (frame.shape[1], frame.shape[0]))
+                            colored = cv2.applyColorMap(mask_img, cv2.COLORMAP_OCEAN)
+                            annotated = cv2.addWeighted(annotated, 1.0, colored, 0.35, 0)
+                    if result.boxes:
+                        for box in result.boxes:
+                            conf = float(box.conf[0])
+                            if conf < self.confidence:
+                                continue
+                            detected = True
+                            score = max(score, conf)
+                            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                            x1, y1, x2, y2 = map(int, (x1, y1, x2, y2))
+                            if self.show_overlay:
+                                cv2.rectangle(annotated, (x1, y1), (x2, y2), overlay_color, 2)
+                                label = f"Product {conf:.2f}"
+                                cv2.putText(annotated, label, (x1, max(25, y1 - 6)),
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, overlay_color, 2)
+                detail = "masking"
+
+            elif self.mode == "defect_detection":
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                blur = cv2.GaussianBlur(gray, (7, 7), 0)
+                diff = cv2.absdiff(gray, blur)
+                _, thresh = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
+                score = float(np.mean(thresh) / 255.0)
+                detected = score >= self.defect_threshold
+                if detected and self.show_overlay:
+                    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    cv2.drawContours(annotated, contours, -1, (0, 0, 255), 2)
+                detail = f"score {score:.2f}, threshold {self.defect_threshold:.2f}"
+
+            elif self.mode == "label_reading":
+                results = self._yolo_model(frame, conf=self.confidence, verbose=False)  # type: ignore[arg-type]
+                text_regions = []
+                for result in results or []:
+                    if result.boxes:
+                        for box in result.boxes:
+                            conf = float(box.conf[0])
+                            if conf < self.confidence:
+                                continue
+                            x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
+                            roi = frame[y1:y2, x1:x2]
+                            ocr_conf = 0.0
+                            text_value = ""
+                            confidences: List[float] = []
+                            if pytesseract is not None and roi.size:
+                                try:
+                                    data = pytesseract.image_to_data(roi, output_type=pytesseract.Output.DICT)
+                                    confidences = [float(c) for c in data.get("conf", []) if c not in ("-1", -1)]
+                                    if confidences:
+                                        ocr_conf = max(confidences) / 100.0
+                                    text_value = " ".join(data.get("text", [])).strip()
+                                except Exception as exc:  # pragma: no cover - OCR optional
+                                    print(f"[VISION] OCR error: {exc}")
+                            detected_flag = False
+                            min_conf = float(self.label_options.get("min_confidence", 0.5) or 0.5)
+                            if self.label_options.get("flag_illegible", True) and (not confidences or ocr_conf < min_conf):
+                                detected_flag = True
+                            expected_text = self.label_options.get("expected_text")
+                            if (
+                                expected_text
+                                and self.label_options.get("flag_mismatch", True)
+                                and text_value
+                                and expected_text.lower() not in text_value.lower()
+                            ):
+                                detected_flag = True
+                            if detected_flag:
+                                detected = True
+                                score = max(score, 1.0 - ocr_conf if ocr_conf else conf)
+                            text_regions.append((x1, y1, x2, y2, conf, ocr_conf, text_value))
+
+                if self.show_overlay:
+                    for x1, y1, x2, y2, conf, ocr_conf, text_value in text_regions:
+                        color = (255, 140, 0) if detected else (70, 200, 255)
+                        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+                        caption = f"Text {ocr_conf:.2f}" if ocr_conf else f"Region {conf:.2f}"
+                        if text_value:
+                            caption += f" '{text_value[:12]}'"
+                        cv2.putText(annotated, caption, (x1, max(30, y1 - 8)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+                detail = "text regions" if text_regions else "no text"
+
+        except Exception as e:  # pragma: no cover - runtime errors logged
+            print(f"[VISION] Detection error: {e}")
+            cv2.putText(
+                annotated,
+                f"Error: {str(e)[:50]}",
+                (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 0, 255),
+                2,
+            )
+
+        return detected, score, annotated, detail
 
     def _release_camera(self):
         if self.cap:
@@ -355,6 +518,28 @@ class HandDetectionTestDialog(QDialog):
         super().closeEvent(event)
 
 
+class VisionModelDownloadThread(QThread):
+    """Background downloader for vision model assets."""
+
+    progress = Signal(int)
+    finished = Signal(str)
+    error = Signal(str)
+
+    def __init__(self, model: VisionModelInfo, parent=None) -> None:
+        super().__init__(parent)
+        self.model = model
+
+    def run(self) -> None:  # noqa: D401 - Qt thread entry point
+        try:
+            def _notify(value: int) -> None:
+                self.progress.emit(value)
+
+            path = download_model(self.model, progress_callback=_notify)
+            self.finished.emit(str(path))
+        except Exception as exc:  # pragma: no cover - network dependent
+            self.error.emit(str(exc))
+
+
 class SettingsTab(QWidget):
     """Settings configuration tab"""
     
@@ -369,17 +554,37 @@ class SettingsTab(QWidget):
         self._home_thread: Optional[QThread] = None
         self._home_worker: Optional[HomeMoveWorker] = None
         self._pending_home_velocity: Optional[int] = None
-        
+
         # Device status tracking (synced with device_manager)
         self.robot_status = "empty"          # empty/online/offline
         self.camera_front_status = "empty"   # empty/online/offline
         self.camera_wrist_status = "empty"   # empty/online/offline
-        
+
         # Status circle widgets (will be set during init_ui)
         self.robot_status_circle = None
         self.camera_front_circle = None
         self.camera_wrist_circle = None
-        
+
+        # Vision management helpers
+        self.vision_model_status_labels: Dict[str, QLabel] = {}
+        self.vision_model_paths: Dict[str, Optional[str]] = {}
+        self.vision_model_download_threads: Dict[str, VisionModelDownloadThread] = {}
+        self.vision_download_progress: Dict[str, QProgressBar] = {}
+        self.vision_enable_checks: Dict[str, QCheckBox] = {}
+        self.vision_model_combos: Dict[str, QComboBox] = {}
+        self.vision_overlay_checks: Dict[str, QCheckBox] = {}
+        self.vision_training_checks: Dict[str, QCheckBox] = {}
+        self.vision_camera_combos: Dict[str, QComboBox] = {}
+        self.vision_confidence_spins: Dict[str, QDoubleSpinBox] = {}
+        self.vision_threshold_spins: Dict[str, QDoubleSpinBox] = {}
+        self.vision_indicator_checks: Dict[str, QCheckBox] = {}
+        self.vision_preview_buttons: Dict[str, QPushButton] = {}
+        self.vision_fps_spins: Dict[str, QDoubleSpinBox] = {}
+        self.vision_expected_text_edits: Dict[str, QLineEdit] = {}
+        self.vision_download_buttons: Dict[str, QPushButton] = {}
+        self.vision_label_illegible_checks: Dict[str, QCheckBox] = {}
+        self.vision_label_mismatch_checks: Dict[str, QCheckBox] = {}
+
         self.init_ui()
         self.load_settings()
         
@@ -457,6 +662,10 @@ class SettingsTab(QWidget):
         # Control tab
         control_tab = self.wrap_tab(self.create_control_tab())
         self.tab_widget.addTab(control_tab, "🎮 Control")
+
+        # Vision tab
+        vision_tab = self.wrap_tab(self.create_vision_tab())
+        self.tab_widget.addTab(vision_tab, "👁️ Vision")
 
         # Safety tab
         safety_tab = self.wrap_tab(self.create_safety_tab())
@@ -879,7 +1088,25 @@ class SettingsTab(QWidget):
             return
 
         self.status_label.setText("🎥 Launching hand safety test window…")
-        dialog = HandDetectionTestDialog(sources, self.config, parent=self)
+
+        model_info = None
+        if "hand_detection" in self.vision_model_combos:
+            model_id = self.vision_model_combos["hand_detection"].currentData()
+            model_info = get_model_info("hand_detection", model_id)
+        model_path = self.vision_model_paths.get("hand_detection")
+        show_overlay = self.vision_overlay_checks.get("hand_detection").isChecked() if "hand_detection" in self.vision_overlay_checks else True
+        confidence = self.vision_confidence_spins.get("hand_detection").value() if "hand_detection" in self.vision_confidence_spins else 0.4
+
+        dialog = HandDetectionTestDialog(
+            sources,
+            self.config,
+            parent=self,
+            mode="hand_detection",
+            model_info=model_info,
+            model_path=model_path,
+            show_overlay=show_overlay,
+            confidence=confidence,
+        )
         dialog.exec()
         
         if dialog.detected_any:
@@ -1138,6 +1365,741 @@ class SettingsTab(QWidget):
 
         layout.addStretch()
         return widget
+
+    def create_vision_tab(self) -> QWidget:
+        """Create the Vision configuration tab."""
+
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        header = QLabel("👁️ Vision Pipelines")
+        header.setStyleSheet("QLabel { color: #4CAF50; font-size: 18px; font-weight: bold; }")
+        layout.addWidget(header)
+
+        intro = QLabel(
+            "Configure lightweight perception models that branch from a single camera feed."
+            " Toggle each model, download assets, and preview their output before deploying."
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet("QLabel { color: #d0d0d0; font-size: 13px; }")
+        layout.addWidget(intro)
+
+        preview_row = QHBoxLayout()
+        preview_row.setSpacing(8)
+
+        preview_label = QLabel("Quick camera preview:")
+        preview_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 14px; min-width: 170px; }")
+        preview_row.addWidget(preview_label)
+
+        self.vision_preview_camera_combo = QComboBox()
+        self.vision_preview_camera_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 14px;
+                min-height: 36px;
+            }
+            QComboBox:focus {
+                border-color: #4CAF50;
+                background-color: #575757;
+            }
+            QComboBox QListView {
+                background-color: #3a3a3a;
+                color: #ffffff;
+            }
+        """)
+        preview_row.addWidget(self.vision_preview_camera_combo, stretch=1)
+
+        preview_btn = QPushButton("Open Preview")
+        preview_btn.setMinimumHeight(40)
+        preview_btn.setStyleSheet(self.get_button_style("#4CAF50", "#388E3C"))
+        preview_btn.clicked.connect(self.launch_general_vision_preview)
+        preview_row.addWidget(preview_btn)
+
+        layout.addLayout(preview_row)
+        layout.addSpacing(6)
+
+        sections = [
+            (
+                "hand_detection",
+                "🖐️ Hand Detection Guard",
+                "Runs in the background to change the dashboard indicator and protect ACT tasks.",
+            ),
+            (
+                "product_detection",
+                "💄 Beauty Product Masking",
+                "Masks beauty products in the live feed and records masks into training captures.",
+            ),
+            (
+                "defect_detection",
+                "🔍 Product Defect Screening",
+                "Flags surface anomalies so you can pause or reject defective items early.",
+            ),
+            (
+                "label_reading",
+                "🏷️ Label Reading QA",
+                "Highlights illegible or mismatched labels with optional OCR verification.",
+            ),
+        ]
+
+        for task, title, blurb in sections:
+            card = self._create_vision_model_card(task, title, blurb)
+            layout.addWidget(card)
+
+        layout.addStretch()
+        self.refresh_vision_camera_options()
+        return widget
+
+    def _create_vision_model_card(self, task: str, title: str, blurb: str) -> QFrame:
+        frame = QFrame()
+        frame.setStyleSheet("QFrame { background-color: #262626; border: 1px solid #3d3d3d; border-radius: 8px; }")
+        frame_layout = QVBoxLayout(frame)
+        frame_layout.setContentsMargins(12, 10, 12, 12)
+        frame_layout.setSpacing(6)
+
+        header_row = QHBoxLayout()
+        header_row.setSpacing(6)
+        title_label = QLabel(title)
+        title_label.setStyleSheet("QLabel { color: #ffffff; font-size: 16px; font-weight: bold; }")
+        header_row.addWidget(title_label)
+
+        enable_check = QCheckBox("Enabled")
+        enable_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 13px; padding: 4px; }")
+        self.vision_enable_checks[task] = enable_check
+        header_row.addWidget(enable_check)
+        header_row.addStretch()
+        frame_layout.addLayout(header_row)
+
+        description = QLabel(blurb)
+        description.setWordWrap(True)
+        description.setStyleSheet("QLabel { color: #c0c0c0; font-size: 13px; }")
+        frame_layout.addWidget(description)
+
+        models = get_models_for_task(task)
+        self.vision_model_paths.setdefault(task, None)
+
+        model_row = QHBoxLayout()
+        model_row.setSpacing(8)
+        model_label = QLabel("Model variant:")
+        model_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 13px; min-width: 140px; }")
+        model_row.addWidget(model_label)
+
+        combo = QComboBox()
+        combo.setStyleSheet("""
+            QComboBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 13px;
+                min-height: 34px;
+            }
+            QComboBox:focus {
+                border-color: #4CAF50;
+                background-color: #575757;
+            }
+            QComboBox QListView {
+                background-color: #3a3a3a;
+                color: #ffffff;
+            }
+        """)
+        for info in models:
+            combo.addItem(f"{info.label} ({format_size(info.size_mb)})", info.model_id)
+        self.vision_model_combos[task] = combo
+        combo.currentIndexChanged.connect(partial(self.on_vision_model_changed, task))
+        model_row.addWidget(combo, stretch=1)
+
+        download_btn = QPushButton("Download Model")
+        download_btn.setMinimumHeight(34)
+        download_btn.setStyleSheet(self.get_button_style("#2196F3", "#1976D2"))
+        download_btn.clicked.connect(partial(self.download_selected_vision_model, task))
+        self.vision_download_buttons[task] = download_btn
+        model_row.addWidget(download_btn)
+
+        preview_btn = QPushButton("Preview & Test")
+        preview_btn.setMinimumHeight(34)
+        preview_btn.setStyleSheet(self.get_button_style("#9C27B0", "#7B1FA2"))
+        preview_btn.clicked.connect(partial(self.open_vision_preview, task, None))
+        self.vision_preview_buttons[task] = preview_btn
+        model_row.addWidget(preview_btn)
+
+        frame_layout.addLayout(model_row)
+
+        status_label = QLabel("Model status: not downloaded")
+        status_label.setStyleSheet("QLabel { color: #a0a0a0; font-size: 12px; }")
+        self.vision_model_status_labels[task] = status_label
+        frame_layout.addWidget(status_label)
+
+        progress = QProgressBar()
+        progress.setRange(0, 100)
+        progress.setValue(0)
+        progress.setVisible(False)
+        progress.setStyleSheet("QProgressBar { background-color: #1e1e1e; border: 1px solid #3d3d3d; border-radius: 6px; }"
+                               "QProgressBar::chunk { background-color: #4CAF50; border-radius: 6px; }")
+        self.vision_download_progress[task] = progress
+        frame_layout.addWidget(progress)
+
+        default_conf = models[0].default_confidence if models else 0.4
+
+        if task != "defect_detection":
+            conf_row = QHBoxLayout()
+            conf_row.setSpacing(6)
+            conf_label = QLabel("Detection confidence:")
+            conf_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 13px; min-width: 160px; }")
+            conf_row.addWidget(conf_label)
+
+            conf_spin = QDoubleSpinBox()
+            conf_spin.setRange(0.05, 1.0)
+            conf_spin.setDecimals(2)
+            conf_spin.setSingleStep(0.05)
+            conf_spin.setValue(default_conf)
+            conf_spin.setMinimumHeight(36)
+            conf_spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
+            conf_spin.setStyleSheet("""
+                QDoubleSpinBox {
+                    background-color: #505050;
+                    color: #ffffff;
+                    border: 2px solid #707070;
+                    border-radius: 8px;
+                    padding: 6px;
+                    font-size: 13px;
+                }
+                QDoubleSpinBox:focus {
+                    border-color: #4CAF50;
+                    background-color: #575757;
+                }
+            """)
+            self.vision_confidence_spins[task] = conf_spin
+            conf_row.addWidget(conf_spin)
+            conf_row.addStretch()
+            frame_layout.addLayout(conf_row)
+        else:
+            # Store placeholder confidence for completeness
+            conf_spin = QDoubleSpinBox()
+            conf_spin.setValue(default_conf)
+            self.vision_confidence_spins[task] = conf_spin
+
+        if task == "hand_detection":
+            camera_row = QHBoxLayout()
+            camera_row.setSpacing(6)
+            camera_label = QLabel("Monitor camera:")
+            camera_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 13px; min-width: 160px; }")
+            camera_row.addWidget(camera_label)
+
+            camera_combo = QComboBox()
+            camera_combo.addItem("Front", "front")
+            camera_combo.addItem("Wrist", "wrist")
+            camera_combo.addItem("Both", "both")
+            camera_combo.addItem("All", "all")
+            camera_combo.setStyleSheet(combo.styleSheet())
+            self.vision_camera_combos[task] = camera_combo
+            camera_row.addWidget(camera_combo)
+            camera_row.addStretch()
+            frame_layout.addLayout(camera_row)
+
+            fps_row = QHBoxLayout()
+            fps_row.setSpacing(6)
+            fps_label = QLabel("Detection FPS:")
+            fps_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 13px; min-width: 160px; }")
+            fps_row.addWidget(fps_label)
+
+            fps_spin = QDoubleSpinBox()
+            fps_spin.setRange(1.0, 30.0)
+            fps_spin.setDecimals(1)
+            fps_spin.setSingleStep(1.0)
+            fps_spin.setValue(8.0)
+            fps_spin.setMinimumHeight(36)
+            fps_spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
+            fps_spin.setStyleSheet(conf_spin.styleSheet())
+            self.vision_fps_spins[task] = fps_spin
+            fps_row.addWidget(fps_spin)
+            fps_row.addStretch()
+            frame_layout.addLayout(fps_row)
+
+            overlay_check = QCheckBox("Show detection overlay (debug)")
+            overlay_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 13px; padding: 4px; }")
+            overlay_check.setChecked(False)
+            self.vision_overlay_checks[task] = overlay_check
+            frame_layout.addWidget(overlay_check)
+
+            indicator_check = QCheckBox("Update dashboard hand indicator")
+            indicator_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 13px; padding: 4px; }")
+            indicator_check.setChecked(True)
+            self.vision_indicator_checks[task] = indicator_check
+            frame_layout.addWidget(indicator_check)
+
+        elif task == "product_detection":
+            overlay_check = QCheckBox("Render segmentation masks on preview")
+            overlay_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 13px; padding: 4px; }")
+            overlay_check.setChecked(True)
+            self.vision_overlay_checks[task] = overlay_check
+            frame_layout.addWidget(overlay_check)
+
+            training_check = QCheckBox("Record masks into training recordings")
+            training_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 13px; padding: 4px; }")
+            training_check.setChecked(True)
+            self.vision_training_checks[task] = training_check
+            frame_layout.addWidget(training_check)
+
+        elif task == "defect_detection":
+            threshold_row = QHBoxLayout()
+            threshold_row.setSpacing(6)
+            threshold_label = QLabel("Defect sensitivity:")
+            threshold_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 13px; min-width: 160px; }")
+            threshold_row.addWidget(threshold_label)
+
+            threshold_spin = QDoubleSpinBox()
+            threshold_spin.setRange(0.1, 1.0)
+            threshold_spin.setDecimals(2)
+            threshold_spin.setSingleStep(0.05)
+            threshold_spin.setValue(models[0].default_threshold if models else 0.55)
+            threshold_spin.setMinimumHeight(36)
+            threshold_spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
+            threshold_spin.setStyleSheet(conf_spin.styleSheet())
+            self.vision_threshold_spins[task] = threshold_spin
+            threshold_row.addWidget(threshold_spin)
+            threshold_row.addStretch()
+            frame_layout.addLayout(threshold_row)
+
+            overlay_check = QCheckBox("Highlight suspected defect regions")
+            overlay_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 13px; padding: 4px; }")
+            overlay_check.setChecked(True)
+            self.vision_overlay_checks[task] = overlay_check
+            frame_layout.addWidget(overlay_check)
+
+        elif task == "label_reading":
+            overlay_check = QCheckBox("Show detected text regions")
+            overlay_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 13px; padding: 4px; }")
+            overlay_check.setChecked(True)
+            self.vision_overlay_checks[task] = overlay_check
+            frame_layout.addWidget(overlay_check)
+
+            threshold_row = QHBoxLayout()
+            threshold_row.setSpacing(6)
+            threshold_label = QLabel("Minimum OCR confidence:")
+            threshold_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 13px; min-width: 160px; }")
+            threshold_row.addWidget(threshold_label)
+
+            threshold_spin = QDoubleSpinBox()
+            threshold_spin.setRange(0.1, 1.0)
+            threshold_spin.setDecimals(2)
+            threshold_spin.setSingleStep(0.05)
+            threshold_spin.setValue(0.5)
+            threshold_spin.setMinimumHeight(36)
+            threshold_spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
+            threshold_spin.setStyleSheet(conf_spin.styleSheet())
+            self.vision_threshold_spins[task] = threshold_spin
+            threshold_row.addWidget(threshold_spin)
+            threshold_row.addStretch()
+            frame_layout.addLayout(threshold_row)
+
+            expected_row = QHBoxLayout()
+            expected_row.setSpacing(6)
+            expected_label = QLabel("Expected label text (optional):")
+            expected_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 13px; min-width: 160px; }")
+            expected_row.addWidget(expected_label)
+
+            expected_edit = QLineEdit()
+            expected_edit.setPlaceholderText("Enter reference label or SKU")
+            expected_edit.setStyleSheet("QLineEdit { background-color: #505050; color: #ffffff; border: 2px solid #707070; border-radius: 8px; padding: 6px; font-size: 13px; }")
+            self.vision_expected_text_edits[task] = expected_edit
+            expected_row.addWidget(expected_edit)
+            frame_layout.addLayout(expected_row)
+
+            illegible_check = QCheckBox("Flag illegible text on dashboard")
+            illegible_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 13px; padding: 4px; }")
+            illegible_check.setChecked(True)
+            self.vision_label_illegible_checks[task] = illegible_check
+            frame_layout.addWidget(illegible_check)
+
+            mismatch_check = QCheckBox("Flag text mismatches against expected value")
+            mismatch_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 13px; padding: 4px; }")
+            mismatch_check.setChecked(True)
+            self.vision_label_mismatch_checks[task] = mismatch_check
+            frame_layout.addWidget(mismatch_check)
+
+        return frame
+
+    def refresh_vision_camera_options(self) -> None:
+        """Refresh preview camera dropdown based on configured cameras."""
+
+        combo = getattr(self, "vision_preview_camera_combo", None)
+        if combo is None:
+            return
+
+        current = combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
+
+        cameras_cfg = self.config.get("cameras", {}) if isinstance(self.config, dict) else {}
+        if "front" in cameras_cfg:
+            combo.addItem("Front Camera", "front")
+        if "wrist" in cameras_cfg:
+            combo.addItem("Wrist Camera", "wrist")
+        if len(cameras_cfg) > 1:
+            combo.addItem("Front + Wrist", "both")
+        if cameras_cfg:
+            combo.addItem("All Cameras", "all")
+        else:
+            combo.addItem("Demo Camera", "front")
+
+        if current is not None:
+            index = combo.findData(current)
+            if index >= 0:
+                combo.setCurrentIndex(index)
+
+        combo.blockSignals(False)
+
+    def on_vision_model_changed(self, task: str) -> None:
+        combo = self.vision_model_combos.get(task)
+        if combo is None:
+            return
+
+        model_id = combo.currentData()
+        info = get_model_info(task, model_id)
+
+        if info and task != "defect_detection":
+            spin = self.vision_confidence_spins.get(task)
+            if spin is not None:
+                spin.blockSignals(True)
+                spin.setValue(round(info.default_confidence, 2))
+                spin.blockSignals(False)
+
+        if info and task == "defect_detection":
+            threshold_spin = self.vision_threshold_spins.get(task)
+            if threshold_spin is not None:
+                threshold_spin.blockSignals(True)
+                threshold_spin.setValue(info.default_threshold)
+                threshold_spin.blockSignals(False)
+
+        if info:
+            candidate = resolve_model_path(info)
+            if candidate.exists():
+                self.vision_model_paths[task] = str(candidate)
+
+        self.update_vision_model_status(task)
+
+    def download_selected_vision_model(self, task: str) -> None:
+        combo = self.vision_model_combos.get(task)
+        if combo is None:
+            return
+
+        model_id = combo.currentData()
+        info = get_model_info(task, model_id)
+        if info is None:
+            self.status_label.setText("❌ Select a model variant before downloading.")
+            self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 14px; padding: 6px; }")
+            return
+
+        existing = self.vision_model_download_threads.get(task)
+        if existing and existing.isRunning():
+            self.status_label.setText("⌛ Download already in progress…")
+            self.status_label.setStyleSheet("QLabel { color: #FFB74D; font-size: 14px; padding: 6px; }")
+            return
+
+        progress = self.vision_download_progress.get(task)
+        if progress:
+            progress.setVisible(True)
+            progress.setValue(0)
+
+        download_btn = self.vision_download_buttons.get(task)
+        if download_btn:
+            download_btn.setEnabled(False)
+
+        preview_btn = self.vision_preview_buttons.get(task)
+        if preview_btn:
+            preview_btn.setEnabled(False)
+
+        thread = VisionModelDownloadThread(info, self)
+        thread.progress.connect(lambda value: progress.setValue(value) if progress else None)
+        thread.finished.connect(partial(self._on_model_download_finished, task))
+        thread.error.connect(partial(self._on_model_download_error, task))
+        self.vision_model_download_threads[task] = thread
+        thread.start()
+
+        self.status_label.setText(f"⬇️ Downloading {info.label}…")
+        self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 14px; padding: 6px; }")
+
+    def _on_model_download_finished(self, task: str, path: str) -> None:
+        self.vision_model_paths[task] = path
+
+        thread = self.vision_model_download_threads.get(task)
+        if thread:
+            thread.quit()
+            thread.wait(100)
+
+        progress = self.vision_download_progress.get(task)
+        if progress:
+            progress.setValue(100)
+            progress.setVisible(False)
+
+        download_btn = self.vision_download_buttons.get(task)
+        if download_btn:
+            download_btn.setEnabled(True)
+
+        preview_btn = self.vision_preview_buttons.get(task)
+        if preview_btn:
+            preview_btn.setEnabled(True)
+
+        self.update_vision_model_status(task)
+
+        self.status_label.setText(f"✓ Model ready: {Path(path).name}")
+        self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 14px; padding: 6px; }")
+
+    def _on_model_download_error(self, task: str, message: str) -> None:
+        progress = self.vision_download_progress.get(task)
+        if progress:
+            progress.setVisible(False)
+
+        download_btn = self.vision_download_buttons.get(task)
+        if download_btn:
+            download_btn.setEnabled(True)
+
+        preview_btn = self.vision_preview_buttons.get(task)
+        if preview_btn:
+            preview_btn.setEnabled(True)
+
+        self.status_label.setText(f"❌ Model download failed: {message}")
+        self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 14px; padding: 6px; }")
+
+    def update_vision_model_status(self, task: str) -> None:
+        status_label = self.vision_model_status_labels.get(task)
+        combo = self.vision_model_combos.get(task)
+        if status_label is None or combo is None:
+            return
+
+        model_id = combo.currentData()
+        info = get_model_info(task, model_id)
+        if info is None:
+            status_label.setText("Model status: unavailable")
+            status_label.setStyleSheet("QLabel { color: #f44336; font-size: 12px; }")
+            return
+
+        path_text = self.vision_model_paths.get(task)
+        candidate = Path(path_text) if path_text else resolve_model_path(info)
+        if candidate.exists():
+            self.vision_model_paths[task] = str(candidate)
+            status_label.setText(f"Model status: ready • {candidate.name}")
+            status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 12px; }")
+        else:
+            status_label.setText("Model status: download required")
+            status_label.setStyleSheet("QLabel { color: #FFB74D; font-size: 12px; }")
+
+    def launch_general_vision_preview(self) -> None:
+        selection = None
+        combo = getattr(self, "vision_preview_camera_combo", None)
+        if combo is not None:
+            selection = combo.currentData()
+        self.open_vision_preview("hand_detection", selection, quick_preview=True)
+
+    def open_vision_preview(
+        self,
+        task: str,
+        camera_override: Optional[str] = None,
+        quick_preview: bool = False,
+    ) -> None:
+        sources = self._collect_camera_sources(camera_override or self._default_camera_selection(task))
+        if not sources:
+            self.status_label.setText("❌ Configure at least one camera before previewing vision models.")
+            self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 14px; padding: 6px; }")
+            return
+
+        if cv2 is None or np is None:
+            self.status_label.setText("❌ Install OpenCV/NumPy to preview camera feeds.")
+            self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 14px; padding: 6px; }")
+            return
+
+        requires_yolo = task in {"hand_detection", "product_detection", "label_reading"}
+        if requires_yolo and YOLO is None:
+            self.status_label.setText("❌ Install 'ultralytics' to run this preview.")
+            self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 14px; padding: 6px; }")
+            return
+
+        combo = self.vision_model_combos.get(task)
+        model_id = combo.currentData() if combo is not None else None
+        model_info = get_model_info(task, model_id) if model_id else None
+
+        if requires_yolo and model_info is None:
+            self.status_label.setText("❌ Select a model variant before opening the preview.")
+            self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 14px; padding: 6px; }")
+            return
+
+        overlay = self.vision_overlay_checks.get(task).isChecked() if task in self.vision_overlay_checks else True
+        if quick_preview:
+            overlay = False
+
+        confidence = 0.4
+        if task in self.vision_confidence_spins:
+            confidence = self.vision_confidence_spins[task].value()
+
+        defect_threshold = self.vision_threshold_spins.get(task).value() if task in self.vision_threshold_spins else 0.5
+        mask_training = self.vision_training_checks.get(task).isChecked() if task in self.vision_training_checks else False
+
+        label_options: Dict[str, object] = {}
+        if task == "label_reading":
+            label_options["min_confidence"] = self.vision_threshold_spins.get(task).value() if task in self.vision_threshold_spins else 0.5
+            edit = self.vision_expected_text_edits.get(task)
+            if edit:
+                label_options["expected_text"] = edit.text().strip()
+            illegible = self.vision_label_illegible_checks.get(task)
+            if illegible:
+                label_options["flag_illegible"] = illegible.isChecked()
+            mismatch = self.vision_label_mismatch_checks.get(task)
+            if mismatch:
+                label_options["flag_mismatch"] = mismatch.isChecked()
+
+        model_path = self.vision_model_paths.get(task)
+
+        dialog = HandDetectionTestDialog(
+            sources,
+            self.config,
+            parent=self,
+            mode=task,
+            model_info=model_info,
+            model_path=model_path,
+            show_overlay=overlay,
+            confidence=confidence,
+            mask_training=mask_training,
+            defect_threshold=defect_threshold,
+            label_options=label_options,
+        )
+        dialog.exec()
+
+        if dialog.detected_any:
+            self.status_label.setText(f"✅ Preview detected activity — {dialog.result_summary}")
+            self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 14px; padding: 6px; }")
+        else:
+            self.status_label.setText(f"ℹ️ Preview completed — {dialog.result_summary}")
+            self.status_label.setStyleSheet("QLabel { color: #FFB74D; font-size: 14px; padding: 6px; }")
+
+    def _default_camera_selection(self, task: str) -> str:
+        if task == "hand_detection":
+            combo = self.vision_camera_combos.get(task)
+            if combo:
+                return combo.currentData()
+        return "front"
+
+    def _collect_camera_sources(self, selection: Optional[str]) -> List[Tuple[str, Union[int, str]]]:
+        cameras_cfg = self.config.get("cameras", {}) if isinstance(self.config, dict) else {}
+
+        def normalize_identifier(value: Union[int, str]) -> Union[int, str]:
+            if isinstance(value, str) and value.isdigit():
+                return int(value)
+            return value
+
+        sources: List[Tuple[str, Union[int, str]]] = []
+
+        def add_camera(name: str, label: str) -> None:
+            cfg = cameras_cfg.get(name, {})
+            identifier = cfg.get("index_or_path", name)
+            sources.append((label, normalize_identifier(identifier)))
+
+        if selection in (None, "front"):
+            if "front" in cameras_cfg:
+                add_camera("front", "Front Camera")
+        elif selection == "wrist":
+            if "wrist" in cameras_cfg:
+                add_camera("wrist", "Wrist Camera")
+        elif selection == "both":
+            if "front" in cameras_cfg:
+                add_camera("front", "Front Camera")
+            if "wrist" in cameras_cfg:
+                add_camera("wrist", "Wrist Camera")
+        elif selection == "all":
+            for name in cameras_cfg.keys():
+                add_camera(name, f"{name.title()} Camera")
+        else:
+            sources.append((f"Camera {selection}", normalize_identifier(selection)))
+
+        if not sources and cameras_cfg:
+            for name in cameras_cfg.keys():
+                add_camera(name, f"{name.title()} Camera")
+                break
+
+        return sources
+
+    def _load_vision_task_settings(self, task: str, cfg: Dict[str, object]) -> None:
+        enable_check = self.vision_enable_checks.get(task)
+        if enable_check is not None:
+            enable_check.setChecked(bool(cfg.get("enabled", False)))
+
+        combo = self.vision_model_combos.get(task)
+        if combo is not None:
+            model_id = cfg.get("model")
+            if model_id is not None:
+                index = combo.findData(model_id)
+                if index >= 0:
+                    combo.setCurrentIndex(index)
+
+        model_path = cfg.get("model_path")
+        if model_path:
+            self.vision_model_paths[task] = str(model_path)
+
+        overlay_check = self.vision_overlay_checks.get(task)
+        if overlay_check is not None and "show_overlay" in cfg:
+            overlay_check.setChecked(bool(cfg.get("show_overlay", overlay_check.isChecked())))
+
+        confidence_spin = self.vision_confidence_spins.get(task)
+        if confidence_spin is not None and "confidence" in cfg:
+            try:
+                confidence_spin.setValue(float(cfg.get("confidence", confidence_spin.value())))
+            except Exception:
+                pass
+
+        if task == "hand_detection":
+            camera_combo = self.vision_camera_combos.get(task)
+            if camera_combo is not None:
+                camera_value = cfg.get("camera", "front")
+                index = camera_combo.findData(camera_value)
+                if index >= 0:
+                    camera_combo.setCurrentIndex(index)
+            fps_spin = self.vision_fps_spins.get(task)
+            if fps_spin is not None and "fps" in cfg:
+                try:
+                    fps_spin.setValue(float(cfg.get("fps", fps_spin.value())))
+                except Exception:
+                    pass
+            indicator_check = self.vision_indicator_checks.get(task)
+            if indicator_check is not None:
+                indicator_check.setChecked(bool(cfg.get("dashboard_indicator", True)))
+
+        if task == "product_detection":
+            training_check = self.vision_training_checks.get(task)
+            if training_check is not None:
+                training_check.setChecked(bool(cfg.get("record_masks", True)))
+
+        if task == "defect_detection":
+            threshold_spin = self.vision_threshold_spins.get(task)
+            if threshold_spin is not None and "threshold" in cfg:
+                try:
+                    threshold_spin.setValue(float(cfg.get("threshold", threshold_spin.value())))
+                except Exception:
+                    pass
+
+        if task == "label_reading":
+            threshold_spin = self.vision_threshold_spins.get(task)
+            if threshold_spin is not None and "min_confidence" in cfg:
+                try:
+                    threshold_spin.setValue(float(cfg.get("min_confidence", threshold_spin.value())))
+                except Exception:
+                    pass
+            expected_edit = self.vision_expected_text_edits.get(task)
+            if expected_edit is not None:
+                expected_edit.setText(str(cfg.get("expected_text", "")))
+            illegible_check = self.vision_label_illegible_checks.get(task)
+            if illegible_check is not None:
+                illegible_check.setChecked(bool(cfg.get("flag_illegible", True)))
+            mismatch_check = self.vision_label_mismatch_checks.get(task)
+            if mismatch_check is not None:
+                mismatch_check.setChecked(bool(cfg.get("flag_mismatch", True)))
+
+        self.update_vision_model_status(task)
 
     def create_safety_tab(self) -> QWidget:
         """Create safety settings tab"""
@@ -1610,7 +2572,15 @@ class SettingsTab(QWidget):
         self.cam_width_spin.setValue(front_cam.get("width", 640))
         self.cam_height_spin.setValue(front_cam.get("height", 480))
         self.cam_fps_spin.setValue(front_cam.get("fps", 30))
-        
+
+        # Vision settings
+        vision_cfg = self.config.get("vision", {}) if isinstance(self.config, dict) else {}
+        self._load_vision_task_settings("hand_detection", vision_cfg.get("hand_detection", {}))
+        self._load_vision_task_settings("product_detection", vision_cfg.get("product_detection", {}))
+        self._load_vision_task_settings("defect_detection", vision_cfg.get("defect_detection", {}))
+        self._load_vision_task_settings("label_reading", vision_cfg.get("label_reading", {}))
+        self.refresh_vision_camera_options()
+
         # Policy settings
         self.policy_base_edit.setText(self.config.get("policy", {}).get("base_path", "outputs/train"))
         self.policy_device_edit.setText(self.config.get("policy", {}).get("device", "cuda"))
@@ -1725,7 +2695,55 @@ class SettingsTab(QWidget):
         self.config["safety"]["frame_width"] = self.hand_safety_frame_width_spin.value()
         self.config["safety"]["frame_height"] = int(self.hand_safety_frame_width_spin.value() * 0.75)  # 4:3 aspect
         self.config["safety"]["yolo_model"] = "yolov8n.pt"  # Use nano model for speed
-        
+
+        # Vision settings
+        vision_cfg = self.config.setdefault("vision", {})
+
+        hand_cfg = {
+            "enabled": self.vision_enable_checks.get("hand_detection").isChecked() if "hand_detection" in self.vision_enable_checks else False,
+            "model": self.vision_model_combos.get("hand_detection").currentData() if "hand_detection" in self.vision_model_combos else None,
+            "model_path": self.vision_model_paths.get("hand_detection"),
+            "show_overlay": self.vision_overlay_checks.get("hand_detection").isChecked() if "hand_detection" in self.vision_overlay_checks else False,
+            "confidence": self.vision_confidence_spins.get("hand_detection").value() if "hand_detection" in self.vision_confidence_spins else 0.4,
+            "camera": self.vision_camera_combos.get("hand_detection").currentData() if "hand_detection" in self.vision_camera_combos else "front",
+            "fps": self.vision_fps_spins.get("hand_detection").value() if "hand_detection" in self.vision_fps_spins else 8.0,
+            "dashboard_indicator": self.vision_indicator_checks.get("hand_detection").isChecked() if "hand_detection" in self.vision_indicator_checks else True,
+        }
+        vision_cfg["hand_detection"] = hand_cfg
+
+        product_cfg = {
+            "enabled": self.vision_enable_checks.get("product_detection").isChecked() if "product_detection" in self.vision_enable_checks else False,
+            "model": self.vision_model_combos.get("product_detection").currentData() if "product_detection" in self.vision_model_combos else None,
+            "model_path": self.vision_model_paths.get("product_detection"),
+            "show_overlay": self.vision_overlay_checks.get("product_detection").isChecked() if "product_detection" in self.vision_overlay_checks else True,
+            "confidence": self.vision_confidence_spins.get("product_detection").value() if "product_detection" in self.vision_confidence_spins else 0.35,
+            "record_masks": self.vision_training_checks.get("product_detection").isChecked() if "product_detection" in self.vision_training_checks else True,
+        }
+        vision_cfg["product_detection"] = product_cfg
+
+        defect_cfg = {
+            "enabled": self.vision_enable_checks.get("defect_detection").isChecked() if "defect_detection" in self.vision_enable_checks else False,
+            "model": self.vision_model_combos.get("defect_detection").currentData() if "defect_detection" in self.vision_model_combos else None,
+            "model_path": self.vision_model_paths.get("defect_detection"),
+            "threshold": self.vision_threshold_spins.get("defect_detection").value() if "defect_detection" in self.vision_threshold_spins else 0.55,
+            "confidence": self.vision_confidence_spins.get("defect_detection").value() if "defect_detection" in self.vision_confidence_spins else 0.5,
+            "show_overlay": self.vision_overlay_checks.get("defect_detection").isChecked() if "defect_detection" in self.vision_overlay_checks else True,
+        }
+        vision_cfg["defect_detection"] = defect_cfg
+
+        label_cfg = {
+            "enabled": self.vision_enable_checks.get("label_reading").isChecked() if "label_reading" in self.vision_enable_checks else False,
+            "model": self.vision_model_combos.get("label_reading").currentData() if "label_reading" in self.vision_model_combos else None,
+            "model_path": self.vision_model_paths.get("label_reading"),
+            "show_overlay": self.vision_overlay_checks.get("label_reading").isChecked() if "label_reading" in self.vision_overlay_checks else True,
+            "confidence": self.vision_confidence_spins.get("label_reading").value() if "label_reading" in self.vision_confidence_spins else 0.3,
+            "min_confidence": self.vision_threshold_spins.get("label_reading").value() if "label_reading" in self.vision_threshold_spins else 0.5,
+            "expected_text": self.vision_expected_text_edits.get("label_reading").text() if "label_reading" in self.vision_expected_text_edits else "",
+            "flag_illegible": self.vision_label_illegible_checks.get("label_reading").isChecked() if "label_reading" in self.vision_label_illegible_checks else True,
+            "flag_mismatch": self.vision_label_mismatch_checks.get("label_reading").isChecked() if "label_reading" in self.vision_label_mismatch_checks else True,
+        }
+        vision_cfg["label_reading"] = label_cfg
+
         # Write to file
         try:
             with open(self.config_path, 'w') as f:
@@ -1772,12 +2790,72 @@ class SettingsTab(QWidget):
         self.torque_monitor_check.setChecked(False)
         self.torque_threshold_spin.setValue(120.0)
         self.torque_disable_check.setChecked(True)
-        self.hand_detection_check.setChecked(False)
-        self.hand_detection_camera_combo.setCurrentIndex(0)
-        self.hand_detection_model_edit.setText("nicebot/hand-detection-large")
-        self.hand_resume_delay_spin.setValue(0.5)
-        self.hand_hold_position_check.setChecked(True)
-        
+
+        if "hand_detection" in self.vision_enable_checks:
+            self.vision_enable_checks["hand_detection"].setChecked(True)
+            camera_combo = self.vision_camera_combos.get("hand_detection")
+            if camera_combo is not None:
+                index = camera_combo.findData("front")
+                camera_combo.setCurrentIndex(index if index >= 0 else 0)
+            conf_spin = self.vision_confidence_spins.get("hand_detection")
+            if conf_spin is not None:
+                conf_spin.setValue(0.35)
+            fps_spin = self.vision_fps_spins.get("hand_detection")
+            if fps_spin is not None:
+                fps_spin.setValue(8.0)
+            overlay_check = self.vision_overlay_checks.get("hand_detection")
+            if overlay_check is not None:
+                overlay_check.setChecked(False)
+            indicator_check = self.vision_indicator_checks.get("hand_detection")
+            if indicator_check is not None:
+                indicator_check.setChecked(True)
+            self.vision_model_paths["hand_detection"] = None
+
+        if "product_detection" in self.vision_enable_checks:
+            self.vision_enable_checks["product_detection"].setChecked(True)
+            conf_spin = self.vision_confidence_spins.get("product_detection")
+            if conf_spin is not None:
+                conf_spin.setValue(0.33)
+            overlay_check = self.vision_overlay_checks.get("product_detection")
+            if overlay_check is not None:
+                overlay_check.setChecked(True)
+            training_check = self.vision_training_checks.get("product_detection")
+            if training_check is not None:
+                training_check.setChecked(True)
+            self.vision_model_paths["product_detection"] = None
+
+        if "defect_detection" in self.vision_enable_checks:
+            self.vision_enable_checks["defect_detection"].setChecked(False)
+            threshold_spin = self.vision_threshold_spins.get("defect_detection")
+            if threshold_spin is not None:
+                threshold_spin.setValue(0.55)
+            overlay_check = self.vision_overlay_checks.get("defect_detection")
+            if overlay_check is not None:
+                overlay_check.setChecked(True)
+            self.vision_model_paths["defect_detection"] = None
+
+        if "label_reading" in self.vision_enable_checks:
+            self.vision_enable_checks["label_reading"].setChecked(False)
+            conf_spin = self.vision_confidence_spins.get("label_reading")
+            if conf_spin is not None:
+                conf_spin.setValue(0.32)
+            threshold_spin = self.vision_threshold_spins.get("label_reading")
+            if threshold_spin is not None:
+                threshold_spin.setValue(0.5)
+            overlay_check = self.vision_overlay_checks.get("label_reading")
+            if overlay_check is not None:
+                overlay_check.setChecked(True)
+            expected_edit = self.vision_expected_text_edits.get("label_reading")
+            if expected_edit is not None:
+                expected_edit.setText("")
+            illegible_check = self.vision_label_illegible_checks.get("label_reading")
+            if illegible_check is not None:
+                illegible_check.setChecked(True)
+            mismatch_check = self.vision_label_mismatch_checks.get("label_reading")
+            if mismatch_check is not None:
+                mismatch_check.setChecked(True)
+            self.vision_model_paths["label_reading"] = None
+
         self.status_label.setText("⚠️ Defaults loaded. Click Save to apply.")
         self.status_label.setStyleSheet("QLabel { color: #FF9800; font-size: 15px; padding: 8px; }")
     
