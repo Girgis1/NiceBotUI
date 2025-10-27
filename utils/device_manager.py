@@ -238,11 +238,17 @@ class DeviceManager(QObject):
         """
         try:
             import cv2
+            import sys
             
             found_cameras = []
             
-            # Scan /dev/video* devices (0-9)
+            # Scan /dev/video* devices (0-9). Skip indices without device nodes to avoid noisy OpenCV warnings.
+            is_linux = sys.platform.startswith("linux")
             for i in range(10):
+                if is_linux:
+                    video_path = Path(f"/dev/video{i}")
+                    if not video_path.exists():
+                        continue
                 try:
                     cap = cv2.VideoCapture(i)
                     if cap.isOpened():
