@@ -31,4 +31,16 @@ venv/
 env/
 ENV/
 
+# Model files
 *.pt
+*.onnx
+*.engine
+
+# Vision training data and outputs
+data/vision_training/
+test_*.jpg
+test_*.png
+test_scene_*.jpg
+
+# Runtime vision profiles (may contain sensitive configs)
+runtime/vision_profiles.json

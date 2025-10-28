@@ -33,6 +33,7 @@ from utils.execution_manager import ExecutionWorker
 from utils.camera_hub import CameraStreamHub
 from utils.home_move_worker import HomeMoveWorker, HomeMoveRequest
 from utils.log_messages import LogEntry, translate_worker_message
+from vision_pipelines import VisionEventBus, VisionPipelineManager, load_vision_profile
 
 # Timezone
 TIMEZONE = pytz.timezone('Australia/Sydney')
@@ -81,29 +82,51 @@ class StatusIndicator(QLabel):
         self.connected = False
         self.warning = False
         self.null = False  # Initialize null attribute
+        self._custom_color: Optional[str] = None
         self.update_style()
-    
+
     def set_connected(self, connected):
         self.connected = connected
         self.warning = False
         self.null = False  # Clear null state when setting connected
+        self._custom_color = None
         self.update_style()
-    
+
     def set_warning(self):
         self.connected = False
         self.warning = True
         self.null = False  # Clear null state when setting warning
+        self._custom_color = None
         self.update_style()
-    
+
     def set_null(self):
         """Set as null/empty indicator"""
         self.connected = False
         self.warning = False
         self.null = True
+        self._custom_color = None
         self.update_style()
-    
+
+    def set_alert(self):
+        """Highlight indicator in alert red."""
+        self.connected = False
+        self.warning = False
+        self.null = False
+        self._custom_color = "#c62828"
+        self.update_style()
+
     def update_style(self):
-        if hasattr(self, 'null') and self.null:
+        if self._custom_color:
+            self.setFixedSize(20, 20)
+            self.setStyleSheet(
+                f"""
+                QLabel {{
+                    background-color: {self._custom_color};
+                    border-radius: 10px;
+                }}
+                """
+            )
+        elif hasattr(self, 'null') and self.null:
             # Null indicator - unfilled black circle
             self.setFixedSize(20, 20)
             self.setStyleSheet("""
@@ -314,6 +337,7 @@ class DashboardTab(QWidget):
         self._last_log_code: Optional[str] = None
         self._last_log_message: Optional[str] = None
         self._stopping_run = False
+        self._hand_indicator_active = False
 
         control_cfg = self.config.setdefault("control", {})
         self.master_speed = float(control_cfg.get("speed_multiplier", 1.0))
@@ -361,7 +385,22 @@ class DashboardTab(QWidget):
         self.init_ui()
         self._update_status_summaries()
         self.validate_config()
-        
+
+        # Vision pipeline runtime
+        self.vision_manager: Optional[VisionPipelineManager] = None
+        try:
+            vision_profile = load_vision_profile()
+            self._hand_indicator_active = self._has_hand_indicator_enabled(vision_profile)
+            self._update_hand_indicator_visual(False, 0.0, "Idle")
+            self.vision_manager = VisionPipelineManager(self.config, vision_profile)
+            self.vision_manager.start()
+            bus = VisionEventBus.instance()
+            bus.handDetectionChanged.connect(self._on_hand_detection_changed)
+            bus.profileUpdated.connect(self._on_vision_profile_updated)
+        except Exception as exc:
+            self.vision_manager = None
+            print(f"[VISION][WARN] Unable to initialize pipeline manager: {exc}")
+
         # Connect device manager signals if available
         if self.device_manager:
             self.device_manager.robot_status_changed.connect(self.on_robot_status_changed)
@@ -437,6 +476,16 @@ class DashboardTab(QWidget):
 
         self.camera_front_circle = self.camera_indicator1
         self.camera_wrist_circle = self.camera_indicator2
+
+        hand_group = QHBoxLayout()
+        hand_group.setSpacing(6)
+        self.hand_lbl = QLabel("Hands")
+        self.hand_lbl.setStyleSheet("color: #a0a0a0; font-size: 11px;")
+        hand_group.addWidget(self.hand_lbl)
+        self.hand_indicator = StatusIndicator()
+        self.hand_indicator.set_null()
+        hand_group.addWidget(self.hand_indicator)
+        normal_status_layout.addLayout(hand_group)
 
         status_bar.addWidget(self.normal_status_container, stretch=0)
 
@@ -2097,7 +2146,51 @@ class DashboardTab(QWidget):
             self._home_thread.deleteLater()
         self._home_thread = None
         self._home_worker = None
-    
+
+    # ------------------------------------------------------------------
+    # Vision pipeline handling
+
+    def _has_hand_indicator_enabled(self, profile: Dict) -> bool:
+        for camera_cfg in profile.get("cameras", {}).values():
+            for pipeline in camera_cfg.get("pipelines", []):
+                if pipeline.get("type") != "hand_detection" or not pipeline.get("enabled", True):
+                    continue
+                options = pipeline.get("options", {})
+                if options.get("dashboard_indicator", True):
+                    return True
+        return False
+
+    def _update_hand_indicator_visual(self, detected: bool, confidence: float, camera_name: str) -> None:
+        if not self._hand_indicator_active:
+            self.hand_indicator.set_null()
+            self.hand_indicator.setToolTip("Hand detection disabled")
+            return
+        if detected:
+            self.hand_indicator.set_alert()
+            self.hand_indicator.setToolTip(
+                f"Hand detected on {camera_name} (confidence {confidence:.2f})"
+            )
+        else:
+            self.hand_indicator.set_connected(True)
+            self.hand_indicator.setToolTip("Hand monitoring clear")
+
+    def _on_hand_detection_changed(self, camera_name: str, detected: bool, confidence: float) -> None:
+        if camera_name == "*":
+            self._update_hand_indicator_visual(False, 0.0, "Idle")
+            return
+        self._update_hand_indicator_visual(detected, confidence, camera_name)
+
+    def _on_vision_profile_updated(self, profile: Dict) -> None:
+        self._hand_indicator_active = self._has_hand_indicator_enabled(profile)
+        self._update_hand_indicator_visual(False, 0.0, "Idle")
+        if self.vision_manager:
+            self.vision_manager.update_profile(profile)
+
+    def closeEvent(self, event):  # noqa: D401 - Qt override
+        if self.vision_manager:
+            self.vision_manager.stop()
+        super().closeEvent(event)
+
     def run_from_dashboard(self):
         """Execute the selected RUN item (same as pressing START)"""
         if not self.is_running:

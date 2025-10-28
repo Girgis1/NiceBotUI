@@ -32,6 +32,8 @@ except ImportError:  # pragma: no cover - optional dependency
 from utils.camera_hub import CameraStreamHub
 from utils.home_move_worker import HomeMoveWorker, HomeMoveRequest
 
+from .vision_settings_tab import VisionSettingsWidget
+
 
 class HandDetectionTestDialog(QDialog):
     """Live camera preview with YOLOv8 hand detection overlay."""
@@ -449,7 +451,12 @@ class SettingsTab(QWidget):
         # Camera tab
         camera_tab = self.wrap_tab(self.create_camera_tab())
         self.tab_widget.addTab(camera_tab, "📷 Camera")
-        
+
+        # Vision tab
+        self.vision_settings_widget = VisionSettingsWidget(self.config, self)
+        vision_tab = self.wrap_tab(self.vision_settings_widget)
+        self.tab_widget.addTab(vision_tab, "👁️ Vision")
+
         # Policy tab
         policy_tab = self.wrap_tab(self.create_policy_tab())
         self.tab_widget.addTab(policy_tab, "🧠 Policy")
@@ -1610,6 +1617,9 @@ class SettingsTab(QWidget):
         self.cam_width_spin.setValue(front_cam.get("width", 640))
         self.cam_height_spin.setValue(front_cam.get("height", 480))
         self.cam_fps_spin.setValue(front_cam.get("fps", 30))
+
+        if hasattr(self, "vision_settings_widget"):
+            self.vision_settings_widget.update_app_config(self.config)
         
         # Policy settings
         self.policy_base_edit.setText(self.config.get("policy", {}).get("base_path", "outputs/train"))
@@ -1730,7 +1740,10 @@ class SettingsTab(QWidget):
         try:
             with open(self.config_path, 'w') as f:
                 json.dump(self.config, f, indent=2)
-            
+
+            if hasattr(self, "vision_settings_widget"):
+                self.vision_settings_widget.save_profile()
+
             self.status_label.setText("✓ Settings saved successfully!")
             self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
             self.config_changed.emit()
@@ -1777,7 +1790,10 @@ class SettingsTab(QWidget):
         self.hand_detection_model_edit.setText("nicebot/hand-detection-large")
         self.hand_resume_delay_spin.setValue(0.5)
         self.hand_hold_position_check.setChecked(True)
-        
+
+        if hasattr(self, "vision_settings_widget"):
+            self.vision_settings_widget.reset_defaults()
+
         self.status_label.setText("⚠️ Defaults loaded. Click Save to apply.")
         self.status_label.setStyleSheet("QLabel { color: #FF9800; font-size: 15px; padding: 8px; }")
     
