@@ -13,6 +13,8 @@ import sys
 import time
 from PySide6.QtCore import QThread, Signal
 
+from HomePos import emergency_catch_and_hold, go_to_rest
+
 
 class RobotWorker(QThread):
     """Worker thread that runs LeRobot async inference (policy server + robot client)"""
@@ -235,7 +237,10 @@ class RobotWorker(QThread):
                 
             # Wait for client to complete
             return_code = self.client_proc.wait()
-            
+
+            # Try to keep arm stable before model exits
+            self._handle_act_shutdown(return_code)
+
             # Check results
             if self._stop_requested:
                 self.log_message.emit('warning', "Stopped by user")
@@ -262,6 +267,67 @@ class RobotWorker(QThread):
                     self.client_proc.stdout.close()
                 except Exception:
                     pass
+
+    def _handle_act_shutdown(self, return_code: int):
+        """Ensure the arm stays safe when ACT client stops."""
+
+        async_cfg = self.config.get("async_inference", {})
+        policy_type = async_cfg.get("policy_type", "act").lower()
+
+        # Only run for ACT-style models (default in this UI)
+        if policy_type != "act":
+            return
+
+        control_cfg = self.config.get("control", {})
+        behavior = control_cfg.get("act_shutdown_behavior", "hold").lower()
+        fallback_to_home = control_cfg.get("act_shutdown_fallback", True)
+
+        # Holding torque is safest default so the arm does not drop when
+        # the ACT model disconnects.
+        def _try_hold():
+            success, positions = emergency_catch_and_hold()
+            if success:
+                pos_str = ", ".join(str(p) for p in positions)
+                self.log_message.emit('info', f"Torque locked at current position ({pos_str})")
+                return True
+            self.log_message.emit('warning', "Failed to lock torque after ACT run")
+            return False
+
+        def _try_home(disable_torque: bool):
+            if go_to_rest(disable_torque=disable_torque):
+                action = "(torque released)" if disable_torque else "(torque held)"
+                self.log_message.emit('info', f"Returned to Home position {action}")
+                return True
+            self.log_message.emit('warning', "Failed to send arm Home after ACT run")
+            return False
+
+        try:
+            if behavior == "home":
+                # When heading Home we typically keep torque so the arm
+                # remains stiff for the next action.
+                disable = bool(control_cfg.get("act_home_disable_torque", False))
+                if not _try_home(disable):
+                    if fallback_to_home and not disable:
+                        # If keeping torque failed, try again allowing
+                        # torque release to avoid fighting stalled motors.
+                        _try_home(True)
+                return
+
+            # Default behaviour is to hold the arm in place.
+            if _try_hold():
+                return
+
+            if behavior == "hold" and fallback_to_home:
+                # Holding failed (likely missing Feetech libs). As a
+                # fallback, attempt to send the arm Home but keep torque.
+                if not _try_home(False) and not control_cfg.get("act_home_disable_torque", False):
+                    # Final fallback releases torque if the stiff hold
+                    # keeps failing, preventing motor strain.
+                    _try_home(True)
+
+        except Exception as exc:
+            # Never raise here—shutdown handling must not crash the UI.
+            self.log_message.emit('warning', f"Post-run safety handling failed: {exc}")
             
     def _parse_error(self, stderr_text, return_code):
         """Parse stderr to determine error type"""
