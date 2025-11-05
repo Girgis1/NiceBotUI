@@ -56,7 +56,7 @@ class DashboardTab(QWidget):
         self.device_manager = device_manager
 
         # Initialize camera hub
-        self.camera_hub = CameraStreamHub() if CameraStreamHub else None
+        self.camera_hub = CameraStreamHub(config) if CameraStreamHub else None
 
         # Initialize controllers
         self.execution_ctrl = ExecutionController(config, device_manager)
