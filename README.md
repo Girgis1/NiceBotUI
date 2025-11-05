@@ -30,6 +30,30 @@ The setup script will:
 
 **Important:** After setup, log out and back in for group permissions to take effect.
 
+### Jetson Orin Nano first-time setup
+
+For a brand-new Jetson (JetPack 5.x/6.x) you can run the automated installer which
+pulls in all Ubuntu packages, NVIDIA's PyTorch wheels, and the Python dependencies
+in one step:
+
+```bash
+cd /home/daniel/LerobotGUI
+./setup_jetson_orin.sh
+```
+
+If you prefer to trigger the same process from a Windows PC, double-click
+`setup_jetson_orin.bat`. The batch file will launch the shell script using WSL
+or Git Bash if available and stream the output in a console window.
+
+The Jetson-specific script performs everything that `setup.sh` does plus:
+
+- Installs system packages via `apt` (build tools, ffmpeg, OpenCV runtime libs, etc.)
+- Installs NVIDIA-provided PyTorch/torchvision/torchaudio wheels for Jetson
+- Uses the NVIDIA Python index automatically for remaining dependencies
+
+After the script finishes, log out and back in so the new `dialout` group
+membership is applied before running the app.
+
 ### 2. Configure
 
 Edit `config.json` or use the Settings dialog in the app to set:
