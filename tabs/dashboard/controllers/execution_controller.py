@@ -125,7 +125,7 @@ class ExecutionController(QObject):
             "recording": "Action",
         }.get(execution_type, "Run")
 
-        self._log("action", f"Starting {type_label} "{execution_name}".", code="run_start")
+        self._log("action", f"Starting {type_label} '{execution_name}'.", code="run_start")
         self._log("speed", f"Robot speed set to {int(self.master_speed * 100)}%.", code="run_speed")
 
         # Handle models
@@ -229,6 +229,34 @@ class ExecutionController(QObject):
         self.home_started.emit()
         return True
 
+    def run_sequence(self, sequence_name: str, loop: bool = False) -> bool:
+        """Run a sequence from the Sequence tab
+
+        Args:
+            sequence_name: Name of the sequence to run
+            loop: Whether to loop the sequence
+
+        Returns:
+            bool: True if sequence started successfully
+        """
+        if self.is_running:
+            self._log("warning", "A run is already active. Press Stop before starting another.")
+            return False
+
+        self._fatal_error_active = False
+        self._last_log_code = None
+        self._last_log_message = None
+        self._log("action", f"Starting Sequence '{sequence_name}'.", code="sequence_start")
+        if loop:
+            self._log("info", "Loop mode is ON — the run will repeat until you stop it.", code="loop_enabled")
+
+        # Update UI state
+        self.is_running = True
+
+        # Start execution worker
+        self._start_execution_worker("sequence", sequence_name, {"loop": loop})
+        return True
+
     def run_from_dashboard(self) -> bool:
         """Execute the selected RUN item (same as pressing START)"""
         if not self.is_running:
@@ -255,7 +283,7 @@ class ExecutionController(QObject):
             model_config["policy"]["path"] = str(checkpoint_path)
 
             checkpoint_display = checkpoint_name if isinstance(checkpoint_name, str) else str(checkpoint_name)
-            self._log("action", f"Loading model "{model_name}" ({checkpoint_display}). This may take a moment.", code="model_loading")
+            self._log("action", f"Loading model '{model_name}' ({checkpoint_display}). This may take a moment.", code="model_loading")
 
             # Stop any existing worker first
             if self.worker and hasattr(self.worker, 'isRunning') and self.worker.isRunning():
@@ -387,14 +415,17 @@ class ExecutionController(QObject):
         self._home_thread = None
         self._home_worker = None
 
-    # Placeholder signal handlers - will be connected to actual handlers in integration
+    # Signal handlers that emit our own signals
     def _on_status_update(self, status: str):
+        # Forward to status controller or emit our own signal
         pass
 
     def _on_log_message(self, level: str, message: str):
+        # This is handled by log_entry_needed signal
         pass
 
     def _on_progress_update(self, current: int, total: int):
+        # Forward progress updates
         pass
 
     def _on_model_completed(self, success: bool, summary: str):
@@ -404,12 +435,15 @@ class ExecutionController(QObject):
         self.execution_completed.emit(success, summary)
 
     def _on_sequence_step_started(self, index: int, total: int, step: dict):
+        # Could emit sequence step signals if needed
         pass
 
     def _on_sequence_step_completed(self, index: int, total: int, step: dict):
+        # Could emit sequence step signals if needed
         pass
 
     def _on_vision_state_update(self, state: str, payload: dict):
+        # Forward vision state updates
         pass
 
     def _log(self, level: str, message: str, action: str = "", code: str = "") -> None:

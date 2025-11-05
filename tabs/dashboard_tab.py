@@ -15,7 +15,7 @@ import pytz
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QTextEdit, QComboBox, QSizePolicy, QSpinBox, QSlider,
-    QStackedWidget, QDialog, QTimer
+    QStackedWidget, QDialog
 )
 from PySide6.QtCore import Qt, QTimer as QTimerCore, Signal, QThread
 from PySide6.QtGui import QFont, QColor, QPainter, QPen, QImage, QPixmap

@@ -170,7 +170,7 @@ class MainWindow(QMainWindow):
         self.record_tab = RecordTab(self.config, self)
         
         # Connect sequence execution signal
-        self.sequence_tab.execute_sequence_signal.connect(self.dashboard_tab.run_sequence)
+        self.sequence_tab.execute_sequence_signal.connect(self.dashboard_tab.execution_ctrl.run_sequence)
         self.settings_tab = SettingsTab(self.config, self, self.device_manager)
         
         # Add tabs to stacked widget
@@ -211,7 +211,8 @@ class MainWindow(QMainWindow):
         """Switch to a different tab"""
         previous_index = self.content_stack.currentIndex()
         if previous_index == 0 and index != 0 and hasattr(self, "dashboard_tab"):
-            self.dashboard_tab.close_camera_panel()
+            if hasattr(self.dashboard_tab, 'camera_ctrl'):
+                self.dashboard_tab.camera_ctrl.exit_camera_mode()
 
         self.content_stack.setCurrentIndex(index)
         # Update button states
@@ -318,14 +319,18 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Handle window close event"""
         try:
-            # Stop any running operations
-            if hasattr(self.dashboard_tab, 'worker') and self.dashboard_tab.worker:
+            # Stop any running operations through controllers
+            if hasattr(self.dashboard_tab, 'execution_ctrl'):
                 try:
-                    if self.dashboard_tab.worker.isRunning():
-                        self.dashboard_tab.worker.stop()
-                        self.dashboard_tab.worker.wait(5000)
+                    self.dashboard_tab.execution_ctrl.stop_run()
                 except Exception as e:
-                    print(f"[WARNING] Error stopping worker: {e}")
+                    print(f"[WARNING] Error stopping execution: {e}")
+
+            if hasattr(self.dashboard_tab, 'camera_ctrl'):
+                try:
+                    self.dashboard_tab.camera_ctrl.exit_camera_mode()
+                except Exception as e:
+                    print(f"[WARNING] Error stopping camera: {e}")
             
             if hasattr(self.record_tab, 'is_playing') and self.record_tab.is_playing:
                 try:
