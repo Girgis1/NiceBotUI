@@ -1,0 +1,98 @@
+Online HIL-SERL Runbook (SO101 Leader/Follower Pair)
+====================================================
+
+Environment & Permissions
+-------------------------
+1. Activate the dedicated environment and move into the repo (configs already copied here):
+   ```bash
+   conda activate hilserl
+   cd ~/lerobot
+   ```
+2. Give both USB arms user write access (repeat after every reconnect/reboot):
+   ```bash
+   sudo chmod 666 /dev/ttyACM0
+   sudo chmod 666 /dev/ttyACM1
+   ```
+
+Teleop Sanity Check
+-------------------
+Use the leader arm to drive the follower without the RL stack to confirm wiring, calibration, and camera feeds.
+```bash
+lerobot-teleoperate \
+  --robot.type=so101_follower \
+  --robot.port=/dev/ttyACM1 \
+  --robot.id=follower_white \
+  --robot.cameras='{"front": {"type": "opencv", "index_or_path": "/dev/video0", "width": 640, "height": 480, "fps": 30}, "wrist": {"type": "opencv", "index_or_path": "/dev/video1", "width": 640, "height": 480, "fps": 30}}' \
+  --teleop.type=so101_leader \
+  --teleop.port=/dev/ttyACM0 \
+  --teleop.id=leader_white \
+  --display_data=true
+```
+• Hold `SPACE` (or the leader trigger) to intervene, `Ctrl+C` to exit.
+
+HIL-SERL Config Files
+---------------------
+We use the configs under `config/hilserl/`:
+- `env_so101_leader.json` → teleop/record/run config (SO101 follower + leader).
+- `train_hilserl_so101.json` → shared by both learner and actor.
+
+Before starting training:
+1. Verify the URDF path (currently `/home/daniel/SO-ARM100/Simulation/SO101/so101_new_calib.urdf`) inside both files (`env.processor.inverse_kinematics.urdf_path`).
+2. After collecting your first dataset, fill `image_preprocessing.crop_params_dict` with the rectangles returned by `lerobot.rl.crop_dataset_roi`.
+
+ROI Helper (after recording at least one episode)
+-------------------------------------------------
+```bash
+python -m lerobot.rl.crop_dataset_roi \
+  --repo-id local/hilserl_so101_dataset \
+  --dataset.root data/hilserl_so101
+```
+• Copy the printed `[top, left, height, width]` tuples back into both configs.
+
+Warm-Up / Manual Runs
+---------------------
+Run the real-robot loop without training to verify sensors and command paths. The config defaults to record mode; override `--mode=null` if you just want to watch.
+```bash
+python -m lerobot.rl.gym_manipulator \
+  --config_path config/hilserl/env_so101_leader.json
+```
+
+Start Online Training
+---------------------
+Launch learner and actor in separate terminals (after running the Environment & Permissions block in each).
+```bash
+# Terminal 1 – learner
+python -m lerobot.rl.learner \
+  --config_path config/hilserl/train_hilserl_so101.json
+
+# Terminal 2 – actor
+python -m lerobot.rl.actor \
+  --config_path config/hilserl/train_hilserl_so101.json
+```
+• Learner must start first; actor connects over gRPC (default `127.0.0.1:50051`).
+• Check that `outputs/train/hilserl_so101/` begins to fill with logs and checkpoints.
+• If you prefer to launch from another repo later, make sure to copy `config/hilserl/*.json` there or use absolute paths.
+
+Using the GrabBlock1 Policy
+---------------------------
+The SAC policy in `train_hilserl_so101.json` already bootstraps from your ACT GrabBlock1 checkpoint:
+```
+"policy": {
+  ...
+  "pretrained_path": "/home/daniel/lerobot/outputs/train/GrabBlock1/checkpoints/last/pretrained_model"
+}
+```
+• Ensure that directory exists and contains `config.json` / `model.safetensors`.  
+• Replace the path if you move or version the policy.
+
+During Training
+---------------
+• Intervene with the leader arm whenever the follower struggles; release to hand control back to the policy.  
+• Monitor reward and intervention metrics (W&B project `hilserl_so101` if enabled, otherwise `outputs/train/hilserl_so101/logs`).  
+• Stop the actor (`Ctrl+C`) before the learner to avoid dangling RPC calls.
+
+Shutdown & Cleanup
+------------------
+1. `Ctrl+C` actor, then learner.  
+2. Optional: push new checkpoints (`outputs/train/hilserl_so101/checkpoints`) to the Hub.  
+3. Revoke device permissions if required by facility policy.

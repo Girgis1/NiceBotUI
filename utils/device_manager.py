@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Optional, Dict, List
 from PySide6.QtCore import QObject, Signal
 
+from utils.camera_support import prepare_camera_source
+
 
 class DeviceManager(QObject):
     """Manages device discovery and status tracking"""
@@ -145,7 +147,7 @@ class DeviceManager(QObject):
         # Camera statuses
         cameras_cfg = self.config.get("cameras", {}) or {}
         for camera_name, camera_cfg in cameras_cfg.items():
-            status = self._probe_camera_status(camera_cfg.get("index_or_path"))
+            status = self._probe_camera_status(camera_cfg)
             attr_name = f"camera_{camera_name}_status"
             previous = getattr(self, attr_name, "empty")
             if status != previous:
@@ -155,26 +157,53 @@ class DeviceManager(QObject):
 
         return status_changed
 
-    def _probe_camera_status(self, source) -> str:
+    def _backend_flag(self, backend_name: Optional[str]) -> Optional[int]:
+        try:
+            import cv2  # type: ignore
+        except ImportError:
+            return None
+
+        mapping = {
+            "gstreamer": getattr(cv2, "CAP_GSTREAMER", None),
+            "v4l2": getattr(cv2, "CAP_V4L2", None),
+            "ffmpeg": getattr(cv2, "CAP_FFMPEG", None),
+        }
+        backend = (backend_name or "").lower()
+        flag = mapping.get(backend)
+        return flag if isinstance(flag, int) else None
+
+    def _probe_camera_status(self, camera_cfg) -> str:
         """Check whether a configured camera source appears online."""
 
-        if source is None:
+        if not camera_cfg:
             return "empty"
 
-        # Handle integer indices passed as strings
-        probe_source = source
-        if isinstance(source, str) and source.isdigit():
-            probe_source = int(source)
+        width = int(camera_cfg.get("width", 640) or 0)
+        height = int(camera_cfg.get("height", 480) or 0)
+        fps = float(camera_cfg.get("fps", 30) or 0.0)
+        source, backend = prepare_camera_source(camera_cfg, width, height, fps)
 
         # Try OpenCV if available for a reliable check
         try:
             import cv2  # type: ignore
 
-            cap = cv2.VideoCapture(probe_source)
-            if cap.isOpened():
+            backend_flag = self._backend_flag(backend)
+            if backend_flag is not None:
+                cap = cv2.VideoCapture(source, backend_flag)
+            else:
+                cap = cv2.VideoCapture(source)
+
+            if cap is not None and cap.isOpened():
+                try:
+                    buffer_prop = getattr(cv2, "CAP_PROP_BUFFERSIZE", None)
+                    if buffer_prop is not None:
+                        cap.set(buffer_prop, 1)
+                except Exception:
+                    pass
                 cap.release()
                 return "online"
-            cap.release()
+            if cap is not None:
+                cap.release()
             return "offline"
         except Exception:
             # Fall back to filesystem check for path-based sources
