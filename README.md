@@ -17,16 +17,31 @@ A minimalist, touch-friendly GUI for operating SO-100/101 robot arms with Huggin
 
 ### 1. Install
 
+#### NVIDIA Jetson Orin Nano / Ubuntu
+
 ```bash
 cd /home/daniel/LerobotGUI
+chmod +x setup.sh
 ./setup.sh
 ```
 
 The setup script will:
+- Install required system packages (build tools, multimedia libraries, Python headers)
+- Automatically configure Jetson-friendly CUDA/PyTorch wheels when a Jetson device is detected
 - Create a virtual environment
-- Install all dependencies including LeRobot
+- Install all Python dependencies including LeRobot and optional Jetson utilities
 - Set up udev rules for serial access
 - Add your user to the dialout group
+
+> **Tip:** On Jetson devices a reboot is recommended after the first run so that CUDA libraries and new group memberships are fully applied.
+
+#### Windows (via WSL)
+
+If you have the project cloned on a Windows PC with WSL installed, run `setup.bat`. It will forward the installation to your default WSL Ubuntu distribution:
+
+```
+setup.bat
+```
 
 **Important:** After setup, log out and back in for group permissions to take effect.
 
