@@ -9,4 +9,4 @@
 - [ ] Migrate policy/pipeline device resolution to use the shared hardware helper so GPU vs CPU selection stays consistent.
 
 ## Low Priority
-- [ ] Remove or fully disable the Safety Camera / Hand Detection (YOLO) feature to avoid the recurring runtime issues once replacements are ready.
+- [x] Remove the Safety Camera / Hand Detection (YOLO) feature until a certified replacement is available.

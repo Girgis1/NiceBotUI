@@ -24,11 +24,14 @@ cd /home/daniel/LerobotGUI
 
 The setup script will:
 - Create a virtual environment
-- Install all dependencies including LeRobot
+- Install all Python dependencies including LeRobot
 - Set up udev rules for serial access
 - Add your user to the dialout group
+- On NVIDIA Jetson boards (JetPack 6.x), install the required system packages (OpenCV, GStreamer, V4L2 tools) and attempt to pull the NVIDIA-optimised PyTorch wheels
 
 **Important:** After setup, log out and back in for group permissions to take effect.
+
+> **Jetson tip:** If the PyTorch install step prints a warning, follow the official wheel instructions at [docs.nvidia.com](https://docs.nvidia.com/deeplearning/frameworks/install-pytorch-jetson-platform/index.html) and re-run `pip install -r requirements.txt` inside `.venv`.
 
 ### 2. Configure
 
@@ -97,6 +100,7 @@ Or directly:
 - Home position angles
 - Object presence gate
 - Safety limits
+- Motor temperature and torque monitoring
 
 ## Hardware Setup
 
@@ -116,6 +120,7 @@ Key steps:
 - **USB:** Connect controller to computer
 - **Camera:** Connect USB camera
 - **E-Stop:** Wire emergency stop to power supply (recommended)
+- **Jetson CSI Cameras:** Use the `CSI://0` shorthand in the Camera tab; the app will expand it into the correct GStreamer pipeline.
 
 ## Error Messages
 
@@ -137,9 +142,10 @@ The application provides clear error messages with solutions:
 ```
 LerobotGUI/
 ├── app.py                  # Main application
-├── robot_worker.py         # QThread worker for subprocess
-├── settings_dialog.py      # Settings UI
-├── HomePos.py              # Home control (stub)
+├── robot_worker.py         # Async policy runner
+├── tabs/                   # Dashboard, Sequence, Record, Settings tabs
+├── utils/                  # Device, camera, execution helpers
+├── HomePos.py              # Home position helper
 ├── config.json             # Configuration
 ├── run_history.json        # Recent runs log
 ├── requirements.txt        # Python dependencies
@@ -148,6 +154,10 @@ LerobotGUI/
 │   └── 99-so100.rules     # Serial port access rules
 └── README.md              # This file
 ```
+
+### Safety
+
+This build does **not** ship with the experimental hand-detection safety monitor that previously depended on YOLO/MediaPipe. Rely on your physical e-stop chain, motor temperature limits, torque trip logic, and operator procedures for safety in industrial environments.
 
 ### Integrating Hardware
 
@@ -178,7 +188,7 @@ bus.disconnect()
 
 - **PySide6** - Qt6 GUI framework
 - **numpy** - Numerical operations
-- **opencv-python** - Camera and presence gate
+- **opencv-python** - Camera access (installed from system packages on Jetson)
 - **pytz** - Timezone support
 - **python-dateutil** - Date parsing
 - **lerobot** - Hugging Face LeRobot package
@@ -252,4 +262,3 @@ Terminal=false
 
 This operator console is provided as-is for use with LeRobot. 
 Refer to the LeRobot project for licensing information.
-

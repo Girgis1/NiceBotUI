@@ -117,7 +117,14 @@ python -m pip install --upgrade pip setuptools wheel
 if [ "${JETSON}" -eq 1 ]; then
     print_section "Installing Jetson PyTorch wheels (best effort)"
     if ! python -c "import torch" >/dev/null 2>&1; then
-        if ! pip install --extra-index-url https://pypi.ngc.nvidia.com torch torchvision torchaudio; then
+        TORCH_INSTALLED=0
+        for INDEX_URL in "https://pypi.nvidia.com" "https://pypi.ngc.nvidia.com"; do
+            if pip install --extra-index-url "${INDEX_URL}" torch torchvision torchaudio; then
+                TORCH_INSTALLED=1
+                break
+            fi
+        done
+        if [ "${TORCH_INSTALLED}" -eq 0 ]; then
             echo "Warning: Failed to install Jetson-optimised torch packages automatically." >&2
             echo "         Install the appropriate wheels manually if GPU acceleration is required." >&2
         fi
@@ -176,4 +183,3 @@ echo "To run the application:"
 echo "  source .venv/bin/activate"
 echo "  python app.py"
 echo ""
-

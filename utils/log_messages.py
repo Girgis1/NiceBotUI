@@ -153,38 +153,6 @@ def translate_worker_message(level: str, message: str) -> Optional[LogEntry]:
             code="user_stop",
         )
 
-    if "safety monitor initialized" in lowered:
-        return LogEntry(
-            level="info",
-            message="Safety monitor is active and watching for hands.",
-            code="safety_ready",
-        )
-
-    if "failed to initialize safety monitor" in lowered:
-        return LogEntry(
-            level="error",
-            message="Safety monitor could not start.",
-            action="Check the safety camera in Settings, then restart the run.",
-            code="safety_init_failed",
-            fatal=True,
-        )
-
-    if "emergency stop" in lowered or "emergency motor stop" in lowered:
-        return LogEntry(
-            level="error",
-            message="Emergency stop: a hand was detected near the robot.",
-            action="Clear the workspace and reset the system before restarting.",
-            code="safety_emergency",
-            fatal=True,
-        )
-
-    if "workspace clear" in lowered and "safety" in lowered:
-        return LogEntry(
-            level="info",
-            message="Workspace is clear. Press Start when you’re ready to continue.",
-            code="safety_clear",
-        )
-
     if lowered.startswith("loading model"):
         return LogEntry(
             level="info",
@@ -204,15 +172,6 @@ def translate_worker_message(level: str, message: str) -> Optional[LogEntry]:
             level="info",
             message="Loading the selected sequence…",
             code="sequence_loading",
-        )
-
-    if "safety monitor could not start" in lowered or "safety monitor could not" in lowered:
-        return LogEntry(
-            level="error",
-            message="Safety monitor could not start.",
-            action="Check the safety camera connection and try again.",
-            code="safety_monitor_failed",
-            fatal=True,
         )
 
     if "policy server is ready" in lowered:

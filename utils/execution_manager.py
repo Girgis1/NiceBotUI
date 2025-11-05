@@ -29,7 +29,6 @@ from utils.motor_controller import MotorController
 from utils.actions_manager import ActionsManager
 from utils.sequences_manager import SequencesManager
 from utils.camera_hub import CameraStreamHub
-from safety.hand_safety import HandSafetyMonitor, SafetyConfig, SafetyEvent, build_camera_sources_from_config
 
 
 class ExecutionWorker(QThread):
@@ -43,7 +42,6 @@ class ExecutionWorker(QThread):
     sequence_step_started = Signal(int, int, dict)   # step_index, total_steps, step data
     sequence_step_completed = Signal(int, int, dict) # step_index, total_steps, step data
     vision_state_update = Signal(str, dict)          # state, payload
-    safety_alert = Signal(str, dict)                 # (alert_type, event_data) - EMERGENCY STOP signals
     
     def __init__(self, config: dict, execution_type: str, execution_name: str, execution_data: dict = None):
         """
@@ -60,7 +58,6 @@ class ExecutionWorker(QThread):
         self.execution_data = execution_data or {}
         self.options = execution_data or {}  # Alias for compatibility
         self._stop_requested = False
-        self._emergency_stop = False  # CRITICAL: Set by safety monitor
         self._last_vision_state_signature = None
         
         # Managers
@@ -74,10 +71,6 @@ class ExecutionWorker(QThread):
             self.camera_hub: Optional[CameraStreamHub] = CameraStreamHub.instance(config)
         except Exception:
             self.camera_hub = None
-        
-        # Safety monitoring
-        self.safety_monitor: Optional[HandSafetyMonitor] = None
-        self._init_safety_monitor()
 
     def run(self):
         """Main execution thread
@@ -85,10 +78,6 @@ class ExecutionWorker(QThread):
         Handles: recordings, sequences, and models (in local mode)
         """
         self._stop_requested = False
-        self._emergency_stop = False
-        
-        # Start safety monitoring
-        self.start_safety_monitoring()
         
         try:
             if self.execution_type == "recording":
@@ -103,110 +92,11 @@ class ExecutionWorker(QThread):
         except Exception as e:
             self.log_message.emit('error', f"Execution error: {e}")
             self.execution_completed.emit(False, f"Failed: {e}")
-        finally:
-            # Always stop safety monitoring when execution ends
-            self.stop_safety_monitoring()
 
     def set_speed_multiplier(self, multiplier: float):
         self.speed_multiplier = multiplier
         self.motor_controller.speed_multiplier = multiplier
         self.options["speed_multiplier"] = multiplier
-    
-    def _init_safety_monitor(self):
-        """Initialize safety monitoring system."""
-        try:
-            safety_config = self.config.get("safety", {})
-            if not safety_config.get("enabled", False):
-                self.log_message.emit('info', "[SAFETY] Safety monitoring disabled in config")
-                return
-            
-            # Build camera sources from config
-            camera_selection = safety_config.get("cameras", "front")
-            camera_sources = build_camera_sources_from_config(self.config, camera_selection)
-            
-            if not camera_sources:
-                self.log_message.emit('warning', "[SAFETY] No cameras configured for safety monitoring")
-                return
-            
-            # Create safety configuration (YOLO-only)
-            config_obj = SafetyConfig(
-                enabled=True,
-                cameras=camera_sources,
-                detection_fps=safety_config.get("detection_fps", 8.0),
-                frame_width=safety_config.get("frame_width", 320),
-                frame_height=safety_config.get("frame_height", 240),
-                detection_confidence=safety_config.get("detection_confidence", 0.4),
-                resume_delay_s=safety_config.get("resume_delay_s", 1.0),
-                yolo_model=safety_config.get("yolo_model", "yolov8n.pt"),
-            )
-            
-            # Create safety monitor
-            self.safety_monitor = HandSafetyMonitor(
-                config=config_obj,
-                on_hand_detected=self._on_hand_detected,
-                on_hand_cleared=self._on_hand_cleared,
-                log_callback=self._safety_log
-            )
-            
-            self.log_message.emit('info', "[SAFETY] Safety monitor initialized")
-            
-        except Exception as e:
-            self.log_message.emit('error', f"[SAFETY] Failed to initialize safety monitor: {e}")
-            self.safety_monitor = None
-    
-    def _on_hand_detected(self, event: SafetyEvent):
-        """
-        CRITICAL SAFETY CALLBACK: Hand detected in workspace.
-        Triggers EMERGENCY STOP immediately.
-        """
-        self._emergency_stop = True
-        self._stop_requested = True  # Also set regular stop
-        
-        # Emergency stop motors immediately
-        try:
-            if self.motor_controller and self.motor_controller.motors:
-                self.motor_controller.motors.write("Torque_Enable", [0] * 6)
-                self.log_message.emit('critical', "[SAFETY] 🚨 EMERGENCY STOP - Motors disabled!")
-        except Exception as e:
-            self.log_message.emit('error', f"[SAFETY] Emergency motor stop failed: {e}")
-        
-        # Emit safety alert to UI
-        self.safety_alert.emit("hand_detected", {
-            "camera": event.camera_label,
-            "confidence": event.confidence,
-            "method": event.detection_method,
-            "timestamp": event.timestamp
-        })
-        
-        self.status_update.emit("🚨 EMERGENCY STOP - HAND DETECTED!")
-    
-    def _on_hand_cleared(self, event: SafetyEvent):
-        """Hand cleared from workspace - ready to resume."""
-        # Note: Don't automatically resume - user must manually restart
-        self.safety_alert.emit("hand_cleared", {
-            "timestamp": event.timestamp
-        })
-        self.log_message.emit('info', "[SAFETY] Workspace clear - Manual restart required")
-    
-    def _safety_log(self, level: str, message: str):
-        """Forward safety logs to UI."""
-        self.log_message.emit(level, message)
-    
-    def start_safety_monitoring(self):
-        """Start safety monitoring (called when execution begins)."""
-        if self.safety_monitor:
-            try:
-                self.safety_monitor.start()
-            except Exception as e:
-                self.log_message.emit('error', f"[SAFETY] Failed to start monitor: {e}")
-    
-    def stop_safety_monitoring(self):
-        """Stop safety monitoring (called when execution ends)."""
-        if self.safety_monitor:
-            try:
-                self.safety_monitor.stop()
-            except Exception as e:
-                self.log_message.emit('error', f"[SAFETY] Failed to stop monitor: {e}")
     
     def _execute_model(self):
         """Execute a model directly (for Dashboard model runs)"""
@@ -1728,7 +1618,6 @@ class ExecutionWorker(QThread):
         """Request execution to stop"""
         self._stop_requested = True
         self._emit_vision_state("clear", {"message": "Vision cancelled"})
-        self.stop_safety_monitoring()
         self._reset_vision_tracking()
         
         # Emergency stop motors

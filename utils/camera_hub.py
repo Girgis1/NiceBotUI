@@ -2,8 +2,8 @@
 Shared camera hub for coordinating access to physical cameras.
 
 This module owns the physical `cv2.VideoCapture` handles so downstream
-consumers (dashboard preview, safety hand tracking, vision triggers, etc.)
-can read frames without fighting over device ownership.  It exposes two
+consumers (dashboard preview, vision triggers, etc.) can read frames without
+fighting over device ownership.  It exposes two
 variants of each frame:
 
 * Full-resolution (as configured in settings) for high-priority clients.

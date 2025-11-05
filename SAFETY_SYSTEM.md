@@ -1,153 +1,30 @@
-# Hand Safety Monitoring System
+# Safety System Status
 
-## Overview
+## Current State (Jetson-Oriented Build)
 
-**CRITICAL SAFETY FEATURE**: The hand safety monitoring system uses computer vision to detect hands in the robot workspace and triggers an **EMERGENCY STOP** to prevent injury.
+The previous computer-vision based **hand safety monitor** has been **fully removed** from this release to prioritise determinism and stability on the NVIDIA Jetson Orin Nano. No YOLO/MediaPipe models are loaded, there is no background safety thread, and the Settings UI no longer exposes any hand-detection controls.
 
-⚠️ **This is NOT a "pause" system - it's an EMERGENCY STOP system that requires manual restart.**
+Only the following safety features remain active in software:
 
-## How It Works
+- Configurable joint soft-limits (from `config.json`)
+- Motor temperature monitoring (optional)
+- Torque spike monitoring (optional)
 
-1. **Background Monitoring**: Runs as a lightweight background thread during robot operation
-2. **Hand Detection**: Uses MediaPipe (primary) or HSV skin-tone detection (fallback)
-3. **Emergency Stop**: Immediately disables motor torque when hand detected
-4. **Manual Restart Required**: Operator must manually restart after emergency stop
+All other safety enforcement must come from external hardware (certified e-stop circuits, guards, light curtains, etc.) and operator procedures.
 
-## Key Features
+## Operator Guidance
 
-### Reliable Detection
-- **MediaPipe Hands**: Industry-standard hand tracking (most reliable)
-- **HSV Fallback**: Skin-tone detection when MediaPipe unavailable
-- **Multi-camera Support**: Monitor front, wrist, or both cameras simultaneously
+- Maintain a **physical emergency-stop** inline with the robot power path.
+- Keep the workcell guarded according to your site’s safety assessment.
+- Treat the software as *non-safety-rated*; it should never be your only protection layer.
 
-### Resource Efficient
-- **Configurable FPS**: Default 8 FPS (lightweight, ~125ms response time)
-- **Low Resolution**: 320x240 processing for speed
-- **Background Thread**: Non-blocking, runs parallel to robot operations
+## Why It Was Removed
 
-### Comprehensive Settings
-All settings accessible in Settings → Safety tab:
-- **Enable/Disable**: Turn monitoring on/off
-- **Camera Selection**: front/wrist/both/all
-- **Detection FPS**: 1-30 FPS (lower=lighter, 8 recommended)
-- **Confidence Threshold**: 0.1-0.9 (0.45 recommended)
-- **Resume Delay**: 0.5-10s (time workspace must be clear)
-- **Frame Size**: 160-640px width (320 recommended)
-- **MediaPipe Toggle**: Enable/disable MediaPipe (fallback to HSV)
+1. **Reliability** – The prior implementation depended on optional Python wheels (ultralytics, mediapipe) that are fragile on JetPack and could fail silently.
+2. **Resource Contention** – Continuous vision inference competed with the robot stack for GPU and camera access, causing jitter.
+3. **Safety Integrity** – Without deterministic performance guarantees, we could not justify retaining the feature in an industrial deployment.
 
-## Configuration
+## Future Work
 
-Add to `config.json`:
-
-```json
-{
-  "safety": {
-    "enabled": false,
-    "cameras": "front",
-    "detection_fps": 8.0,
-    "frame_width": 320,
-    "frame_height": 240,
-    "detection_confidence": 0.45,
-    "tracking_confidence": 0.35,
-    "resume_delay_s": 1.0,
-    "skin_threshold": 0.045,
-    "use_mediapipe": true
-  }
-}
-```
-
-## Testing
-
-1. Go to **Settings → Safety** tab
-2. Configure desired settings
-3. Click **🎥 Test Hand Detection**
-4. Move your hand in front of camera
-5. Verify detection works before enabling for robot operations
-
-## Safety Notes
-
-⚠️ **IMPORTANT SAFETY INFORMATION**:
-
-1. **Physical E-Stop Required**: Software safety is NOT sufficient alone. Always have a physical emergency stop button.
-
-2. **Not a Replacement**: This system enhances safety but doesn't replace proper safety protocols, training, and physical safety equipment.
-
-3. **Response Time**: ~125ms at 8 FPS. Slower than physical E-stop but adequate for collaborative operations.
-
-4. **Lighting Conditions**: Works best with good lighting. Test in your actual operating conditions.
-
-5. **False Positives**: Better to have false alarms than miss a hand detection. Adjust sensitivity as needed.
-
-## Technical Details
-
-### Architecture
-- **Module**: `safety/hand_safety.py`
-- **Integration**: `utils/execution_manager.py`
-- **UI**: `tabs/settings_tab.py`
-- **Dependencies**: OpenCV, NumPy, MediaPipe
-
-### Detection Methods
-
-**MediaPipe (Primary)**:
-- Google's production-ready hand tracking
-- Robust across lighting conditions
-- Tracks 21 hand landmarks
-- Model complexity: 0 (lightweight)
-
-**HSV Fallback**:
-- Skin-tone color segmentation
-- No external dependencies
-- Less reliable but always available
-- Threshold: 4.5% skin pixels
-
-### Integration Points
-
-The safety monitor:
-1. Initializes in `ExecutionWorker.__init__()`
-2. Starts when robot execution begins
-3. Monitors continuously in background thread
-4. Triggers `_on_hand_detected()` callback on detection
-5. Immediately disables motor torque
-6. Stops when robot execution ends
-
-## Troubleshooting
-
-### Monitor Not Starting
-- Check "Enable Hand Safety Monitoring" is checked
-- Verify cameras configured in Camera tab
-- Check mediapipe installed: `pip install mediapipe>=0.10.0`
-
-### Too Many False Positives
-- Increase detection confidence (Settings → Safety)
-- Reduce frame size for faster processing
-- Ensure good lighting conditions
-- Try front camera only (less background)
-
-### Not Detecting Hands
-- Lower detection confidence
-- Test camera view with Test button
-- Check lighting (too dark/bright affects HSV)
-- Verify MediaPipe enabled (more reliable)
-
-### High CPU Usage
-- Lower detection FPS (8 → 4 FPS)
-- Reduce frame width (320 → 240px)
-- Use single camera instead of both
-- Disable MediaPipe (use HSV fallback)
-
-## Performance Specs
-
-- **Detection FPS**: 8 Hz (configurable 1-30 Hz)
-- **Response Time**: ~125ms (at 8 FPS)
-- **CPU Usage**: ~5-10% (single core, depends on FPS)
-- **Memory**: ~100-200 MB (MediaPipe model)
-- **Camera Resolution**: 320x240 (processing), 640x480 (capture)
-
-## Version History
-
-- **v1.0 (2025-10-23)**: Initial implementation with MediaPipe + HSV fallback, emergency stop integration, comprehensive settings panel
-
-## Credits
-
-Reviewed and combined best features from multiple PR implementations to create a reliable, production-ready safety system for collaborative robot operations.
-
+- If a vision-based safety layer is reintroduced it will target a separate MCU/PLC or fail-safe compute path with certified components.
+- Until then, any new safety functionality should focus on leveraging reliable sensors (hardware light curtains, torque sensing, external vision systems) that integrate with the industrial e-stop chain.
