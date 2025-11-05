@@ -5,4 +5,8 @@ This package contains controller classes that handle the business logic
 for robot execution, camera management, and status monitoring.
 """
 
-__all__ = []
+from .execution_controller import ExecutionController
+
+__all__ = [
+    'ExecutionController',
+]
