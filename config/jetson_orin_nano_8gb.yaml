@@ -1,0 +1,81 @@
+# Jetson Orin Nano 8GB Optimized Configuration
+# Memory-optimized settings for 8GB RAM Jetson Orin Nano
+
+# Global Settings
+timezone: Australia/Sydney
+
+# Camera Settings - Lower resolution for Nano 8GB
+camera:
+  index: 0                    # Camera device index (use CSI://0 for CSI cameras)
+  width: 640                  # Reduced from 1280 for memory efficiency
+  height: 480                 # Reduced from 720 for memory efficiency
+  fps: 15                     # Lower FPS for processing efficiency
+  allow_virtual_fallback: false # No fallback on production hardware
+  exposure_auto: true         # Allow auto exposure for better adaptation
+  white_balance_auto: true    # Allow auto white balance
+
+# Detection Settings - Optimized for Nano performance
+detection:
+  mode: presence              # presence | count | classifier
+  min_blob_area: 800          # Slightly reduced for smaller resolution
+  stability_check: true       # Require object to be stationary
+  stability_frames: 3         # Increased for reliability at lower FPS
+  stability_delay_ms: 333     # ~3 frames at 15 FPS
+
+  # Background subtraction - Memory optimized
+  background:
+    learning_rate: 0.002      # Slightly faster adaptation
+    var_threshold: 25         # Less sensitive (fewer false positives)
+    detect_shadows: false     # Disabled for performance
+    history: 30               # Reduced from 50 for memory
+
+# Performance Settings - Optimized for Nano 8GB
+performance:
+  idle_fps: 0.1               # Very slow when idle (1 frame every 10 sec)
+  active_fps: 1.0             # Conservative active FPS
+  max_fps: 5.0                # Lower max FPS cap
+  adaptive_framerate: true    # Automatically adjust frame rate
+  slow_until_first_detection: true
+  return_to_slow_after_seconds: 20  # Return to idle sooner
+
+# Memory Management - Critical for 8GB Nano
+memory:
+  max_memory_mb: 1024         # Increased limit for Nano (was 512MB)
+  frame_buffer_size: 2        # Reduced from 3
+  background_model_frames: 30 # Reduced from 50
+  cleanup_interval_detections: 50  # More frequent cleanup
+  force_gc: true              # Force garbage collection
+  reset_background_every_hours: 2   # More frequent resets
+
+# Watchdog Settings - More aggressive for resource constraints
+watchdog:
+  enabled: true
+  check_interval_seconds: 20   # More frequent checks
+  restart_on_hang: true
+  restart_on_memory_exceed: true
+  max_restart_attempts: 5      # More restart attempts
+  notify_on_restart: true
+  hang_timeout_seconds: 45     # Shorter timeout
+
+# State Files
+state:
+  robot_state_file: runtime/robot_state.json
+  vision_events_file: runtime/vision_events.json
+  daemon_pid_file: runtime/vision_daemon.pid
+  daemon_log_file: logs/vision_daemon.log
+
+# Logging - Less verbose for performance
+logging:
+  level: WARNING              # Reduced from INFO for performance
+  rotate_daily: true
+  keep_days: 3                # Fewer log files
+  log_detections: true        # Keep detection logs
+  log_frame_stats: false      # Disable verbose frame stats
+
+# Debug Settings - Disabled for production
+debug:
+  save_overlay: false         # Disabled for performance
+  overlay_path: runtime/vision_debug/
+  show_zones: false           # Disabled to reduce processing
+  show_detections: false      # Disabled to reduce processing
+  show_fps: false             # Disabled to reduce processing
