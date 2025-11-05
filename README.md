@@ -23,10 +23,28 @@ cd /home/daniel/LerobotGUI
 ```
 
 The setup script will:
+- Detect if you're running on an NVIDIA Jetson and switch to the Jetson installer automatically
 - Create a virtual environment
 - Install all dependencies including LeRobot
 - Set up udev rules for serial access
 - Add your user to the dialout group
+
+#### Jetson Orin Nano first-time setup
+
+The Jetson-specific installer (`setup_jetson.sh`) takes care of:
+
+- Installing system packages required by LeRobot, PySide6, OpenCV, FFmpeg, and GStreamer
+- Pulling the NVIDIA-provided PyTorch and TorchVision wheels for JetPack (configurable via `TORCH_INDEX_URL`/`TORCH_VERSION` env vars)
+- Using the prebuilt `python3-opencv` package instead of compiling OpenCV from source
+- Applying the udev rules and group membership changes used on x86 hosts
+
+You can run it directly on the Jetson:
+
+```bash
+./setup_jetson.sh
+```
+
+or trigger it from a Windows workstation with SSH access by running `SetupJetson.bat`, which will prompt for the Jetson hostname, username, and repository path before executing the installer remotely.
 
 **Important:** After setup, log out and back in for group permissions to take effect.
 

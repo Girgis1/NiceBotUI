@@ -2,7 +2,14 @@
 # LeRobot Operator Console Setup Script
 # For Ubuntu/Debian/Jetson
 
-set -e
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
+# If we're on a Jetson, hand off to the dedicated installer.
+if [[ -f /etc/nv_tegra_release ]] && [[ "$(uname -m)" == "aarch64" ]]; then
+    exec "${SCRIPT_DIR}/setup_jetson.sh" "$@"
+fi
 
 echo "========================================="
 echo "LeRobot Operator Console Setup"
@@ -42,7 +49,7 @@ fi
 # Add user to dialout group
 echo ""
 echo "Adding user to dialout group for serial access..."
-sudo usermod -aG dialout $USER
+sudo usermod -aG dialout "$USER"
 echo "✓ User added to dialout group"
 
 echo ""
