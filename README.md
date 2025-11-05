@@ -17,16 +17,25 @@ A minimalist, touch-friendly GUI for operating SO-100/101 robot arms with Huggin
 
 ### 1. Install
 
+On the Jetson (or any Linux machine) simply run:
+
 ```bash
 cd /home/daniel/LerobotGUI
 ./setup.sh
 ```
 
-The setup script will:
-- Create a virtual environment
-- Install all dependencies including LeRobot
-- Set up udev rules for serial access
-- Add your user to the dialout group
+If you're staging the repository from a Windows PC, you can double-click `Setup.bat`
+or run it from a terminal. It will hand off to WSL or Git Bash so the Linux setup
+script runs with the correct environment before you move the project onto the Jetson.
+
+The setup script now handles the entire first-time experience on Jetson devices:
+- Installs system packages (Qt runtime libs, build tools, ffmpeg, etc.) via `apt`
+- Detects Jetson hardware and uses NVIDIA's Python package index for compatible wheels
+- Pre-installs PyTorch/TorchVision/Torchaudio needed by LeRobot and Ultralytics
+- Creates a virtual environment
+- Installs all Python dependencies including LeRobot
+- Sets up udev rules for serial access
+- Adds your user to the dialout group
 
 **Important:** After setup, log out and back in for group permissions to take effect.
 
