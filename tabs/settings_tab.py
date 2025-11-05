@@ -30,6 +30,7 @@ except ImportError:  # pragma: no cover - optional dependency
     YOLO = None
 
 from utils.camera_hub import CameraStreamHub
+from utils.camera_support import looks_like_gstreamer_pipeline, prepare_camera_source
 from utils.home_move_worker import HomeMoveWorker, HomeMoveRequest
 
 
@@ -206,8 +207,44 @@ class HandDetectionTestDialog(QDialog):
             self.timer.start()
             return
 
-        # Fallback to direct VideoCapture when hub mapping unavailable
-        cap = cv2.VideoCapture(identifier)
+        camera_cfg: Dict = {}
+        if resolved_name:
+            camera_cfg = self.app_config.get("cameras", {}).get(resolved_name, {})
+        else:
+            # Attempt best-effort match by identifier
+            cameras_cfg = self.app_config.get("cameras", {}) or {}
+            for cfg in cameras_cfg.values():
+                if cfg.get("index_or_path") == identifier:
+                    camera_cfg = cfg
+                    break
+
+        open_identifier = identifier
+        backend = None
+        if camera_cfg:
+            width = int(camera_cfg.get("width", 640))
+            height = int(camera_cfg.get("height", 480))
+            fps = float(camera_cfg.get("fps", 30))
+            open_identifier, backend = prepare_camera_source(camera_cfg, width, height, fps)
+        else:
+            if isinstance(identifier, str) and identifier.isdigit():
+                open_identifier = int(identifier)
+                backend = "v4l2"
+            elif isinstance(identifier, str) and looks_like_gstreamer_pipeline(identifier):
+                backend = "gstreamer"
+
+        backend_flag = None
+        if backend == "gstreamer":
+            backend_flag = getattr(cv2, "CAP_GSTREAMER", None)
+        elif backend == "v4l2":
+            backend_flag = getattr(cv2, "CAP_V4L2", None)
+        elif backend == "ffmpeg":
+            backend_flag = getattr(cv2, "CAP_FFMPEG", None)
+
+        if backend_flag is None:
+            cap = cv2.VideoCapture(open_identifier)
+        else:
+            cap = cv2.VideoCapture(open_identifier, backend_flag)
+
         if not cap or not cap.isOpened():
             self.error_message = f"Failed to open camera {label}"
             self.status_label.setText(f"❌ Could not open {label}. See terminal for details.")
@@ -1065,7 +1102,17 @@ class SettingsTab(QWidget):
         self.cam_width_spin = self.add_spinbox_row(layout, "Width:", 320, 1920, 640)
         self.cam_height_spin = self.add_spinbox_row(layout, "Height:", 240, 1080, 480)
         self.cam_fps_spin = self.add_spinbox_row(layout, "Camera FPS:", 1, 60, 30)
-        
+
+        backend_options = [
+            ("Auto (Recommended)", "auto"),
+            ("Video4Linux2 (USB)", "v4l2"),
+            ("GStreamer (Jetson)", "gstreamer"),
+        ]
+        self.cam_backend_combo = self.add_combobox_row(layout, "Capture Backend:", backend_options)
+        self.cam_backend_combo.setToolTip(
+            "Choose the driver OpenCV should use. Select GStreamer for NVIDIA Jetson CSI/NVARGUS cameras."
+        )
+
         layout.addStretch()
         return widget
     
@@ -1509,6 +1556,58 @@ class SettingsTab(QWidget):
         
         layout.addLayout(row)
         return edit
+
+    def add_combobox_row(
+        self,
+        layout: QVBoxLayout,
+        label_text: str,
+        items: List[Tuple[str, str]],
+        default_index: int = 0,
+    ) -> QComboBox:
+        """Add a styled combo box row."""
+
+        row = QHBoxLayout()
+
+        label = QLabel(label_text)
+        label.setStyleSheet("""
+            QLabel {
+                color: #e0e0e0;
+                font-size: 14px;
+                min-width: 150px;
+            }
+        """)
+        row.addWidget(label)
+
+        combo = QComboBox()
+        combo.setMinimumHeight(44)
+        combo.setMinimumWidth(220)
+        combo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        combo.setStyleSheet("""
+            QComboBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 6px 8px;
+                font-size: 14px;
+            }
+            QComboBox::drop-down {
+                width: 28px;
+                background: #3a3a3a;
+                border-left: 1px solid #606060;
+            }
+        """)
+
+        for idx, (text, data) in enumerate(items):
+            combo.addItem(text, data)
+            if idx == default_index:
+                combo.setCurrentIndex(idx)
+
+        row.addWidget(combo)
+        row.addStretch()
+        layout.addLayout(row)
+
+        return combo
     
     def add_spinbox_row(self, layout: QVBoxLayout, label_text: str, min_val: int, max_val: int, default: int) -> QSpinBox:
         """Add a spinbox setting row"""
@@ -1610,7 +1709,17 @@ class SettingsTab(QWidget):
         self.cam_width_spin.setValue(front_cam.get("width", 640))
         self.cam_height_spin.setValue(front_cam.get("height", 480))
         self.cam_fps_spin.setValue(front_cam.get("fps", 30))
-        
+        backend_value = front_cam.get("backend") or wrist_cam.get("backend")
+        if not backend_value:
+            source_candidate = front_cam.get("index_or_path") or wrist_cam.get("index_or_path")
+            if source_candidate and looks_like_gstreamer_pipeline(source_candidate):
+                backend_value = "gstreamer"
+
+        backend_index = self.cam_backend_combo.findData(backend_value or "auto")
+        if backend_index == -1:
+            backend_index = 0
+        self.cam_backend_combo.setCurrentIndex(backend_index)
+
         # Policy settings
         self.policy_base_edit.setText(self.config.get("policy", {}).get("base_path", "outputs/train"))
         self.policy_device_edit.setText(self.config.get("policy", {}).get("device", "cuda"))
@@ -1669,16 +1778,25 @@ class SettingsTab(QWidget):
         self.config["teleop"]["port"] = self.teleop_port_edit.text()
         
         # Camera settings
-        if "cameras" not in self.config:
-            self.config["cameras"] = {"front": {}, "wrist": {}}
-        self.config["cameras"]["front"]["index_or_path"] = self.cam_front_edit.text()
-        self.config["cameras"]["wrist"]["index_or_path"] = self.cam_wrist_edit.text()
-        self.config["cameras"]["front"]["width"] = self.cam_width_spin.value()
-        self.config["cameras"]["front"]["height"] = self.cam_height_spin.value()
-        self.config["cameras"]["front"]["fps"] = self.cam_fps_spin.value()
-        self.config["cameras"]["wrist"]["width"] = self.cam_width_spin.value()
-        self.config["cameras"]["wrist"]["height"] = self.cam_height_spin.value()
-        self.config["cameras"]["wrist"]["fps"] = self.cam_fps_spin.value()
+        cameras_cfg = self.config.setdefault("cameras", {})
+        front_cfg = cameras_cfg.setdefault("front", {})
+        wrist_cfg = cameras_cfg.setdefault("wrist", {})
+
+        front_cfg["index_or_path"] = self.cam_front_edit.text()
+        wrist_cfg["index_or_path"] = self.cam_wrist_edit.text()
+
+        for cfg in (front_cfg, wrist_cfg):
+            cfg["width"] = self.cam_width_spin.value()
+            cfg["height"] = self.cam_height_spin.value()
+            cfg["fps"] = self.cam_fps_spin.value()
+
+        backend_choice = self.cam_backend_combo.currentData()
+        if backend_choice and backend_choice != "auto":
+            front_cfg["backend"] = backend_choice
+            wrist_cfg["backend"] = backend_choice
+        else:
+            front_cfg.pop("backend", None)
+            wrist_cfg.pop("backend", None)
         
         # Policy settings
         if "policy" not in self.config:
@@ -1752,6 +1870,8 @@ class SettingsTab(QWidget):
         self.cam_width_spin.setValue(640)
         self.cam_height_spin.setValue(480)
         self.cam_fps_spin.setValue(30)
+        if hasattr(self, "cam_backend_combo"):
+            self.cam_backend_combo.setCurrentIndex(0)
         
         self.policy_base_edit.setText("outputs/train")
         self.policy_device_edit.setText("cuda")

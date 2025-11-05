@@ -82,6 +82,8 @@ Or directly:
 
 **Camera Tab:**
 - Camera index, resolution, FPS
+- Capture backend selector (Auto, Video4Linux2, GStreamer)
+- Jetson shortcut: use `csi://0` or `csi://1` for NVArgus cameras
 
 **Policy Tab:**
 - Trained model checkpoint path

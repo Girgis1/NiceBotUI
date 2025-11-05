@@ -19,7 +19,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, Optional, Tuple
 
 try:  # Optional dependency
     import cv2  # type: ignore
@@ -28,8 +28,7 @@ except ImportError:  # pragma: no cover
     cv2 = None
     np = None
 
-
-CameraSource = Union[int, str]
+from utils.camera_support import CameraSource, prepare_camera_source
 
 
 @dataclass
@@ -53,6 +52,7 @@ class CameraStream:
         fps: float,
         preview_width: int = 320,
         preview_fps: float = 5.0,
+        backend: Optional[str] = None,
     ) -> None:
         self.name = name
         self.source = source
@@ -60,6 +60,7 @@ class CameraStream:
         self.target_fps = max(1.0, float(fps or 30.0))
         self.preview_width = preview_width
         self.preview_fps = max(0.5, preview_fps)
+        self.backend = backend.lower() if isinstance(backend, str) else None
 
         self._lock = threading.Lock()
         self._frames = FrameBundle()
@@ -138,24 +139,44 @@ class CameraStream:
                 pass
             self._capture = None
 
-        backend = cv2.CAP_ANY if isinstance(self.source, str) else cv2.CAP_V4L2
-        cap = cv2.VideoCapture(self.source, backend)
+        backend_flag = self._backend_flag()
+        if backend_flag is None:
+            cap = cv2.VideoCapture(self.source)
+        else:
+            cap = cv2.VideoCapture(self.source, backend_flag)
         if not cap or not cap.isOpened():
             if cap:
                 cap.release()
             self._capture = None
             return False
 
-        # Apply requested settings when available
-        if self.target_width:
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(self.target_width))
-        if self.target_height:
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(self.target_height))
-        if self.target_fps:
-            cap.set(cv2.CAP_PROP_FPS, float(self.target_fps))
+        try:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
+
+        if self.backend != "gstreamer":
+            if self.target_width:
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(self.target_width))
+            if self.target_height:
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(self.target_height))
+            if self.target_fps:
+                cap.set(cv2.CAP_PROP_FPS, float(self.target_fps))
 
         self._capture = cap
         return True
+
+    def _backend_flag(self) -> Optional[int]:
+        if cv2 is None:
+            return None
+
+        if self.backend == "gstreamer":
+            return getattr(cv2, "CAP_GSTREAMER", None)
+        if self.backend == "v4l2":
+            return getattr(cv2, "CAP_V4L2", None)
+        if self.backend == "ffmpeg":
+            return getattr(cv2, "CAP_FFMPEG", None)
+        return None
 
     def _capture_loop(self) -> None:
         if cv2 is None:  # pragma: no cover
@@ -264,15 +285,11 @@ class CameraStreamHub:
             if not camera_cfg:
                 return None
 
-            index_or_path = camera_cfg.get("index_or_path", 0)
-            if isinstance(index_or_path, str) and index_or_path.isdigit():
-                source: CameraSource = int(index_or_path)
-            else:
-                source = index_or_path
-
             width = int(camera_cfg.get("width", 640))
             height = int(camera_cfg.get("height", 480))
             fps = float(camera_cfg.get("fps", 30))
+
+            source, backend = prepare_camera_source(camera_cfg, width, height, fps)
 
             stream = CameraStream(
                 camera_name,
@@ -281,6 +298,7 @@ class CameraStreamHub:
                 fps,
                 preview_width=min(400, width),
                 preview_fps=5.0,
+                backend=backend,
             )
             stream.start()
             self._streams[camera_name] = stream

@@ -55,6 +55,11 @@ class _Qt:
     ScrollBarAlwaysOn = 1
 
 
+class _QAbstractItemView:
+    SingleSelection = 1
+    SelectRows = 0
+
+
 def _make_dummy(name):
     return type(name, (), {"__init__": lambda self, *args, **kwargs: None})
 
@@ -116,6 +121,9 @@ qtwidgets_stub = types.SimpleNamespace(
     QSpinBox=_make_dummy("QSpinBox"),
     QVBoxLayout=_make_dummy("QVBoxLayout"),
     QWidget=_make_dummy("QWidget"),
+    QAbstractItemView=_QAbstractItemView,
+    QTableWidget=_make_dummy("QTableWidget"),
+    QTableWidgetItem=_make_dummy("QTableWidgetItem"),
 )
 
 pyside_stub = types.ModuleType("PySide6")
