@@ -30,7 +30,9 @@ except ImportError:  # pragma: no cover - optional dependency
     YOLO = None
 
 from utils.camera_hub import CameraStreamHub
+from utils.camera_utils import configure_low_latency, select_capture_source
 from utils.home_move_worker import HomeMoveWorker, HomeMoveRequest
+from utils.hardware import resolve_torch_device
 
 
 class HandDetectionTestDialog(QDialog):
@@ -63,6 +65,7 @@ class HandDetectionTestDialog(QDialog):
         self.detected_any = False
         self.error_message: Optional[str] = None
         self.result_summary = "Camera preview not started."
+        self._yolo_device = "cpu"
 
         self._build_camera_name_map()
 
@@ -103,6 +106,19 @@ class HandDetectionTestDialog(QDialog):
             try:
                 self.yolo_model = YOLO("yolov8n.pt")
                 self.yolo_model.overrides['verbose'] = False
+                device, warning = resolve_torch_device(None)
+                if warning:
+                    print(f"[SAFETY] {warning}")
+                if hasattr(self.yolo_model, "to") and device:
+                    try:
+                        if device != "cpu":
+                            self.yolo_model.to(device)
+                        self._yolo_device = device
+                    except Exception as exc:
+                        self._yolo_device = "cpu"
+                        print(f"[SAFETY] Failed to move YOLO model to {device}: {exc}")
+                else:
+                    self._yolo_device = device or "cpu"
             except Exception as e:
                 self.error_message = f"Failed to load YOLO: {e}"
                 print(f"[SAFETY] YOLO initialization error: {e}")
@@ -207,7 +223,11 @@ class HandDetectionTestDialog(QDialog):
             return
 
         # Fallback to direct VideoCapture when hub mapping unavailable
-        cap = cv2.VideoCapture(identifier)
+        open_source, backend = select_capture_source(identifier)
+        if backend is None:
+            cap = cv2.VideoCapture(open_source)
+        else:
+            cap = cv2.VideoCapture(open_source, backend)
         if not cap or not cap.isOpened():
             self.error_message = f"Failed to open camera {label}"
             self.status_label.setText(f"❌ Could not open {label}. See terminal for details.")
@@ -216,6 +236,7 @@ class HandDetectionTestDialog(QDialog):
             self._use_hub_for_current = False
             return
 
+        configure_low_latency(cap)
         self.cap = cap
         self.current_camera_name = None
         self._use_hub_for_current = False
@@ -293,7 +314,11 @@ class HandDetectionTestDialog(QDialog):
 
         try:
             # Run YOLO detection
-            results = self.yolo_model(frame, conf=0.4, verbose=False)
+            kwargs = {"conf": 0.4, "verbose": False}
+            if self._yolo_device:
+                kwargs["device"] = self._yolo_device
+
+            results = self.yolo_model(frame, **kwargs)
             
             if results and len(results) > 0:
                 for result in results:
@@ -1077,7 +1102,7 @@ class SettingsTab(QWidget):
         layout.setSpacing(8)
         
         self.policy_base_edit = self.add_setting_row(layout, "Base Path:", "/home/daniel/lerobot/outputs/train")
-        self.policy_device_edit = self.add_setting_row(layout, "Device:", "cuda")
+        self.policy_device_edit = self.add_setting_row(layout, "Device:", "auto")
         
         # Execution mode toggle
         mode_section = QLabel("Execution Mode:")
@@ -1613,7 +1638,7 @@ class SettingsTab(QWidget):
         
         # Policy settings
         self.policy_base_edit.setText(self.config.get("policy", {}).get("base_path", "outputs/train"))
-        self.policy_device_edit.setText(self.config.get("policy", {}).get("device", "cuda"))
+        self.policy_device_edit.setText(self.config.get("policy", {}).get("device", "auto"))
         self.policy_local_check.setChecked(self.config.get("policy", {}).get("local_mode", True))  # Default to local mode
         
         # Async inference
@@ -1754,7 +1779,7 @@ class SettingsTab(QWidget):
         self.cam_fps_spin.setValue(30)
         
         self.policy_base_edit.setText("outputs/train")
-        self.policy_device_edit.setText("cuda")
+        self.policy_device_edit.setText("auto")
         
         self.async_host_edit.setText("127.0.0.1")
         self.async_port_spin.setValue(8080)

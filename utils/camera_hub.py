@@ -28,6 +28,8 @@ except ImportError:  # pragma: no cover
     cv2 = None
     np = None
 
+from .camera_utils import configure_low_latency, select_capture_source
+
 
 CameraSource = Union[int, str]
 
@@ -138,8 +140,11 @@ class CameraStream:
                 pass
             self._capture = None
 
-        backend = cv2.CAP_ANY if isinstance(self.source, str) else cv2.CAP_V4L2
-        cap = cv2.VideoCapture(self.source, backend)
+        open_source, backend = select_capture_source(self.source)
+        if backend is None:
+            cap = cv2.VideoCapture(open_source)
+        else:
+            cap = cv2.VideoCapture(open_source, backend)
         if not cap or not cap.isOpened():
             if cap:
                 cap.release()
@@ -153,6 +158,8 @@ class CameraStream:
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(self.target_height))
         if self.target_fps:
             cap.set(cv2.CAP_PROP_FPS, float(self.target_fps))
+
+        configure_low_latency(cap)
 
         self._capture = cap
         return True

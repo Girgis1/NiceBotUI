@@ -13,6 +13,8 @@ import sys
 import time
 from PySide6.QtCore import QThread, Signal
 
+from utils.hardware import resolve_torch_device
+
 
 class RobotWorker(QThread):
     """Worker thread that runs LeRobot async inference (policy server + robot client)"""
@@ -144,6 +146,13 @@ class RobotWorker(QThread):
         if not pretrained_path:
             raise ValueError("Policy path not configured")
 
+        configured_device = p.get("device") if isinstance(p, dict) else None
+        policy_device, device_warning = resolve_torch_device(configured_device)
+        if device_warning:
+            self.log_message.emit('warning', device_warning)
+
+        self.log_message.emit('info', f"Policy device: {policy_device}")
+
         args = [
             sys.executable, "-m", "lerobot.async_inference.robot_client",
             f"--server_address={server_address}",
@@ -153,7 +162,7 @@ class RobotWorker(QThread):
             f"--robot.cameras={camera_dict}",
             "--policy_type", async_cfg.get("policy_type", "act"),
             f"--pretrained_name_or_path={pretrained_path}",
-            "--policy_device", p.get("device", "cpu") if isinstance(p, dict) else "cpu",
+            "--policy_device", policy_device,
             "--actions_per_chunk", str(async_cfg.get("actions_per_chunk", 30)),
             "--chunk_size_threshold", str(async_cfg.get("chunk_size_threshold", 0.6)),
             "--debug_visualize_queue_size=False"

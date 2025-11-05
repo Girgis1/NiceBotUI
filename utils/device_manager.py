@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Optional, Dict, List
 from PySide6.QtCore import QObject, Signal
 
+from .camera_utils import select_capture_source
+
 
 class DeviceManager(QObject):
     """Manages device discovery and status tracking"""
@@ -162,19 +164,22 @@ class DeviceManager(QObject):
             return "empty"
 
         # Handle integer indices passed as strings
-        probe_source = source
-        if isinstance(source, str) and source.isdigit():
-            probe_source = int(source)
+        normalized_source, backend = select_capture_source(source)
 
         # Try OpenCV if available for a reliable check
         try:
             import cv2  # type: ignore
 
-            cap = cv2.VideoCapture(probe_source)
-            if cap.isOpened():
+            if backend is None:
+                cap = cv2.VideoCapture(normalized_source)
+            else:
+                cap = cv2.VideoCapture(normalized_source, backend)
+
+            if cap is not None and cap.isOpened():
                 cap.release()
                 return "online"
-            cap.release()
+            if cap is not None:
+                cap.release()
             return "offline"
         except Exception:
             # Fall back to filesystem check for path-based sources

@@ -264,7 +264,7 @@ class MainWindow(QMainWindow):
             },
             "policy": {
                 "path": "outputs/train/act_so100/checkpoints/last/pretrained_model",
-                "device": "cpu"
+                "device": "auto"
             },
             "control": {
                 "warmup_time_s": 3,

@@ -18,7 +18,6 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Callable, List, Optional, Tuple, Union
 
 try:
@@ -42,6 +41,12 @@ except ImportError:
     YOLO = None
     HAVE_YOLO = False
 
+from utils.camera_utils import (
+    configure_low_latency,
+    normalize_identifier,
+    select_capture_source,
+)
+from utils.hardware import resolve_torch_device
 
 CameraIdentifier = Union[int, str]
 CameraSource = Tuple[str, CameraIdentifier]
@@ -117,10 +122,11 @@ class HandSafetyMonitor:
         self._last_detection_time = 0.0
         self._captures: List[Tuple[str, CameraIdentifier, cv2.VideoCapture]] = []
         self._capture_lock = threading.Lock()
-        
+
         # Initialize hand detector
         self._detector = None
         self._detection_method = "none"
+        self._inference_device = "cpu"
         self._init_detector()
     
     def _init_detector(self):
@@ -136,6 +142,24 @@ class HandSafetyMonitor:
             self._detector = YOLO(self.config.yolo_model)
             self._detector.overrides['verbose'] = False  # Quiet mode
             self._detection_method = "yolo"
+            device, warning = resolve_torch_device(None)
+            if warning:
+                self._log("warning", f"[SAFETY] {warning}")
+
+            if hasattr(self._detector, "to") and device:
+                try:
+                    if device != "cpu":
+                        self._detector.to(device)
+                    self._inference_device = device
+                    self._log("info", f"[SAFETY] YOLO running on {device.upper()}")
+                except Exception as exc:
+                    self._inference_device = "cpu"
+                    self._log(
+                        "warning",
+                        f"[SAFETY] Failed to move YOLO model to {device}: {exc}. Using CPU instead.",
+                    )
+            else:
+                self._inference_device = device or "cpu"
             self._log("info", f"[SAFETY] ✓ Initialized YOLOv8 detection (MODEL: {self.config.yolo_model})")
             self._log("info", "[SAFETY] Detection active - monitoring for hands/person in workspace")
         except Exception as e:
@@ -306,7 +330,11 @@ class HandSafetyMonitor:
         """Detect hands/person using YOLOv8."""
         try:
             # Run YOLO inference
-            results = self._detector(frame, conf=self.config.detection_confidence, verbose=False)
+            kwargs = {"conf": self.config.detection_confidence, "verbose": False}
+            if self._inference_device:
+                kwargs["device"] = self._inference_device
+
+            results = self._detector(frame, **kwargs)
             
             if not results or len(results) == 0:
                 return False, 0.0
@@ -354,18 +382,23 @@ class HandSafetyMonitor:
     def _open_single_camera(self, identifier: CameraIdentifier) -> Optional[cv2.VideoCapture]:
         """Open a single camera with proper configuration."""
         try:
-            cap = cv2.VideoCapture(identifier)
+            open_source, backend = select_capture_source(identifier)
+            if backend is None:
+                cap = cv2.VideoCapture(open_source)
+            else:
+                cap = cv2.VideoCapture(open_source, backend)
             if not cap or not cap.isOpened():
                 if cap:
                     cap.release()
                 return None
-            
+
             # Configure camera for lightweight operation
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.config.frame_width)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.config.frame_height)
             cap.set(cv2.CAP_PROP_FPS, 15)  # Camera FPS (lower than detection FPS)
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize latency
-            
+            configure_low_latency(cap)
+
             return cap
         except Exception as e:
             self._log("warning", f"[SAFETY] Camera open error: {e}")
@@ -404,26 +437,20 @@ def build_camera_sources_from_config(config: dict, camera_selection: str = "fron
         # Use all configured cameras
         for name, cam_cfg in cameras_cfg.items():
             if isinstance(cam_cfg, dict):
-                identifier = cam_cfg.get("index_or_path", 0)
-                if isinstance(identifier, str) and identifier.isdigit():
-                    identifier = int(identifier)
+                identifier = normalize_identifier(cam_cfg.get("index_or_path", 0))
                 sources.append((name, identifier))
     else:
         # Use specific camera
         if selection in cameras_cfg:
             cam_cfg = cameras_cfg[selection]
             if isinstance(cam_cfg, dict):
-                identifier = cam_cfg.get("index_or_path", 0)
-                if isinstance(identifier, str) and identifier.isdigit():
-                    identifier = int(identifier)
+                identifier = normalize_identifier(cam_cfg.get("index_or_path", 0))
                 sources.append((selection, identifier))
         else:
             # Fallback: use first available camera
             for name, cam_cfg in cameras_cfg.items():
                 if isinstance(cam_cfg, dict):
-                    identifier = cam_cfg.get("index_or_path", 0)
-                    if isinstance(identifier, str) and identifier.isdigit():
-                        identifier = int(identifier)
+                    identifier = normalize_identifier(cam_cfg.get("index_or_path", 0))
                     sources.append((name, identifier))
                     break
     
