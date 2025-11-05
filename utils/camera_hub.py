@@ -28,6 +28,8 @@ except ImportError:  # pragma: no cover
     cv2 = None
     np = None
 
+from .platform import is_jetson
+
 
 CameraSource = Union[int, str]
 
@@ -138,8 +140,11 @@ class CameraStream:
                 pass
             self._capture = None
 
-        backend = cv2.CAP_ANY if isinstance(self.source, str) else cv2.CAP_V4L2
-        cap = cv2.VideoCapture(self.source, backend)
+        backend = self._select_backend()
+        if backend is None:
+            cap = cv2.VideoCapture(self.source)
+        else:
+            cap = cv2.VideoCapture(self.source, backend)
         if not cap or not cap.isOpened():
             if cap:
                 cap.release()
@@ -153,9 +158,33 @@ class CameraStream:
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(self.target_height))
         if self.target_fps:
             cap.set(cv2.CAP_PROP_FPS, float(self.target_fps))
+        # Reduce capture latency when supported.
+        try:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:  # pragma: no cover - backend may not expose property
+            pass
 
         self._capture = cap
         return True
+
+    def _select_backend(self) -> Optional[int]:
+        if cv2 is None:
+            return None
+
+        # GStreamer pipelines benefit from the dedicated backend.
+        if isinstance(self.source, str):
+            source_str = self.source.strip().lower()
+            if source_str.startswith("nvarguscamerasrc") or source_str.startswith("v4l2src"):
+                return cv2.CAP_GSTREAMER
+            if source_str.startswith("rtsp://") and is_jetson():
+                return cv2.CAP_GSTREAMER
+            return cv2.CAP_ANY
+
+        # Prefer V4L2 backend on Jetson hardware for USB/UVC cameras.
+        if is_jetson():
+            return cv2.CAP_V4L2
+
+        return cv2.CAP_ANY
 
     def _capture_loop(self) -> None:
         if cv2 is None:  # pragma: no cover

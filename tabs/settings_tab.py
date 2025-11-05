@@ -1359,6 +1359,42 @@ class SettingsTab(QWidget):
         fps_row.addStretch()
         layout.addLayout(fps_row)
 
+        # Inference device selection
+        device_row = QHBoxLayout()
+        device_label = QLabel("Inference device:")
+        device_label.setStyleSheet("QLabel { color: #e0e0e0; font-size: 15px; min-width: 220px; }")
+        device_row.addWidget(device_label)
+
+        self.hand_safety_device_combo = QComboBox()
+        self.hand_safety_device_combo.addItem("Auto (detect best)", "auto")
+        self.hand_safety_device_combo.addItem("CPU only", "cpu")
+        self.hand_safety_device_combo.addItem("CUDA GPU (Jetson/PC)", "cuda:0")
+        self.hand_safety_device_combo.addItem("Apple Metal (MPS)", "mps")
+        self.hand_safety_device_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 8px;
+                padding: 8px;
+                font-size: 15px;
+                min-height: 45px;
+            }
+            QComboBox:focus {
+                border-color: #FF5722;
+                background-color: #555555;
+            }
+            QComboBox QListView {
+                background-color: #3a3a3a;
+                color: #ffffff;
+                padding: 4px;
+            }
+        """)
+        self.hand_safety_device_combo.setToolTip("Choose where YOLO runs. Use CUDA on Jetson/desktop GPUs for best performance.")
+        device_row.addWidget(self.hand_safety_device_combo)
+        device_row.addStretch()
+        layout.addLayout(device_row)
+
         # Detection confidence (MediaPipe)
         confidence_row = QHBoxLayout()
         confidence_label = QLabel("Detection confidence threshold:")
@@ -1650,6 +1686,11 @@ class SettingsTab(QWidget):
             index = 0
         self.hand_safety_camera_combo.setCurrentIndex(index)
         self.hand_safety_fps_spin.setValue(safety_cfg.get("detection_fps", 8.0))
+        inference_device = safety_cfg.get("inference_device", "auto")
+        device_index = self.hand_safety_device_combo.findData(inference_device)
+        if device_index == -1:
+            device_index = 0
+        self.hand_safety_device_combo.setCurrentIndex(device_index)
         self.hand_safety_confidence_spin.setValue(safety_cfg.get("detection_confidence", 0.4))
         self.hand_safety_resume_delay_spin.setValue(safety_cfg.get("resume_delay_s", 1.0))
         self.hand_safety_frame_width_spin.setValue(safety_cfg.get("frame_width", 320))
@@ -1720,6 +1761,7 @@ class SettingsTab(QWidget):
         self.config["safety"]["enabled"] = self.hand_safety_enabled_check.isChecked()
         self.config["safety"]["cameras"] = self.hand_safety_camera_combo.currentData()
         self.config["safety"]["detection_fps"] = self.hand_safety_fps_spin.value()
+        self.config["safety"]["inference_device"] = self.hand_safety_device_combo.currentData()
         self.config["safety"]["detection_confidence"] = self.hand_safety_confidence_spin.value()
         self.config["safety"]["resume_delay_s"] = self.hand_safety_resume_delay_spin.value()
         self.config["safety"]["frame_width"] = self.hand_safety_frame_width_spin.value()
@@ -1772,6 +1814,13 @@ class SettingsTab(QWidget):
         self.torque_monitor_check.setChecked(False)
         self.torque_threshold_spin.setValue(120.0)
         self.torque_disable_check.setChecked(True)
+        self.hand_safety_enabled_check.setChecked(False)
+        self.hand_safety_camera_combo.setCurrentIndex(0)
+        self.hand_safety_fps_spin.setValue(8.0)
+        self.hand_safety_device_combo.setCurrentIndex(0)
+        self.hand_safety_confidence_spin.setValue(0.4)
+        self.hand_safety_resume_delay_spin.setValue(1.0)
+        self.hand_safety_frame_width_spin.setValue(320)
         self.hand_detection_check.setChecked(False)
         self.hand_detection_camera_combo.setCurrentIndex(0)
         self.hand_detection_model_edit.setText("nicebot/hand-detection-large")

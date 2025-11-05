@@ -28,6 +28,14 @@ The setup script will:
 - Set up udev rules for serial access
 - Add your user to the dialout group
 
+**Jetson Orin / Jetson Xavier / Jetson Nano:** The setup script now auto-detects NVIDIA Jetson boards (aarch64) and will:
+- Install the OpenCV + GStreamer system packages through `apt` (no more lengthy source builds)
+- Create a virtualenv with access to system packages so that JetPack's `python3-opencv` is reused
+- Install from `requirements-jetson.txt` (OpenCV is omitted because JetPack already provides it)
+- Remind you to install the Jetson-optimised PyTorch build for YOLO safety checks (e.g. `pip install --extra-index-url https://developer.download.nvidia.com/compute/redist/jp/v60 torch torchvision torchaudio`)
+
+When using Jetson camera modules, configure the camera index/path in Settings with the GStreamer pipeline string (e.g. `nvarguscamerasrc ! video/x-raw(memory:NVMM), width=1280, height=720, framerate=30/1 ! nvvidconv ! video/x-raw, format=BGRx ! videoconvert ! video/x-raw, format=BGR ! appsink`). The app now automatically selects the GStreamer backend for such sources.
+
 **Important:** After setup, log out and back in for group permissions to take effect.
 
 ### 2. Configure

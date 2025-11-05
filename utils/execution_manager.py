@@ -138,6 +138,7 @@ class ExecutionWorker(QThread):
                 detection_confidence=safety_config.get("detection_confidence", 0.4),
                 resume_delay_s=safety_config.get("resume_delay_s", 1.0),
                 yolo_model=safety_config.get("yolo_model", "yolov8n.pt"),
+                inference_device=safety_config.get("inference_device", "auto"),
             )
             
             # Create safety monitor

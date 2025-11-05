@@ -18,7 +18,6 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Callable, List, Optional, Tuple, Union
 
 try:
@@ -42,6 +41,8 @@ except ImportError:
     YOLO = None
     HAVE_YOLO = False
 
+from utils.platform import is_jetson
+
 
 CameraIdentifier = Union[int, str]
 CameraSource = Tuple[str, CameraIdentifier]
@@ -59,6 +60,7 @@ class SafetyConfig:
     detection_confidence: float = 0.4  # YOLO confidence threshold
     resume_delay_s: float = 1.0  # Delay before resuming after hand cleared
     yolo_model: str = "yolov8n.pt"  # YOLO model to use (change to hand-specific model if available)
+    inference_device: str = "auto"  # "auto", "cpu", "cuda:0", etc.
     
     def __post_init__(self):
         if self.cameras is None:
@@ -117,10 +119,11 @@ class HandSafetyMonitor:
         self._last_detection_time = 0.0
         self._captures: List[Tuple[str, CameraIdentifier, cv2.VideoCapture]] = []
         self._capture_lock = threading.Lock()
-        
+
         # Initialize hand detector
         self._detector = None
         self._detection_method = "none"
+        self._inference_device = "cpu"
         self._init_detector()
     
     def _init_detector(self):
@@ -135,11 +138,49 @@ class HandSafetyMonitor:
             # Load YOLO model (can be yolov8n.pt for person detection or custom hand model)
             self._detector = YOLO(self.config.yolo_model)
             self._detector.overrides['verbose'] = False  # Quiet mode
+            device = self._resolve_inference_device()
+            self._inference_device = device
+            try:
+                # Move weights to the chosen device when supported.
+                self._detector.to(device)
+            except Exception:
+                # Fallback to CPU if the requested device is unavailable at runtime.
+                self._inference_device = "cpu"
+                self._log(
+                    "warning",
+                    f"[SAFETY] Requested inference device '{device}' unavailable. Falling back to CPU.",
+                )
             self._detection_method = "yolo"
-            self._log("info", f"[SAFETY] ✓ Initialized YOLOv8 detection (MODEL: {self.config.yolo_model})")
+            self._log(
+                "info",
+                f"[SAFETY] ✓ Initialized YOLOv8 detection (MODEL: {self.config.yolo_model}, DEVICE: {self._inference_device})",
+            )
             self._log("info", "[SAFETY] Detection active - monitoring for hands/person in workspace")
         except Exception as e:
             raise RuntimeError(f"[SAFETY] CRITICAL - Failed to initialize YOLO: {e}")
+
+    def _resolve_inference_device(self) -> str:
+        requested = (self.config.inference_device or "auto").strip().lower()
+        if requested != "auto":
+            return requested
+
+        # Auto-detect best available accelerator.
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                return "cuda:0"
+            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                return "mps"
+        except Exception:
+            pass
+
+        # Jetson devices should prefer CUDA, but fall back gracefully when
+        # torch with CUDA support has not been installed yet.
+        if is_jetson():
+            return "cuda:0"
+
+        return "cpu"
     
     def start(self):
         """Start the safety monitoring thread."""
@@ -306,7 +347,12 @@ class HandSafetyMonitor:
         """Detect hands/person using YOLOv8."""
         try:
             # Run YOLO inference
-            results = self._detector(frame, conf=self.config.detection_confidence, verbose=False)
+            results = self._detector(
+                frame,
+                conf=self.config.detection_confidence,
+                verbose=False,
+                device=self._inference_device,
+            )
             
             if not results or len(results) == 0:
                 return False, 0.0
@@ -354,22 +400,50 @@ class HandSafetyMonitor:
     def _open_single_camera(self, identifier: CameraIdentifier) -> Optional[cv2.VideoCapture]:
         """Open a single camera with proper configuration."""
         try:
-            cap = cv2.VideoCapture(identifier)
+            backend = self._select_backend(identifier)
+            if backend is None:
+                cap = cv2.VideoCapture(identifier)
+            else:
+                cap = cv2.VideoCapture(identifier, backend)
             if not cap or not cap.isOpened():
                 if cap:
                     cap.release()
                 return None
-            
+
             # Configure camera for lightweight operation
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.config.frame_width)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.config.frame_height)
             cap.set(cv2.CAP_PROP_FPS, 15)  # Camera FPS (lower than detection FPS)
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize latency
-            
+
+            if is_jetson():
+                try:
+                    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                except Exception:
+                    pass
+
             return cap
         except Exception as e:
             self._log("warning", f"[SAFETY] Camera open error: {e}")
             return None
+
+    @staticmethod
+    def _select_backend(identifier: CameraIdentifier) -> Optional[int]:
+        if not HAVE_CV2:
+            return None
+
+        if isinstance(identifier, str):
+            source = identifier.strip().lower()
+            if source.startswith("nvarguscamerasrc") or source.startswith("v4l2src"):
+                return cv2.CAP_GSTREAMER
+            if source.startswith("rtsp://") and is_jetson():
+                return cv2.CAP_GSTREAMER
+            return cv2.CAP_ANY
+
+        if is_jetson():
+            return cv2.CAP_V4L2
+
+        return cv2.CAP_ANY
     
     def _release_cameras(self):
         """Release all camera resources."""
