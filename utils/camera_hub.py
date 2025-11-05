@@ -32,6 +32,20 @@ except ImportError:  # pragma: no cover
 CameraSource = Union[int, str]
 
 
+def is_gstreamer_pipeline(source: CameraSource) -> bool:
+    """Heuristic check for Jetson-style GStreamer pipelines."""
+
+    if not isinstance(source, str):
+        return False
+
+    text = source.strip()
+    if not text:
+        return False
+
+    # Pipelines usually contain '!' separators or start with nvarguscamerasrc
+    return "!" in text or text.startswith("nvarguscamerasrc")
+
+
 @dataclass
 class FrameBundle:
     """Latest frames cached by a `CameraStream`."""
@@ -138,7 +152,11 @@ class CameraStream:
                 pass
             self._capture = None
 
-        backend = cv2.CAP_ANY if isinstance(self.source, str) else cv2.CAP_V4L2
+        if isinstance(self.source, str):
+            backend = cv2.CAP_GSTREAMER if is_gstreamer_pipeline(self.source) else cv2.CAP_ANY
+        else:
+            backend = cv2.CAP_V4L2
+
         cap = cv2.VideoCapture(self.source, backend)
         if not cap or not cap.isOpened():
             if cap:
@@ -153,6 +171,13 @@ class CameraStream:
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(self.target_height))
         if self.target_fps:
             cap.set(cv2.CAP_PROP_FPS, float(self.target_fps))
+
+        # Minimise latency on Jetson by keeping only the latest frame buffered
+        if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
+            try:
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            except Exception:  # pragma: no cover - backend dependent
+                pass
 
         self._capture = cap
         return True

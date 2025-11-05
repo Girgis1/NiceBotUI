@@ -26,8 +26,37 @@ source .venv/bin/activate
 echo "Upgrading pip..."
 pip install --upgrade pip
 
+ARCH=$(uname -m)
+echo "Detected architecture: $ARCH"
+
 echo "Installing dependencies..."
-pip install -r requirements.txt
+if [ "$ARCH" = "aarch64" ]; then
+    echo "Jetson/ARM64 detected - using system OpenCV and Jetson-friendly dependencies"
+
+    # Ensure system packages needed for OpenCV/GStreamer are available
+    echo "Updating apt repositories (requires sudo)..."
+    sudo apt-get update
+    echo "Installing OpenCV and GStreamer runtime packages..."
+    sudo apt-get install -y \
+        python3-opencv \
+        libopencv-dev \
+        gstreamer1.0-tools \
+        gstreamer1.0-plugins-base \
+        gstreamer1.0-plugins-good
+
+    # Filter out x86-only wheels such as opencv-python when installing via pip
+    TMP_REQ=$(mktemp)
+    grep -v '^opencv-python' requirements.txt > "$TMP_REQ"
+    pip install -r "$TMP_REQ"
+    rm -f "$TMP_REQ"
+
+    if ! python -c "import torch" >/dev/null 2>&1; then
+        echo "⚠️  PyTorch not detected in the virtual environment."
+        echo "    Install the Jetson-optimised PyTorch build from NVIDIA before running ultralytics."
+    fi
+else
+    pip install -r requirements.txt
+fi
 
 # udev rules
 if [ -d "udev" ] && [ -f "udev/99-so100.rules" ]; then

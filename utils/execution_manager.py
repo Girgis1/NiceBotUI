@@ -20,6 +20,7 @@ from typing import Optional, Dict, List
 
 import cv2
 import numpy as np
+import yaml
 from PySide6.QtCore import QThread, Signal
 
 # Add parent directory to path
@@ -1700,15 +1701,21 @@ class ExecutionWorker(QThread):
         lerobot_bin = lerobot_config.get("python_path", "python")
         robot_config = self.config.get("robot", {})
         
-        # Build camera config string
+        # Build camera config mapping using YAML so quoting is always correct
         cameras = self.config.get("cameras", {})  # Cameras are at TOP LEVEL in config!
-        camera_str = "{"
+        camera_cfg_payload: Dict[str, Dict[str, object]] = {}
         for cam_name, cam_config in cameras.items():
-            # Use 'index_or_path' from config (not 'path')
-            cam_path = cam_config.get('index_or_path', cam_config.get('path', '/dev/video0'))
-            camera_str += f"{cam_name}: {{type: opencv, index_or_path: '{cam_path}', width: {cam_config['width']}, height: {cam_config['height']}, fps: {cam_config['fps']}}}, "
-        camera_str = camera_str.rstrip(", ") + "}"
-        
+            cam_path = cam_config.get("index_or_path", cam_config.get("path", "/dev/video0"))
+            camera_cfg_payload[cam_name] = {
+                "type": cam_config.get("type", "opencv"),
+                "index_or_path": cam_path,
+                "width": cam_config.get("width", 640),
+                "height": cam_config.get("height", 480),
+                "fps": cam_config.get("fps", 30),
+            }
+
+        camera_str = yaml.safe_dump(camera_cfg_payload, default_flow_style=True).strip()
+
         return [
             lerobot_bin, "-m", "lerobot.async_inference.robot_client",
             "--server_address=127.0.0.1:8080",

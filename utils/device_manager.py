@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Optional, Dict, List
 from PySide6.QtCore import QObject, Signal
 
+from utils.camera_hub import is_gstreamer_pipeline
+
 
 class DeviceManager(QObject):
     """Manages device discovery and status tracking"""
@@ -170,8 +172,16 @@ class DeviceManager(QObject):
         try:
             import cv2  # type: ignore
 
-            cap = cv2.VideoCapture(probe_source)
+            if is_gstreamer_pipeline(probe_source):
+                cap = cv2.VideoCapture(probe_source, cv2.CAP_GSTREAMER)
+            else:
+                cap = cv2.VideoCapture(probe_source)
             if cap.isOpened():
+                if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
+                    try:
+                        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    except Exception:  # pragma: no cover - backend dependent
+                        pass
                 cap.release()
                 return "online"
             cap.release()
