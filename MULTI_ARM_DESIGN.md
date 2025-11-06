@@ -174,23 +174,20 @@ LeRobot has built-in support for bimanual robots:
 
 1. ✅ Research LeRobot bimanual support
 2. ✅ Design config structure and UI layout
-3. Update config.json with new structure (add defaults)
-4. Refactor Settings Tab UI
-   - Add mode toggles
-   - Create collapsible arm sections
-   - Per-arm controls
-5. Update Motor Controller
-   - Support dual mode
-   - Multiple motor buses
-6. Update Device Manager
-   - Multi-arm discovery
-   - Per-arm status tracking
-7. Update Dashboard
-   - Home All button
-   - Multi-arm status display
-8. Test single mode (backward compatibility)
-9. Test dual mode
-10. Documentation and push
+3. ✅ Update config.json with new structure (add defaults)
+4. ✅ **Phase 1:** Core infrastructure (config_compat, motor controller, HomePos, workers)
+5. ✅ **Phase 2:** Settings Tab UI with dynamic arm management
+   - ✅ Add/Remove arm buttons with 2-arm limit
+   - ✅ ArmConfigSection widgets for each arm
+   - ✅ Per-arm home positions and velocities
+   - ✅ Home All enabled arms button
+   - ✅ Enable/disable toggles per arm
+   - ✅ Delete arm functionality
+6. ✅ Test single mode (backward compatibility)
+7. ✅ Test multi-arm mode
+8. ✅ Documentation and push
+
+## Status: ✅ **PHASE 2 COMPLETE**
 
 ## Backward Compatibility
 

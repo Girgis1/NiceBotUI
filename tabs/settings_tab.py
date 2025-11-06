@@ -348,120 +348,48 @@ class SettingsTab(QWidget):
         # Spacer instead of separator
         layout.addSpacing(8)
         
-        # ========== ROBOT CONFIGURATION ==========
-        config_section = QLabel("🤖 Robot Configuration (Arm 1)")
-        config_section.setStyleSheet("color: #4CAF50; font-size: 14px; font-weight: bold; margin-bottom: 2px;")
-        layout.addWidget(config_section)
+        # ========== ROBOT ARMS (FOLLOWERS) ==========
+        robot_header_row = QHBoxLayout()
+        robot_header_row.setSpacing(10)
         
-        # Note about multi-arm support
-        multi_arm_note = QLabel("💡 Multi-arm support: Configure first arm below. Additional arms coming soon!")
-        multi_arm_note.setStyleSheet("color: #909090; font-size: 11px; font-style: italic;")
-        multi_arm_note.setWordWrap(True)
-        layout.addWidget(multi_arm_note)
+        config_section = QLabel("🤖 Robot Arms (Followers)")
+        config_section.setStyleSheet("color: #4CAF50; font-size: 15px; font-weight: bold;")
+        robot_header_row.addWidget(config_section)
         
-        # Serial Port Row with Status Circle and Calibrate Button
-        port_row = QHBoxLayout()
-        port_row.setSpacing(6)
+        robot_header_row.addStretch()
         
-        # Status circle
-        self.robot_status_circle = self.create_status_circle("empty")
-        port_row.addWidget(self.robot_status_circle)
+        # Add Arm button
+        self.add_robot_arm_btn = QPushButton("➕ Add Arm")
+        self.add_robot_arm_btn.setFixedHeight(35)
+        self.add_robot_arm_btn.setStyleSheet(self.get_button_style("#4CAF50", "#388E3C"))
+        self.add_robot_arm_btn.clicked.connect(self.add_robot_arm)
+        robot_header_row.addWidget(self.add_robot_arm_btn)
         
-        # Label
-        port_label = QLabel("Serial Port:")
-        port_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
-        port_label.setFixedWidth(75)
-        port_row.addWidget(port_label)
+        layout.addLayout(robot_header_row)
         
-        # Text field
-        self.robot_port_edit = QLineEdit("/dev/ttyACM0")
-        self.robot_port_edit.setFixedHeight(45)
-        self.robot_port_edit.setStyleSheet("""
-            QLineEdit {
-                background-color: #505050;
-                color: #ffffff;
-                border: 2px solid #707070;
-                border-radius: 6px;
-                padding: 8px;
-                font-size: 14px;
-            }
-            QLineEdit:focus {
-                border-color: #4CAF50;
-                background-color: #555555;
-            }
-        """)
-        port_row.addWidget(self.robot_port_edit)
+        # Container for robot arm widgets
+        self.robot_arms_container = QVBoxLayout()
+        self.robot_arms_container.setSpacing(10)
+        layout.addLayout(self.robot_arms_container)
         
-        # Calibrate button
-        self.calibrate_btn = QPushButton("⚙️ Calibrate")
-        self.calibrate_btn.setFixedHeight(45)
-        self.calibrate_btn.setFixedWidth(120)
-        self.calibrate_btn.setStyleSheet(self.get_button_style("#9C27B0", "#7B1FA2"))
-        self.calibrate_btn.clicked.connect(self.calibrate_arm)
-        port_row.addWidget(self.calibrate_btn)
-        port_row.addStretch()
+        # Home All button
+        self.home_all_btn = QPushButton("🏠 Home All Enabled Arms")
+        self.home_all_btn.setFixedHeight(40)
+        self.home_all_btn.setStyleSheet(self.get_button_style("#2196F3", "#1976D2"))
+        self.home_all_btn.clicked.connect(self.home_all_arms)
+        layout.addWidget(self.home_all_btn)
         
-        layout.addLayout(port_row)
+        # Spacer
+        layout.addSpacing(8)
         
-        # Robot Calibration ID Row
-        robot_id_row = QHBoxLayout()
-        robot_id_row.setSpacing(6)
-        
-        # Empty space for alignment
-        robot_id_row.addSpacing(20)
-        
-        robot_id_label = QLabel("Calib ID:")
-        robot_id_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
-        robot_id_label.setFixedWidth(75)
-        robot_id_row.addWidget(robot_id_label)
-        
-        self.robot_id_combo = QComboBox()
-        self.robot_id_combo.setEditable(True)
-        # Load existing calibration files
-        self._populate_calibration_ids(self.robot_id_combo)
-        self.robot_id_combo.setFixedHeight(45)
-        self.robot_id_combo.setStyleSheet("""
-            QComboBox {
-                background-color: #505050;
-                color: #ffffff;
-                border: 2px solid #707070;
-                border-radius: 6px;
-                padding: 8px;
-                font-size: 14px;
-            }
-            QComboBox:focus {
-                border-color: #4CAF50;
-                background-color: #555555;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 30px;
-            }
-            QComboBox::down-arrow {
-                image: none;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 6px solid #ffffff;
-                margin-right: 10px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #505050;
-                color: #ffffff;
-                selection-background-color: #4CAF50;
-                border: 2px solid #707070;
-            }
-        """)
-        robot_id_row.addWidget(self.robot_id_combo)
-        robot_id_row.addStretch()
-        
-        layout.addLayout(robot_id_row)
+        # Shared robot settings
+        shared_section = QLabel("⚙️ Shared Robot Settings")
+        shared_section.setStyleSheet("color: #4CAF50; font-size: 14px; font-weight: bold; margin-bottom: 2px;")
+        layout.addWidget(shared_section)
         
         # Hertz Row
         hertz_row = QHBoxLayout()
         hertz_row.setSpacing(6)
-        
-        # Empty space for alignment (20px for status circle)
-        hertz_row.addSpacing(20)
         
         hertz_label = QLabel("Hertz:")
         hertz_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
@@ -1106,32 +1034,24 @@ class SettingsTab(QWidget):
         """Load settings from config"""
         from utils.config_compat import get_arm_config, get_home_velocity
         
-        # Robot settings (first arm)
-        robot_arm = get_arm_config(self.config, 0, "robot")
-        if robot_arm:
-            self.robot_port_edit.setText(robot_arm.get("port", "/dev/ttyACM0"))
-            self.robot_id_combo.setCurrentText(robot_arm.get("id", "follower_arm"))
-        else:
-            self.robot_port_edit.setText("/dev/ttyACM0")
-            self.robot_id_combo.setCurrentText("follower_arm")
+        # Populate robot arms from config
+        self.populate_robot_arms_from_config()
         
+        # Shared robot settings
         self.robot_fps_spin.setValue(self.config.get("robot", {}).get("fps", 30))
-        
-        # Teleop settings (first arm)
-        teleop_arm = get_arm_config(self.config, 0, "teleop")
-        if teleop_arm:
-            self.teleop_port_edit.setText(teleop_arm.get("port", "/dev/ttyACM1"))
-            self.teleop_id_combo.setCurrentText(teleop_arm.get("id", "leader_arm"))
-        else:
-            self.teleop_port_edit.setText("/dev/ttyACM1")
-            self.teleop_id_combo.setCurrentText("leader_arm")
-        
         self.position_tolerance_spin.setValue(self.config.get("robot", {}).get("position_tolerance", 10))
         self.position_verification_check.setChecked(self.config.get("robot", {}).get("position_verification_enabled", True))
         
-        # Load home velocity for first arm
+        # Load home velocity for first arm (for backward compat with old Home button)
         home_vel = get_home_velocity(self.config, 0)
         self.rest_velocity_spin.setValue(home_vel)
+        
+        # Teleop settings (first arm - for backward compat)
+        teleop_arm = get_arm_config(self.config, 0, "teleop")
+        if teleop_arm and hasattr(self, 'teleop_port_edit'):
+            self.teleop_port_edit.setText(teleop_arm.get("port", "/dev/ttyACM1"))
+            if hasattr(self, 'teleop_id_combo'):
+                self.teleop_id_combo.setCurrentText(teleop_arm.get("id", "leader_arm"))
         
         # Camera settings
         front_cam = self.config.get("cameras", {}).get("front", {})
@@ -1178,41 +1098,36 @@ class SettingsTab(QWidget):
         # Ensure config is in multi-arm format
         self.config = ensure_multi_arm_config(self.config)
         
-        # Update first robot arm
+        # Save all robot arms from widgets
         if "robot" not in self.config:
             self.config["robot"] = {"arms": []}
-        if "arms" not in self.config["robot"]:
-            self.config["robot"]["arms"] = []
         
-        # Ensure at least one arm exists
-        if len(self.config["robot"]["arms"]) == 0:
-            self.config["robot"]["arms"].append({
-                "enabled": True,
-                "name": "Follower 1",
-                "type": "so100_follower",
-                "port": "/dev/ttyACM0",
-                "id": "follower_arm",
-                "home_positions": [],
-                "home_velocity": 600
-            })
-        
-        # Update first arm settings
-        self.config["robot"]["arms"][0]["port"] = self.robot_port_edit.text()
-        self.config["robot"]["arms"][0]["id"] = self.robot_id_combo.currentText()
-        self.config["robot"]["arms"][0]["home_velocity"] = self.rest_velocity_spin.value()
+        # Clear and rebuild arms array from widgets
+        self.config["robot"]["arms"] = []
+        for i, widget in enumerate(self.robot_arm_widgets):
+            arm = {
+                "enabled": widget.get_enabled(),
+                "name": widget.arm_name,
+                "type": "so100_follower",  # Default type
+                "port": widget.get_port(),
+                "id": widget.get_id(),
+                "home_positions": widget.get_home_positions(),
+                "home_velocity": widget.get_home_velocity()
+            }
+            self.config["robot"]["arms"].append(arm)
         
         # Update shared robot settings
         self.config["robot"]["fps"] = self.robot_fps_spin.value()
         self.config["robot"]["position_tolerance"] = self.position_tolerance_spin.value()
         self.config["robot"]["position_verification_enabled"] = self.position_verification_check.isChecked()
         
-        # Update first teleop arm
+        # Teleop arms (keep existing or create minimal)
         if "teleop" not in self.config:
             self.config["teleop"] = {"arms": []}
         if "arms" not in self.config["teleop"]:
             self.config["teleop"]["arms"] = []
         
-        # Ensure at least one teleop arm exists
+        # Keep first teleop arm if it exists
         if len(self.config["teleop"]["arms"]) == 0:
             self.config["teleop"]["arms"].append({
                 "enabled": True,
@@ -1222,8 +1137,11 @@ class SettingsTab(QWidget):
                 "id": "leader_arm"
             })
         
-        self.config["teleop"]["arms"][0]["port"] = self.teleop_port_edit.text()
-        self.config["teleop"]["arms"][0]["id"] = self.teleop_id_combo.currentText()
+        # Update teleop from old UI if it exists
+        if hasattr(self, 'teleop_port_edit'):
+            self.config["teleop"]["arms"][0]["port"] = self.teleop_port_edit.text()
+        if hasattr(self, 'teleop_id_combo'):
+            self.config["teleop"]["arms"][0]["id"] = self.teleop_id_combo.currentText()
         
         # Camera settings
         if "cameras" not in self.config:
@@ -1854,3 +1772,215 @@ class SettingsTab(QWidget):
             self.camera_wrist_status = status
             if self.camera_wrist_circle:
                 self.update_status_circle(self.camera_wrist_circle, status)
+    
+    # ========== MULTI-ARM MANAGEMENT METHODS ==========
+    
+    def add_robot_arm(self):
+        """Add a new robot arm to the configuration"""
+        # Check max limit (2 arms)
+        if len(self.robot_arm_widgets) >= 2:
+            self.status_label.setText("⚠️ Maximum 2 robot arms allowed")
+            self.status_label.setStyleSheet("QLabel { color: #FF9800; font-size: 15px; padding: 8px; }")
+            return
+        
+        arm_index = len(self.robot_arm_widgets)
+        arm_name = f"Follower {arm_index + 1}"
+        
+        # Create arm widget
+        arm_widget = ArmConfigSection(
+            arm_name=arm_name,
+            arm_index=arm_index,
+            show_controls=True,
+            show_home_pos=True,
+            parent=self
+        )
+        
+        # Populate calibration IDs
+        self._populate_calibration_ids(arm_widget.id_combo)
+        
+        # Connect signals
+        arm_widget.home_clicked.connect(lambda idx=arm_index: self.home_arm(idx))
+        arm_widget.set_home_clicked.connect(lambda idx=arm_index: self.set_home_arm(idx))
+        arm_widget.calibrate_clicked.connect(lambda idx=arm_index: self.calibrate_arm_at_index(idx))
+        arm_widget.delete_clicked.connect(lambda idx=arm_index: self.remove_robot_arm(idx))
+        
+        # Add to layout and list
+        self.robot_arms_container.addWidget(arm_widget)
+        self.robot_arm_widgets.append(arm_widget)
+        
+        # Update Add button state
+        if len(self.robot_arm_widgets) >= 2:
+            self.add_robot_arm_btn.setEnabled(False)
+        
+        self.status_label.setText(f"✓ Added {arm_name}")
+        self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+    
+    def remove_robot_arm(self, arm_index: int):
+        """Remove a robot arm from the configuration"""
+        if arm_index >= len(self.robot_arm_widgets):
+            return
+        
+        # Remove widget
+        widget = self.robot_arm_widgets[arm_index]
+        self.robot_arms_container.removeWidget(widget)
+        widget.deleteLater()
+        
+        # Remove from list
+        self.robot_arm_widgets.pop(arm_index)
+        
+        # Re-index remaining widgets
+        for i, w in enumerate(self.robot_arm_widgets):
+            w.arm_index = i
+            w.arm_name = f"Follower {i + 1}"
+            # Update label if needed
+        
+        # Update Add button state
+        self.add_robot_arm_btn.setEnabled(True)
+        
+        self.status_label.setText("✓ Arm removed")
+        self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+    
+    def home_arm(self, arm_index: int):
+        """Home a specific arm"""
+        from utils.config_compat import get_home_positions
+        
+        if self._home_thread and self._home_thread.isRunning():
+            self.status_label.setText("⏳ Already moving...")
+            return
+        
+        home_pos = get_home_positions(self.config, arm_index)
+        if not home_pos:
+            self.status_label.setText(f"❌ No home position for Arm {arm_index + 1}. Set home first.")
+            return
+        
+        velocity = 600
+        if arm_index < len(self.robot_arm_widgets):
+            velocity = self.robot_arm_widgets[arm_index].get_home_velocity()
+        
+        self.status_label.setText(f"🏠 Moving Arm {arm_index + 1} to home...")
+        self.home_btn.setEnabled(False)
+        
+        request = HomeMoveRequest(config=self.config, velocity_override=velocity, arm_index=arm_index)
+        worker = HomeMoveWorker(request)
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._on_home_progress)
+        worker.finished.connect(self._on_home_finished)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._on_home_thread_finished)
+        
+        self._home_worker = worker
+        self._home_thread = thread
+        thread.start()
+    
+    def set_home_arm(self, arm_index: int):
+        """Set home position for a specific arm"""
+        try:
+            from utils.motor_controller import MotorController
+            from utils.config_compat import set_home_positions
+            
+            self.status_label.setText(f"⏳ Reading positions from Arm {arm_index + 1}...")
+            
+            motor_controller = MotorController(self.config, arm_index=arm_index)
+            
+            if not motor_controller.connect():
+                self.status_label.setText("❌ Failed to connect to motors")
+                return
+            
+            positions = motor_controller.read_positions()
+            motor_controller.disconnect()
+            
+            if positions is None:
+                self.status_label.setText("❌ Failed to read positions")
+                return
+            
+            # Save to config
+            set_home_positions(self.config, positions, arm_index)
+            
+            # Also update velocity
+            if "arms" in self.config.get("robot", {}) and arm_index < len(self.config["robot"]["arms"]):
+                if arm_index < len(self.robot_arm_widgets):
+                    velocity = self.robot_arm_widgets[arm_index].get_home_velocity()
+                    self.config["robot"]["arms"][arm_index]["home_velocity"] = velocity
+                    # Update widget display
+                    self.robot_arm_widgets[arm_index].set_home_positions(positions)
+            
+            # Write to file
+            with open(self.config_path, 'w') as f:
+                json.dump(self.config, f, indent=2)
+            
+            self.status_label.setText(f"✓ Home saved for Arm {arm_index + 1}: {positions}")
+            self.config_changed.emit()
+            
+        except Exception as e:
+            self.status_label.setText(f"❌ Error: {str(e)}")
+    
+    def calibrate_arm_at_index(self, arm_index: int):
+        """Calibrate a specific arm"""
+        # For now, use the existing calibrate_arm method but update it to support arm_index
+        # This would need the calibration UI to support selecting which arm
+        self.status_label.setText(f"⚠️ Calibration for Arm {arm_index + 1} - use calibration tab")
+        self.status_label.setStyleSheet("QLabel { color: #FF9800; font-size: 15px; padding: 8px; }")
+    
+    def home_all_arms(self):
+        """Home all enabled arms sequentially"""
+        from utils.config_compat import get_enabled_arms
+        
+        enabled_arms = get_enabled_arms(self.config, "robot")
+        if not enabled_arms:
+            self.status_label.setText("❌ No enabled arms to home")
+            return
+        
+        self.status_label.setText(f"🏠 Homing {len(enabled_arms)} enabled arm(s)...")
+        
+        # For now, just home the first enabled arm
+        # Full sequential homing would need a more complex worker
+        self.home_arm(0)
+    
+    def populate_robot_arms_from_config(self):
+        """Populate robot arm widgets from config"""
+        # Clear existing widgets
+        for widget in self.robot_arm_widgets:
+            self.robot_arms_container.removeWidget(widget)
+            widget.deleteLater()
+        self.robot_arm_widgets.clear()
+        
+        # Get arms from config
+        robot_cfg = self.config.get("robot", {})
+        arms = robot_cfg.get("arms", [])
+        
+        # Create widget for each arm
+        for i, arm in enumerate(arms):
+            arm_widget = ArmConfigSection(
+                arm_name=arm.get("name", f"Follower {i + 1}"),
+                arm_index=i,
+                show_controls=True,
+                show_home_pos=True,
+                parent=self
+            )
+            
+            # Populate data
+            arm_widget.set_port(arm.get("port", ""))
+            arm_widget.set_id(arm.get("id", ""))
+            arm_widget.set_enabled(arm.get("enabled", True))
+            arm_widget.set_home_positions(arm.get("home_positions", []))
+            arm_widget.set_home_velocity(arm.get("home_velocity", 600))
+            
+            # Populate calibration IDs
+            self._populate_calibration_ids(arm_widget.id_combo)
+            arm_widget.set_id(arm.get("id", ""))  # Set again after populating
+            
+            # Connect signals
+            arm_widget.home_clicked.connect(lambda idx=i: self.home_arm(idx))
+            arm_widget.set_home_clicked.connect(lambda idx=i: self.set_home_arm(idx))
+            arm_widget.calibrate_clicked.connect(lambda idx=i: self.calibrate_arm_at_index(idx))
+            arm_widget.delete_clicked.connect(lambda idx=i: self.remove_robot_arm(idx))
+            
+            # Add to layout and list
+            self.robot_arms_container.addWidget(arm_widget)
+            self.robot_arm_widgets.append(arm_widget)
+        
+        # Update Add button state
+        self.add_robot_arm_btn.setEnabled(len(self.robot_arm_widgets) < 2)
