@@ -1,213 +1,137 @@
-# 🔧 Diagnostics Tab - Real-time Motor Monitoring
+# Diagnostics Tab - Simplified Real-time View
 
-## Overview
-
-The Diagnostics tab provides real-time monitoring of all motor parameters in a compact, easy-to-read table format. Perfect for troubleshooting, monitoring system health, and identifying issues before they become problems.
+The Diagnostics Tab has been successfully implemented in the Settings UI, providing real-time motor data in a maximized, easy-to-read table format.
 
 ## Features
 
-### 📊 Compact Table View
-- **All 6 motors visible at once** - No scrolling needed
-- **9 data columns per motor**:
-  1. Motor name (Shoulder Pan, Shoulder Lift, etc.)
-  2. Position (current/max 4095)
-  3. Goal position
-  4. Velocity (units/s)
-  5. Load (percentage with color coding)
-  6. Temperature (°C with color coding)
-  7. Current (mA)
-  8. Voltage (V with color coding)
-  9. Moving status (Yes/No)
+### Layout and Design
+- **Maximized Table View**: Displays all 6 motors in a large, information-dense table that fills the available space
+- **Fast Auto-Refresh**: Updates every 0.2 seconds (5 Hz) automatically
+- **Auto-Connect**: Connects to motors automatically on tab open (500ms delay)
+- **Color-Coded Indicators**: Visual warnings for temperature, load, and voltage issues
+- **Arm Selection**: Simple toggle between Arm 1 and Arm 2 diagnostics
+- **Clean UI**: Minimal controls - just the essentials for monitoring
 
-### 🎨 Color Coding
+### Data Displayed
 
-**Temperature:**
-- 🟢 Green: < 45°C (Safe)
-- 🟠 Orange: 45-60°C (Warning)
-- 🔴 Red: > 60°C (Critical)
+For each motor (1-6), the table shows:
 
-**Load:**
-- 🟢 Green: < 80% (Normal)
-- 🟠 Orange: 80-95% (High)
-- 🔴 Red: > 95% (Critical)
+| Column | Description | Color Coding |
+|--------|-------------|--------------|
+| Motor | Motor ID and name (e.g., "1. Shoulder Pan") | - |
+| Position | Current position (0-4095) | - |
+| Goal | Target goal position | - |
+| Velocity | Current velocity (raw value) | - |
+| Load | Load percentage | 🟢 <80% / 🟡 80-100% / 🔴 >100% |
+| Temp | Temperature (°C) | 🟢 <45°C / 🟡 45-60°C / 🔴 >60°C |
+| Current | Current draw (mA) | - |
+| Voltage | Motor voltage (V) | 🟢 11-13V / 🟡 Outside range |
+| Moving | Whether motor is moving | 🔵 Yes / ⚪ No |
 
-**Voltage:**
-- 🟢 Green: 11-13V (Normal)
-- 🟠 Orange: Outside range (Check power supply)
+### Controls
 
-**Moving:**
-- 🔵 Blue: Motor is currently moving
-- Gray: Motor is stationary
+- **Arm Selector**: Toggle between Arm 1 and Arm 2 using radio buttons
+- All other operations are automatic (connection, refresh)
 
-### ⚙️ Controls
+## Implementation Details
 
-**Arm Selection:**
-- Toggle between Arm 1 and Arm 2
-- Automatically reconnects when switching
+### File Structure
 
-**Refresh Rate:**
-- Manual: Click "Refresh Now" button only
-- 0.5s: Fast updates (2 Hz)
-- 1.0s: Normal updates (1 Hz) - Default
-- 2.0s: Slow updates (0.5 Hz)
+- **`tabs/diagnostics_tab.py`**: Main implementation file (365 lines)
+  - `DiagnosticsTab` class (QWidget)
+  - Auto-refresh timer at 200ms (5 Hz)
+  - Motor data reading from `MotorController`
+  - Color-coded table rendering
+  - Auto-connect on tab open
 
-**Connection:**
-- 🔌 Connect: Establish connection to motors
-- 🔌 Disconnect: Close connection
+### Integration
 
-**Data Logging:**
-- 📊 Start Logging: Begin recording diagnostic data
-- 📊 Stop Logging: End recording session
-- Logs stored in memory until exported
+The Diagnostics Tab is integrated into `tabs/settings_tab.py`:
 
-**Export:**
-- 💾 Export CSV: Save logged data to `logs/diagnostics/`
-- Filename format: `diagnostics_arm{N}_{timestamp}.csv`
-- Includes all motor parameters with timestamps
-
-## Usage Guide
-
-### Basic Monitoring
-
-1. **Open Settings → Diagnostics tab**
-2. **Select your arm** (Arm 1 or Arm 2)
-3. **Click "🔌 Connect"**
-4. Data updates automatically based on refresh rate
-
-### Troubleshooting a Problem
-
-1. **Connect to the arm**
-2. **Set refresh to 0.5s** for fast updates
-3. **Manually move the robot** or run an action
-4. **Watch for:**
-   - Temperature spikes (orange/red cells)
-   - High load (orange/red cells)
-   - Voltage drops (orange cells)
-   - Motors not reaching goal position
-   - Unexpected moving status
-
-### Recording a Diagnostic Session
-
-1. **Connect to the arm**
-2. **Click "📊 Start Logging"**
-3. **Run your test** (manual movement, sequence, etc.)
-4. **Click "📊 Stop Logging"** when done
-5. **Click "💾 Export CSV"** to save the data
-
-### Analyzing CSV Data
-
-The exported CSV contains:
-```csv
-Timestamp,Arm,Motor,Position,Goal,Velocity,Load,Temperature,Current,Voltage,Moving
-2024-01-15T10:30:45.123,1,1,2048,2050,0,15,32,145,122,0
-2024-01-15T10:30:45.623,1,2,1106,1100,12,22,35,178,121,1
-...
+```python
+# Add diagnostics tab to settings
+self.diagnostics_tab = DiagnosticsTab(self.config)
+self.diagnostics_tab.status_changed.connect(self.on_diagnostics_status)
+self.tabs.addTab(self.diagnostics_tab, "Diagnostics")
 ```
 
-Import into Excel, Python, or any data analysis tool.
+Status messages from the diagnostics tab are displayed in the main settings status label.
 
-## Summary Bar
+### Data Reading
 
-At the bottom of the table, key metrics are displayed:
+Uses `MotorController` to read the following parameters from the Feetech motor bus:
+- `Present_Position`
+- `Goal_Position`
+- `Present_Velocity`
+- `Present_Load`
+- `Present_Temperature`
+- `Present_Current`
+- `Present_Voltage`
+- `Moving`
 
-- **Max Temp**: Highest temperature across all motors
-- **Total Current**: Sum of all motor currents
-- **Avg Voltage**: Average voltage across all motors
-- **Status**: Overall system health
-  - ✓ OK: All parameters normal
-  - 🟡 WARNING: Some parameters in warning range
-  - 🔴 CRITICAL: Critical thresholds exceeded
+## Usage
 
-## Connection Status
+1. **Open Settings**: Navigate to the Settings tab
+2. **Select Diagnostics**: Click on the "Diagnostics" tab
+3. **Auto-Connect**: Connection happens automatically after 500ms
+4. **Monitor**: Watch real-time data updating every 0.2 seconds
+5. **Switch Arms**: Toggle between Arm 1 and Arm 2 using the radio buttons at the top
 
-Top bar shows:
-- **Connection state**: Connected (green) / Disconnected (red)
-- **Port**: Serial port being used (e.g., /dev/ttyACM0)
-- **Last update**: Timestamp of most recent data refresh
+## Thresholds
 
-## Common Issues
+Current warning thresholds (defined in `DiagnosticsTab` class):
 
-### "Failed to connect"
-- Check that motors are powered on
-- Verify correct port in Robot settings
-- Ensure no other program is using the port
-- Try the other arm to verify it's not a hardware issue
-
-### "No data" or "--" in cells
-- Motor may not be responding
-- Check physical connections
-- Verify motor IDs in calibration
-- Try reconnecting
-
-### High temperature warnings
-- Normal during extended use
-- Allow motors to cool down
-- Check for mechanical binding
-- Reduce load or speed if persistent
-
-### Voltage warnings
-- Check power supply connection
-- Verify power supply voltage (should be 12V)
-- Check for voltage drop under load
-- May indicate power supply insufficient for load
-
-## Tips
-
-1. **Baseline Recording**: Take a diagnostic recording of normal operation for comparison
-2. **Regular Monitoring**: Check temperatures after long sessions
-3. **Pre-flight Check**: Quick connect to verify all motors responding before important tasks
-4. **Troubleshooting**: Use 0.5s refresh when diagnosing intermittent issues
-5. **Documentation**: Export and save CSV files when reporting issues
-
-## Technical Details
-
-### Data Sources
-
-All data comes from the Feetech motor control tables:
-- `Present_Position`: Current motor position (0-4095)
-- `Present_Velocity`: Current velocity in units/s
-- `Present_Load`: Load/torque on motor (converted to %)
-- `Present_Temperature`: Internal temperature sensor (°C)
-- `Present_Current`: Current draw (mA)
-- `Present_Voltage`: Supply voltage (V * 10)
-- `Goal_Position`: Target position for motor
-- `Moving`: Boolean flag indicating motion
-
-### Update Rate
-
-The refresh rate determines how often the entire table is updated. Lower refresh rates reduce bus traffic and CPU usage but provide less frequent data.
-
-For most uses, 1.0s is sufficient. Use 0.5s for troubleshooting active issues.
-
-### Motor Bus
-
-Each connection opens a serial bus to the motors. Only one connection per port is allowed at a time. Disconnect from diagnostics before using motors elsewhere (e.g., running actions).
-
-## Safety
-
-- 🔥 **Monitor temperatures** - Motors can overheat if overloaded
-- ⚡ **Watch load percentages** - Sustained high load can damage motors
-- 🔋 **Check voltages** - Low voltage indicates power issues
-- ⚠️ **Heed warnings** - Orange/red indicators mean action needed
-
-The diagnostics tab is a monitoring tool - it does not control motors. Use it alongside the Robot tab, Dashboard, and other controls for comprehensive system management.
-
-## Export File Locations
-
-Diagnostic CSV files are saved to:
-```
-logs/diagnostics/diagnostics_arm1_YYYYMMDD_HHMMSS.csv
-logs/diagnostics/diagnostics_arm2_YYYYMMDD_HHMMSS.csv
+```python
+TEMP_WARNING = 45   # °C
+TEMP_CRITICAL = 60  # °C
+LOAD_WARNING = 80   # %
+LOAD_CRITICAL = 100 # %
+VOLTAGE_MIN = 11.0  # V
+VOLTAGE_MAX = 13.0  # V
 ```
 
-The `logs/diagnostics/` directory is created automatically if it doesn't exist.
+These can be adjusted in the class constants if needed for different motor specifications.
 
-## Integration
+## UI Layout
 
-The Diagnostics tab integrates with:
-- **MotorController** - Uses existing motor control infrastructure
-- **Config system** - Reads port and arm configuration
-- **Settings status bar** - Displays connection and export messages
+```
+┌───────────────────────────────────────────────────────────────────────────────────────┐
+│  🔧 Motor Diagnostics - Real-time (5 Hz)        Arm: [●] Arm 1  [ ] Arm 2            │
+├───────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                        │
+│  ┌──────────────────────────────────────────────────────────────────────────────────┐│
+│  │ Motor             Position    Goal   Vel   Load  Temp   Current  Voltage  Moving ││
+│  ├──────────────────────────────────────────────────────────────────────────────────┤│
+│  │ 1 Shoulder Pan    2048/4095   2050    0    15%   32°C   145mA    12.2V    No    ││
+│  │ 2 Shoulder Lift   1106/4095   1100   12    22%   35°C   178mA    12.1V    Yes   ││
+│  │ 3 Elbow Flex      2994/4095   2994    0    18%   33°C   156mA    12.2V    No    ││
+│  │ 4 Wrist Flex      2421/4095   2420    5    12%   31°C   132mA    12.1V    Yes   ││
+│  │ 5 Wrist Roll      1044/4095   1044    0    08%   30°C   121mA    12.2V    No    ││
+│  │ 6 Gripper         2054/4095   2060   15    45%   38°C   234mA    12.0V    Yes   ││
+│  └──────────────────────────────────────────────────────────────────────────────────┘│
+│                                                                                        │
+│                        (Table maximized to fill available space)                      │
+│                                                                                        │
+└───────────────────────────────────────────────────────────────────────────────────────┘
+```
 
-It operates independently of other tabs and can be used while other features are idle.
+## Status
 
+✅ **Complete** - Simplified version implemented
+- ✅ Real-time data display at 5 Hz
+- ✅ Auto-connect on tab open
+- ✅ Maximized table layout
+- ✅ Color-coded warnings
+- ✅ Arm switching
+- ✅ Integrated into Settings UI
+- ❌ Logging removed (not needed)
+- ❌ Export removed (not needed)
+- ❌ Manual controls removed (fully automatic)
+
+## Design Philosophy
+
+The simplified version focuses on:
+1. **Immediate visibility**: Auto-connect and fast refresh
+2. **Maximum information density**: Large table with all relevant data
+3. **Minimal interaction**: Just arm selection, everything else is automatic
+4. **Clean interface**: No unnecessary buttons or controls
