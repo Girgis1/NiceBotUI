@@ -100,16 +100,19 @@ class ActionStep(SequenceStep):
     """Action/Recording execution step
     
     Executes a saved recording (composite or legacy) by name.
+    Includes mode (solo/bimanual) to indicate how it was recorded.
     """
     
-    def __init__(self, name: str, action_name: str, enabled: bool = True, delay_after: float = 0.0):
+    def __init__(self, name: str, action_name: str, enabled: bool = True, delay_after: float = 0.0, mode: str = "solo"):
         super().__init__("action", name, enabled, delay_after)
         self.action_name = action_name
+        self.mode = mode  # "solo" or "bimanual"
     
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization"""
         data = super().to_dict()
         data["action_name"] = self.action_name
+        data["mode"] = self.mode
         return data
     
     @staticmethod
@@ -119,7 +122,8 @@ class ActionStep(SequenceStep):
             name=data.get("name", "Untitled Action"),
             action_name=data.get("action_name", ""),
             enabled=data.get("enabled", True),
-            delay_after=data.get("delay_after", 0.0)
+            delay_after=data.get("delay_after", 0.0),
+            mode=data.get("mode", "solo")  # Default to solo for backward compatibility
         )
         
         # Restore metadata if available

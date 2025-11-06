@@ -494,7 +494,10 @@ class SequenceTab(QWidget):
         step_type = step.get("type", "")
         
         if step_type == "action":
-            text = f"{number}. 🎬 Action: {step.get('name', 'Unknown')}"
+            from utils.mode_utils import get_mode_icon
+            mode = step.get("mode", "solo")
+            mode_icon = get_mode_icon(mode)
+            text = f"{number}. {mode_icon} 🎬 Action: {step.get('name', 'Unknown')}"
             color = QColor("#2196F3")
         elif step_type == "model":
             task = step.get("task", "Unknown")

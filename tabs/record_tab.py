@@ -350,6 +350,24 @@ class RecordTab(QWidget):
         self.table.itemChanged.connect(self.on_table_item_changed)
         layout.addWidget(self.table, stretch=1)
         
+        # Mode indicator
+        from utils.mode_utils import get_mode_display_name, get_current_robot_mode
+        current_mode = get_current_robot_mode(self.config)
+        self.mode_label = QLabel(f"Recording Mode: {get_mode_display_name(current_mode)}")
+        self.mode_label.setStyleSheet("""
+            QLabel {
+                color: #4CAF50;
+                background-color: #2d2d2d;
+                border: 2px solid #4CAF50;
+                border-radius: 4px;
+                padding: 6px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+        """)
+        self.mode_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.mode_label)
+        
         # Status label
         self.status_label = QLabel("Ready to record. Move robot to desired position and press SET.")
         self.status_label.setStyleSheet("""
@@ -783,7 +801,9 @@ class RecordTab(QWidget):
             self.torque_status_label.setStyleSheet("color: #FFAB91; font-size: 12px; font-weight: bold;")
     
     def refresh_action_list(self):
-        """Refresh the action dropdown list"""
+        """Refresh the action dropdown list with mode icons"""
+        from utils.mode_utils import get_mode_icon
+        
         self.action_combo.blockSignals(True)
         current = self.action_combo.currentText()
         
@@ -792,7 +812,13 @@ class RecordTab(QWidget):
         
         actions = self.actions_manager.list_actions()
         for action in actions:
-            self.action_combo.addItem(action)
+            # Load action to get mode
+            action_data = self.actions_manager.load_action(action)
+            mode = action_data.get("mode", "solo") if action_data else "solo"
+            icon = get_mode_icon(mode)
+            
+            # Add action with mode icon
+            self.action_combo.addItem(f"{icon} {action}")
         
         # Restore current selection if it exists
         index = self.action_combo.findText(current)
@@ -1140,7 +1166,9 @@ class RecordTab(QWidget):
             print(f"[RECORD] Row {row} deleted, remaining rows: {self.table.rowCount()}")
     
     def save_action(self):
-        """Save current action to file"""
+        """Save current action to file with mode metadata"""
+        from utils.mode_utils import get_current_robot_mode
+        
         name = self.action_combo.currentText().strip()
         
         if not name or name == "NewAction01":
@@ -1150,6 +1178,9 @@ class RecordTab(QWidget):
             )
             if not ok or not name:
                 return
+        
+        # Get current mode from config
+        current_mode = get_current_robot_mode(self.config)
         
         # Get all data from table - NEW FORMAT
         actions = self.table.get_all_actions()
@@ -1178,8 +1209,9 @@ class RecordTab(QWidget):
                     "type": "live_recording",
                     "speed": action.get("speed", 100),
                     "recorded_data": recorded_data,
+                    "mode": current_mode  # Add mode metadata
                 }
-                print(f"[SAVE] Saving single live_recording with {len(recorded_data)} points")
+                print(f"[SAVE] Saving single live_recording with {len(recorded_data)} points (mode: {current_mode})")
             
             elif action['type'] == 'position':
                 action_data = {
@@ -1191,8 +1223,9 @@ class RecordTab(QWidget):
                         "velocity": 600,
                         "wait_for_completion": True
                     }],
+                    "mode": current_mode  # Add mode metadata
                 }
-                print(f"[SAVE] Saving single position")
+                print(f"[SAVE] Saving single position (mode: {current_mode})")
         
         else:
             # Multiple actions - save as proper composite with multiple steps
@@ -1235,9 +1268,10 @@ class RecordTab(QWidget):
             
             action_data = {
                 "type": "composite_recording",
-                "steps": steps
+                "steps": steps,
+                "mode": current_mode  # Add mode metadata
             }
-            print(f"[SAVE] Saving composite recording with {len(steps)} steps")
+            print(f"[SAVE] Saving composite recording with {len(steps)} steps (mode: {current_mode})")
         
         # Save to file using new API
         try:
