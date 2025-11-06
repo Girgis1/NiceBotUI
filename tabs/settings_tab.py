@@ -1208,7 +1208,17 @@ class SettingsTab(QWidget):
                     "home_velocity": 600  # Uses master velocity from top
                 }
             else:
+                # Preserve existing arm data, but ensure required fields exist
                 arm1_data = existing_arms[0] if len(existing_arms) > 0 else {}
+                # Ensure critical fields have defaults if missing
+                if "port" not in arm1_data:
+                    arm1_data["port"] = "/dev/ttyACM0"
+                if "id" not in arm1_data:
+                    arm1_data["id"] = "follower_arm"
+                if "home_positions" not in arm1_data:
+                    arm1_data["home_positions"] = [2082, 1106, 2994, 2421, 1044, 2054]
+                if "home_velocity" not in arm1_data:
+                    arm1_data["home_velocity"] = 600
                 arm1_data.update({
                     "enabled": False,
                     "name": "Follower 1",
@@ -1230,7 +1240,17 @@ class SettingsTab(QWidget):
                     "home_velocity": 600  # Uses master velocity from top
                 }
             else:
+                # Preserve existing arm data, but ensure required fields exist
                 arm2_data = existing_arms[1] if len(existing_arms) > 1 else {}
+                # Ensure critical fields have defaults if missing
+                if "port" not in arm2_data:
+                    arm2_data["port"] = "/dev/ttyACM1"
+                if "id" not in arm2_data:
+                    arm2_data["id"] = "follower_arm_2"
+                if "home_positions" not in arm2_data:
+                    arm2_data["home_positions"] = [2082, 1106, 2994, 2421, 1044, 2054]
+                if "home_velocity" not in arm2_data:
+                    arm2_data["home_velocity"] = 600
                 arm2_data.update({
                     "enabled": False,
                     "name": "Follower 2",
@@ -1308,7 +1328,13 @@ class SettingsTab(QWidget):
                     "arm_id": 1
                 }
             else:
+                # Preserve existing arm data, but ensure required fields exist
                 teleop_arm1_data = existing_teleop_arms[0] if len(existing_teleop_arms) > 0 else {}
+                # Ensure critical fields have defaults if missing
+                if "port" not in teleop_arm1_data:
+                    teleop_arm1_data["port"] = "/dev/ttyACM2"
+                if "id" not in teleop_arm1_data:
+                    teleop_arm1_data["id"] = "leader_arm"
                 teleop_arm1_data.update({
                     "enabled": False,
                     "name": "Leader 1",
@@ -1328,7 +1354,13 @@ class SettingsTab(QWidget):
                     "arm_id": 2
                 }
             else:
+                # Preserve existing arm data, but ensure required fields exist
                 teleop_arm2_data = existing_teleop_arms[1] if len(existing_teleop_arms) > 1 else {}
+                # Ensure critical fields have defaults if missing
+                if "port" not in teleop_arm2_data:
+                    teleop_arm2_data["port"] = "/dev/ttyACM3"
+                if "id" not in teleop_arm2_data:
+                    teleop_arm2_data["id"] = "leader_arm_2"
                 teleop_arm2_data.update({
                     "enabled": False,
                     "name": "Leader 2",
