@@ -972,11 +972,16 @@ class DashboardTab(QWidget):
             for seq in sequences:
                 self.run_combo.addItem(f"🔗 Sequence: {seq}")
         
-        # Add Actions (Blue)
+        # Add Actions (Blue) with mode icons
+        from utils.mode_utils import get_mode_icon
         actions = actions_mgr.list_actions()
         if actions:
             for action in actions:
-                self.run_combo.addItem(f"🎬 Action: {action}")
+                # Load action to get mode
+                action_data = actions_mgr.load_action(action)
+                mode = action_data.get("mode", "solo") if action_data else "solo"
+                mode_icon = get_mode_icon(mode)
+                self.run_combo.addItem(f"{mode_icon} 🎬 Action: {action}")
 
         self.run_combo.blockSignals(False)
         self.camera_order = list(self.config.get("cameras", {}).keys())
