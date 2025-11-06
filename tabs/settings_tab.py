@@ -235,7 +235,7 @@ class SettingsTab(QWidget):
         """)
     
     def _populate_calibration_ids(self, combo: QComboBox):
-        """Populate combo box with existing calibration files from ~/.cache/lerobot/calibration/
+        """Populate combo box with existing calibration files from ~/.cache/huggingface/lerobot/calibration/
         
         Args:
             combo: QComboBox to populate with calibration IDs
@@ -243,17 +243,28 @@ class SettingsTab(QWidget):
         import os
         from pathlib import Path
         
-        # Path where lerobot stores calibration files
-        calib_dir = Path.home() / ".cache" / "lerobot" / "calibration"
+        # Path where lerobot stores calibration files (HF_LEROBOT_CALIBRATION)
+        # Default: ~/.cache/huggingface/lerobot/calibration/
+        calib_base = Path.home() / ".cache" / "huggingface" / "lerobot" / "calibration"
         
         calibration_ids = []
         
-        # Scan for .json files if directory exists
-        if calib_dir.exists() and calib_dir.is_dir():
-            for json_file in sorted(calib_dir.glob("*.json")):
-                # Remove .json extension to get the calibration ID
-                calib_id = json_file.stem
-                calibration_ids.append(calib_id)
+        # Scan both robots/ and teleoperators/ subdirectories
+        for category in ["robots", "teleoperators"]:
+            category_dir = calib_base / category
+            if category_dir.exists() and category_dir.is_dir():
+                # Scan each robot/teleop type directory
+                for type_dir in category_dir.iterdir():
+                    if type_dir.is_dir():
+                        # Scan for .json files in each type directory
+                        for json_file in sorted(type_dir.glob("*.json")):
+                            # Remove .json extension to get the calibration ID
+                            calib_id = json_file.stem
+                            if calib_id not in calibration_ids:
+                                calibration_ids.append(calib_id)
+        
+        # Sort alphabetically
+        calibration_ids.sort()
         
         # Add found calibration IDs to combo box
         if calibration_ids:

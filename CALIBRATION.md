@@ -37,12 +37,13 @@ lerobot-calibrate \
 ```
 
 The calibration data is saved in:
-- `~/.cache/lerobot/calibration/{id}.json`
+- `~/.cache/huggingface/lerobot/calibration/robots/{robot_type}/{id}.json`
+- `~/.cache/huggingface/lerobot/calibration/teleoperators/{teleop_type}/{id}.json`
 
 For example:
-- `~/.cache/lerobot/calibration/follower_white.json`
-- `~/.cache/lerobot/calibration/leader_white.json`
-- `~/.cache/lerobot/calibration/follower_arm.json`
+- `~/.cache/huggingface/lerobot/calibration/robots/so101_follower/follower_white.json`
+- `~/.cache/huggingface/lerobot/calibration/teleoperators/so101_leader/leader_white.json`
+- `~/.cache/huggingface/lerobot/calibration/robots/so100_follower/follower_arm.json`
 
 ### Using Multiple Robots
 
