@@ -37,15 +37,15 @@ done
 if [[ "$LOGS_ONLY" == "true" ]]; then
     echo "📋 Syncing LOGS ONLY from Jetson..."
     echo "Source: jetson:~/NiceBotUI/logs/"
-    echo "Destination: ~/LerobotGUI/logs/"
+    echo "Destination: ~/NiceBotUI/logs/"
     echo ""
-    rsync -avz $DRY_RUN jetson:~/NiceBotUI/logs/ ~/LerobotGUI/logs/
+    rsync -avz $DRY_RUN jetson:~/NiceBotUI/logs/ ~/NiceBotUI/logs/
 else
-    echo "📦 Syncing LerobotGUI from Jetson..."
+    echo "📦 Syncing NiceBotUI from Jetson..."
     echo "Source: jetson:~/NiceBotUI/"
-    echo "Destination: ~/LerobotGUI/"
+    echo "Destination: ~/NiceBotUI/"
     echo ""
-    eval rsync -avz $DRY_RUN $EXCLUDE_ARGS jetson:~/NiceBotUI/ ~/LerobotGUI/
+    eval rsync -avz $DRY_RUN $EXCLUDE_ARGS jetson:~/NiceBotUI/ ~/NiceBotUI/
 fi
 
 echo ""

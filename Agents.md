@@ -12,11 +12,11 @@ This document provides instructions for AI coding agents on how to work with the
 - **SSH Config Location:** `~/.ssh/config`
 
 ### Directory Structure
-- **Local workspace:** `/home/daniel/LerobotGUI/` (renamed from NiceBotUI)
+- **Local workspace:** `/home/daniel/NiceBotUI/` (git repository)
 - **Jetson workspace:** `/home/nicebot/NiceBotUI/` (git repository)
 - **Logs directory:** `logs/` (exists in both locations)
 
-**Note:** The local machine uses "LerobotGUI" as the folder name, but syncs to "NiceBotUI" on the Jetson to maintain the git repository structure.
+**Note:** Both local and Jetson use "NiceBotUI" as the folder name for consistency.
 
 ## Available Tools & Scripts
 

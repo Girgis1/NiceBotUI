@@ -27,13 +27,13 @@ if [[ "$1" == "--dry-run" ]]; then
 fi
 
 # Show what we're doing
-echo "📦 Syncing LerobotGUI to Jetson..."
-echo "Source: ~/LerobotGUI/"
+echo "📦 Syncing NiceBotUI to Jetson..."
+echo "Source: ~/NiceBotUI/"
 echo "Destination: jetson:~/NiceBotUI/"
 echo ""
 
 # Run rsync
-eval rsync -avz $DRY_RUN $EXCLUDE_ARGS ~/LerobotGUI/ jetson:~/NiceBotUI/
+eval rsync -avz $DRY_RUN $EXCLUDE_ARGS ~/NiceBotUI/ jetson:~/NiceBotUI/
 
 echo ""
 echo "✅ Sync complete!"
