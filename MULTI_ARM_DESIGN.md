@@ -19,7 +19,7 @@ LeRobot has built-in support for bimanual robots:
 
 ## New Config Structure
 
-###before (Single Arm):
+### Before (Single Arm):
 ```json
 {
   "robot": {
@@ -37,24 +37,30 @@ LeRobot has built-in support for bimanual robots:
 }
 ```
 
-### After (Supporting Both):
+### After (Flexible Multi-Arm - Array Based):
 ```json
 {
   "robot": {
-    "mode": "single",  // or "dual"
-    "type": "so100_follower",  // changes to "bi_so100_follower" when mode="dual"
-    
-    // Single arm settings (used when mode="single")
-    "port": "/dev/ttyACM0",
-    "id": "follower_arm",
-    
-    // Dual arm settings (used when mode="dual")
-    "left_arm_port": "/dev/ttyACM0",
-    "left_arm_id": "follower_left",
-    "right_arm_port": "/dev/ttyACM2",
-    "right_arm_id": "follower_right",
-    
-    // Common settings (shared regardless of mode)
+    "arms": [
+      {
+        "enabled": true,
+        "name": "Follower 1",
+        "type": "so100_follower",
+        "port": "/dev/ttyACM0",
+        "id": "follower_arm",
+        "home_positions": [2082, 1106, 2994, 2421, 1044, 2054],
+        "home_velocity": 600
+      },
+      {
+        "enabled": false,
+        "name": "Follower 2",
+        "type": "so100_follower",
+        "port": "/dev/ttyACM2",
+        "id": "follower_right",
+        "home_positions": [2082, 1106, 2994, 2421, 1044, 2054],
+        "home_velocity": 600
+      }
+    ],
     "fps": 60,
     "min_time_to_move_multiplier": 3.0,
     "enable_motor_torque": true,
@@ -62,71 +68,78 @@ LeRobot has built-in support for bimanual robots:
     "position_verification_enabled": true
   },
   "teleop": {
-    "mode": "single",
-    "type": "so100_leader",
-    
-    "port": "/dev/ttyACM1",
-    "id": "leader_arm",
-    
-    "left_arm_port": "/dev/ttyACM1",
-    "left_arm_id": "leader_left",
-    "right_arm_port": "/dev/ttyACM3",
-    "right_arm_id": "leader_right"
-  },
-  "rest_position": {
-    // For single arm (when robot.mode="single")
-    "positions": [2082, 1106, 2994, 2421, 1044, 2054],
-    "velocity": 600,
-    
-    // For dual arms (when robot.mode="dual")
-    "left_positions": [2082, 1106, 2994, 2421, 1044, 2054],
-    "left_velocity": 600,
-    "right_positions": [2082, 1106, 2994, 2421, 1044, 2054],
-    "right_velocity": 600,
-    
-    "disable_torque_on_arrival": true
+    "arms": [
+      {
+        "enabled": true,
+        "name": "Leader 1",
+        "type": "so100_leader",
+        "port": "/dev/ttyACM1",
+        "id": "leader_arm"
+      },
+      {
+        "enabled": false,
+        "name": "Leader 2",
+        "type": "so100_leader",
+        "port": "/dev/ttyACM3",
+        "id": "leader_right"
+      }
+    ]
   }
 }
 ```
 
-## UI Changes - Settings Tab
+### Key Features:
+- **Max 2 follower arms, max 2 leader arms** (4 total max)
+- **Per-arm enable/disable** toggle
+- **Per-arm home positions** and velocities
+- **Named arms** for easy identification
+- Empty arrays mean zero arms configured
+- Easy to add/remove arms from the list
 
-### Current Layout:
-- Single robot configuration section
-- One set of controls: Port, Calib ID, Hertz
-- One "Home" button, one "Calibrate" button
+## UI Changes - Settings Tab
 
 ### New Layout:
 ```
-🤖 Robot Configuration
-  [ ] Single Arm  (•) Dual Arms
-  
-  [When Single Arm selected:]
-  ○ Port: /dev/ttyACM0
-  ○ Calib ID: [follower_arm ▼]
-  ○ Hertz: 60
-  [🏠 Home] [Set Home] [⚙️ Calibrate]
-  
-  [When Dual Arms selected:]
-  ┌─ Left Arm ──────────────────────┐
-  │ ○ Port: /dev/ttyACM0            │
-  │ ○ Calib ID: [follower_left ▼]  │
-  │ [🏠 Home] [Set Home] [⚙️ Calib] │
-  └─────────────────────────────────┘
-  
-  ┌─ Right Arm ─────────────────────┐
-  │ ○ Port: /dev/ttyACM2            │
-  │ ○ Calib ID: [follower_right ▼] │
-  │ [🏠 Home] [Set Home] [⚙️ Calib] │
-  └─────────────────────────────────┘
-  
-  ○ Hertz: 60 (shared)
-  [🏠 Home All]
+🤖 Robot Arms (Followers)                        [➕ Add Arm] (disabled if 2 already)
 
-🎮 Teleoperation
-  [ ] Single Arm  (•) Dual Arms
-  [Same layout as robot section]
+┌─ Follower 1 ────────────────────── [☑ Enabled] [🗑️] ─┐
+│ ○ Port: /dev/ttyACM0                                  │
+│ ○ Calib ID: [follower_arm ▼]                         │
+│ ○ Home Pos: [2082, 1106, 2994, ...]  Vel: [600]      │
+│ [🏠 Home] [Set Home] [⚙️ Calibrate]                  │
+└───────────────────────────────────────────────────────┘
+
+┌─ Follower 2 ────────────────────── [☐ Enabled] [🗑️] ─┐
+│ ○ Port: /dev/ttyACM2                                  │
+│ ○ Calib ID: [follower_right ▼]                       │
+│ ○ Home Pos: [2082, 1106, 2994, ...]  Vel: [600]      │
+│ [🏠 Home] [Set Home] [⚙️ Calibrate]                  │
+└───────────────────────────────────────────────────────┘
+
+[🏠 Home All Enabled Arms]
+
+○ Hertz: 60 (shared across all arms)
+○ Position Tolerance: 45
+
+─────────────────────────────────────────────────────────
+
+🎮 Teleop Arms (Leaders)                         [➕ Add Arm]
+
+┌─ Leader 1 ──────────────────────── [☑ Enabled] [🗑️] ─┐
+│ ○ Port: /dev/ttyACM1                                  │
+│ ○ Calib ID: [leader_arm ▼]                           │
+└───────────────────────────────────────────────────────┘
+
+[Same structure, up to 2 leader arms]
 ```
+
+### UI Behavior:
+- **➕ Add Arm**: Adds a new arm to the list (max 2 per type)
+- **☑/☐ Enabled**: Toggle to enable/disable the arm
+- **🗑️ Delete**: Remove this arm from config
+- **Disabled arms**: Grayed out, still visible in config
+- **Home All**: Only homes enabled arms
+- **Set Home**: Saves current position to that arm's home_positions
 
 ## Code Changes Required
 

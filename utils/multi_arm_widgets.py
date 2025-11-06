@@ -4,7 +4,7 @@ Multi-Arm UI Widgets - Reusable components for single/dual arm configuration
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QLineEdit, QComboBox, QRadioButton, QButtonGroup, QFrame, QSpinBox
+    QLineEdit, QComboBox, QRadioButton, QButtonGroup, QFrame, QSpinBox, QCheckBox
 )
 from PySide6.QtCore import Qt, Signal
 
@@ -86,11 +86,15 @@ class ArmConfigSection(QFrame):
     home_clicked = Signal()
     set_home_clicked = Signal()
     calibrate_clicked = Signal()
+    delete_clicked = Signal()
+    enabled_changed = Signal(bool)
     
-    def __init__(self, arm_name="", show_controls=True, parent=None):
+    def __init__(self, arm_name="", arm_index=0, show_controls=True, show_home_pos=False, parent=None):
         super().__init__(parent)
         self.arm_name = arm_name
+        self.arm_index = arm_index
         self.show_controls = show_controls
+        self.show_home_pos = show_home_pos
         self.init_ui()
     
     def init_ui(self):
@@ -109,17 +113,74 @@ class ArmConfigSection(QFrame):
         layout.setSpacing(8)
         layout.setContentsMargins(10, 10, 10, 10)
         
-        # Title if arm name provided
+        # Title row with enabled checkbox and delete button
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+        
         if self.arm_name:
-            title = QLabel(f"{'●' if 'Left' in self.arm_name else '●'} {self.arm_name}")
-            title.setStyleSheet(f"""
+            # Arm name label
+            arm_color = '#2196F3' if self.arm_index == 0 else '#FF9800'
+            name_label = QLabel(f"● {self.arm_name}")
+            name_label.setStyleSheet(f"""
                 QLabel {{
-                    color: {'#2196F3' if 'Left' in self.arm_name else '#FF9800'};
+                    color: {arm_color};
                     font-size: 14px;
                     font-weight: bold;
                 }}
             """)
-            layout.addWidget(title)
+            title_row.addWidget(name_label)
+        
+        title_row.addStretch()
+        
+        # Enabled checkbox
+        self.enabled_check = QCheckBox("Enabled")
+        self.enabled_check.setChecked(True)
+        self.enabled_check.setStyleSheet("""
+            QCheckBox {
+                color: #e0e0e0;
+                font-size: 13px;
+                font-weight: bold;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+            }
+            QCheckBox::indicator:unchecked {
+                border: 2px solid #707070;
+                border-radius: 3px;
+                background-color: #3a3a3a;
+            }
+            QCheckBox::indicator:checked {
+                border: 2px solid #4CAF50;
+                border-radius: 3px;
+                background-color: #4CAF50;
+            }
+        """)
+        self.enabled_check.stateChanged.connect(lambda state: self.enabled_changed.emit(state == 2))
+        title_row.addWidget(self.enabled_check)
+        
+        # Delete button
+        self.delete_btn = QPushButton("🗑️")
+        self.delete_btn.setFixedSize(32, 32)
+        self.delete_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #d32f2f;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                font-size: 16px;
+            }
+            QPushButton:hover {
+                background-color: #f44336;
+            }
+            QPushButton:pressed {
+                background-color: #b71c1c;
+            }
+        """)
+        self.delete_btn.clicked.connect(self.delete_clicked.emit)
+        title_row.addWidget(self.delete_btn)
+        
+        layout.addLayout(title_row)
         
         # Port row
         port_row = QHBoxLayout()
@@ -194,6 +255,62 @@ class ArmConfigSection(QFrame):
         id_row.addWidget(self.id_combo)
         layout.addLayout(id_row)
         
+        # Home positions row (for follower arms only)
+        if self.show_home_pos:
+            home_row = QHBoxLayout()
+            home_row.setSpacing(6)
+            
+            home_label = QLabel("Home:")
+            home_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
+            home_label.setFixedWidth(60)
+            home_row.addWidget(home_label)
+            
+            self.home_pos_edit = QLineEdit()
+            self.home_pos_edit.setPlaceholderText("2082, 1106, 2994, 2421, 1044, 2054")
+            self.home_pos_edit.setFixedHeight(40)
+            self.home_pos_edit.setStyleSheet("""
+                QLineEdit {
+                    background-color: #505050;
+                    color: #ffffff;
+                    border: 2px solid #707070;
+                    border-radius: 6px;
+                    padding: 6px;
+                    font-size: 12px;
+                }
+                QLineEdit:focus {
+                    border-color: #4CAF50;
+                }
+            """)
+            home_row.addWidget(self.home_pos_edit, 3)
+            
+            vel_label = QLabel("Vel:")
+            vel_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
+            vel_label.setFixedWidth(30)
+            home_row.addWidget(vel_label)
+            
+            self.home_vel_spin = QSpinBox()
+            self.home_vel_spin.setRange(50, 2000)
+            self.home_vel_spin.setValue(600)
+            self.home_vel_spin.setFixedHeight(40)
+            self.home_vel_spin.setFixedWidth(70)
+            self.home_vel_spin.setButtonSymbols(QSpinBox.NoButtons)
+            self.home_vel_spin.setStyleSheet("""
+                QSpinBox {
+                    background-color: #505050;
+                    color: #ffffff;
+                    border: 2px solid #707070;
+                    border-radius: 6px;
+                    padding: 6px;
+                    font-size: 13px;
+                }
+                QSpinBox:focus {
+                    border-color: #4CAF50;
+                }
+            """)
+            home_row.addWidget(self.home_vel_spin)
+            
+            layout.addLayout(home_row)
+        
         # Control buttons (if enabled)
         if self.show_controls:
             btn_row = QHBoxLayout()
@@ -251,6 +368,38 @@ class ArmConfigSection(QFrame):
     
     def set_id(self, calib_id):
         self.id_combo.setCurrentText(calib_id)
+    
+    def get_enabled(self):
+        return self.enabled_check.isChecked()
+    
+    def set_enabled(self, enabled):
+        self.enabled_check.setChecked(enabled)
+    
+    def get_home_positions(self):
+        """Parse home positions from comma-separated string"""
+        if not self.show_home_pos:
+            return []
+        try:
+            text = self.home_pos_edit.text().strip()
+            if not text:
+                return []
+            return [int(x.strip()) for x in text.split(',')]
+        except ValueError:
+            return []
+    
+    def set_home_positions(self, positions):
+        """Set home positions as comma-separated string"""
+        if self.show_home_pos and positions:
+            self.home_pos_edit.setText(', '.join(str(p) for p in positions))
+    
+    def get_home_velocity(self):
+        if not self.show_home_pos:
+            return 600
+        return self.home_vel_spin.value()
+    
+    def set_home_velocity(self, velocity):
+        if self.show_home_pos:
+            self.home_vel_spin.setValue(velocity)
     
     def populate_calibration_ids(self, ids):
         """Populate the calibration ID dropdown"""
