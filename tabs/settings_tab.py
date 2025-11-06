@@ -352,6 +352,64 @@ class SettingsTab(QWidget):
         
         layout.addLayout(port_row)
         
+        # Robot Calibration ID Row
+        robot_id_row = QHBoxLayout()
+        robot_id_row.setSpacing(6)
+        
+        # Empty space for alignment
+        robot_id_row.addSpacing(20)
+        
+        robot_id_label = QLabel("Calib ID:")
+        robot_id_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
+        robot_id_label.setFixedWidth(75)
+        robot_id_row.addWidget(robot_id_label)
+        
+        self.robot_id_combo = QComboBox()
+        self.robot_id_combo.setEditable(True)
+        self.robot_id_combo.addItems([
+            "follower_arm",
+            "follower_white",
+            "follower_black", 
+            "follower_left",
+            "follower_right"
+        ])
+        self.robot_id_combo.setFixedHeight(45)
+        self.robot_id_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 6px;
+                padding: 8px;
+                font-size: 14px;
+            }
+            QComboBox:focus {
+                border-color: #4CAF50;
+                background-color: #555555;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 30px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid #ffffff;
+                margin-right: 10px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #505050;
+                color: #ffffff;
+                selection-background-color: #4CAF50;
+                border: 2px solid #707070;
+            }
+        """)
+        robot_id_row.addWidget(self.robot_id_combo)
+        robot_id_row.addStretch()
+        
+        layout.addLayout(robot_id_row)
+        
         # Hertz Row
         hertz_row = QHBoxLayout()
         hertz_row.setSpacing(6)
@@ -398,6 +456,64 @@ class SettingsTab(QWidget):
         layout.addWidget(teleop_section)
         
         self.teleop_port_edit = self.add_setting_row(layout, "Teleop Port:", "/dev/ttyACM1")
+        
+        # Teleop Calibration ID Row
+        teleop_id_row = QHBoxLayout()
+        teleop_id_row.setSpacing(6)
+        
+        # Empty space for alignment
+        teleop_id_row.addSpacing(20)
+        
+        teleop_id_label = QLabel("Calib ID:")
+        teleop_id_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
+        teleop_id_label.setFixedWidth(75)
+        teleop_id_row.addWidget(teleop_id_label)
+        
+        self.teleop_id_combo = QComboBox()
+        self.teleop_id_combo.setEditable(True)
+        self.teleop_id_combo.addItems([
+            "leader_arm",
+            "leader_white",
+            "leader_black",
+            "leader_left",
+            "leader_right"
+        ])
+        self.teleop_id_combo.setFixedHeight(45)
+        self.teleop_id_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 6px;
+                padding: 8px;
+                font-size: 14px;
+            }
+            QComboBox:focus {
+                border-color: #4CAF50;
+                background-color: #555555;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 30px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid #ffffff;
+                margin-right: 10px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #505050;
+                color: #ffffff;
+                selection-background-color: #4CAF50;
+                border: 2px solid #707070;
+            }
+        """)
+        teleop_id_row.addWidget(self.teleop_id_combo)
+        teleop_id_row.addStretch()
+        
+        layout.addLayout(teleop_id_row)
         
         
         # Position verification settings
@@ -949,8 +1065,10 @@ class SettingsTab(QWidget):
         """Load settings from config"""
         # Robot settings
         self.robot_port_edit.setText(self.config.get("robot", {}).get("port", "/dev/ttyACM0"))
+        self.robot_id_combo.setCurrentText(self.config.get("robot", {}).get("id", "follower_arm"))
         self.robot_fps_spin.setValue(self.config.get("robot", {}).get("fps", 30))
         self.teleop_port_edit.setText(self.config.get("teleop", {}).get("port", "/dev/ttyACM1"))
+        self.teleop_id_combo.setCurrentText(self.config.get("teleop", {}).get("id", "leader_arm"))
         self.position_tolerance_spin.setValue(self.config.get("robot", {}).get("position_tolerance", 10))
         self.position_verification_check.setChecked(self.config.get("robot", {}).get("position_verification_enabled", True))
         
@@ -1000,6 +1118,7 @@ class SettingsTab(QWidget):
         if "robot" not in self.config:
             self.config["robot"] = {}
         self.config["robot"]["port"] = self.robot_port_edit.text()
+        self.config["robot"]["id"] = self.robot_id_combo.currentText()
         self.config["robot"]["fps"] = self.robot_fps_spin.value()
         self.config["robot"]["position_tolerance"] = self.position_tolerance_spin.value()
         self.config["robot"]["position_verification_enabled"] = self.position_verification_check.isChecked()
@@ -1007,6 +1126,7 @@ class SettingsTab(QWidget):
         if "teleop" not in self.config:
             self.config["teleop"] = {}
         self.config["teleop"]["port"] = self.teleop_port_edit.text()
+        self.config["teleop"]["id"] = self.teleop_id_combo.currentText()
         
         # Camera settings
         if "cameras" not in self.config:
