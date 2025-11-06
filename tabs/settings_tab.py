@@ -425,13 +425,6 @@ class SettingsTab(QWidget):
         
         layout.addWidget(self.bimanual_container)
         
-        # Home All button (for bimanual mode)
-        self.home_all_btn = QPushButton("🏠 Home All Arms")
-        self.home_all_btn.setFixedHeight(40)
-        self.home_all_btn.setStyleSheet(self.get_button_style("#2196F3", "#1976D2"))
-        self.home_all_btn.clicked.connect(self.home_all_arms)
-        layout.addWidget(self.home_all_btn)
-        
         # Spacer instead of separator
         layout.addSpacing(8)
         
@@ -1021,11 +1014,9 @@ class SettingsTab(QWidget):
         if mode == "solo":
             self.solo_container.setVisible(True)
             self.bimanual_container.setVisible(False)
-            self.home_all_btn.setText("🏠 Home Current Arm")
         else:  # bimanual
             self.solo_container.setVisible(False)
             self.bimanual_container.setVisible(True)
-            self.home_all_btn.setText("🏠 Home All Arms")
     
     def on_solo_arm_changed(self, index: int):
         """Handle solo arm selection change"""
@@ -1091,12 +1082,10 @@ class SettingsTab(QWidget):
                 self.robot_arm1_config.set_port(arm1.get("port", ""))
                 self.robot_arm1_config.set_id(arm1.get("id", ""))
                 self.robot_arm1_config.set_home_positions(arm1.get("home_positions", []))
-                self.robot_arm1_config.set_velocity(arm1.get("home_velocity", 600))
             if self.solo_arm_config:
                 self.solo_arm_config.set_port(arm1.get("port", ""))
                 self.solo_arm_config.set_id(arm1.get("id", ""))
                 self.solo_arm_config.set_home_positions(arm1.get("home_positions", []))
-                self.solo_arm_config.set_velocity(arm1.get("home_velocity", 600))
         
         if len(arms) >= 2:
             # Load Arm 2
@@ -1105,7 +1094,6 @@ class SettingsTab(QWidget):
                 self.robot_arm2_config.set_port(arm2.get("port", ""))
                 self.robot_arm2_config.set_id(arm2.get("id", ""))
                 self.robot_arm2_config.set_home_positions(arm2.get("home_positions", []))
-                self.robot_arm2_config.set_velocity(arm2.get("home_velocity", 600))
         
         # Note: Robot arms are now loaded directly into mode selector widgets above
         
@@ -1218,7 +1206,7 @@ class SettingsTab(QWidget):
                     "id": self.solo_arm_config.get_id(),
                     "arm_id": 1,
                     "home_positions": self.solo_arm_config.get_home_positions(),
-                    "home_velocity": self.solo_arm_config.get_velocity()
+                    "home_velocity": 600  # Uses master velocity from top
                 }
             else:
                 arm1_data = existing_arms[0] if len(existing_arms) > 0 else {}
@@ -1240,7 +1228,7 @@ class SettingsTab(QWidget):
                     "id": self.solo_arm_config.get_id(),
                     "arm_id": 2,
                     "home_positions": self.solo_arm_config.get_home_positions(),
-                    "home_velocity": self.solo_arm_config.get_velocity()
+                    "home_velocity": 600  # Uses master velocity from top
                 }
             else:
                 arm2_data = existing_arms[1] if len(existing_arms) > 1 else {}
@@ -1261,7 +1249,7 @@ class SettingsTab(QWidget):
                 "id": self.robot_arm1_config.get_id(),
                 "arm_id": 1,
                 "home_positions": self.robot_arm1_config.get_home_positions(),
-                "home_velocity": self.robot_arm1_config.get_velocity()
+                "home_velocity": 600  # Uses master velocity from top
             }
             arms.append(arm1_data)
             
@@ -1273,7 +1261,7 @@ class SettingsTab(QWidget):
                 "id": self.robot_arm2_config.get_id(),
                 "arm_id": 2,
                 "home_positions": self.robot_arm2_config.get_home_positions(),
-                "home_velocity": self.robot_arm2_config.get_velocity()
+                "home_velocity": 600  # Uses master velocity from top
             }
             arms.append(arm2_data)
         

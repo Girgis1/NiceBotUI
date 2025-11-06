@@ -24,19 +24,65 @@ class ModeSelector(QWidget):
         layout.setSpacing(20)
         
         label = QLabel("Mode:")
-        label.setStyleSheet("color: #e0e0e0; font-size: 15px; font-weight: bold;")
+        label.setStyleSheet("color: #e0e0e0; font-size: 16px; font-weight: bold;")
         layout.addWidget(label)
         
         self.button_group = QButtonGroup(self)
         
         self.solo_radio = QRadioButton("👤 Solo")
-        self.solo_radio.setStyleSheet("color: #e0e0e0; font-size: 15px;")
+        self.solo_radio.setMinimumHeight(50)
+        self.solo_radio.setStyleSheet("""
+            QRadioButton {
+                color: #e0e0e0;
+                font-size: 16px;
+                font-weight: bold;
+                spacing: 12px;
+                padding: 8px;
+            }
+            QRadioButton::indicator {
+                width: 30px;
+                height: 30px;
+                border: 3px solid #4CAF50;
+                border-radius: 16px;
+                background-color: #2d2d2d;
+            }
+            QRadioButton::indicator:checked {
+                background-color: #4CAF50;
+                border: 4px solid #2E7D32;
+            }
+            QRadioButton::indicator:hover {
+                border-color: #66BB6A;
+            }
+        """)
         self.solo_radio.setChecked(True)
         self.button_group.addButton(self.solo_radio)
         layout.addWidget(self.solo_radio)
         
         self.bimanual_radio = QRadioButton("👥 Bimanual")
-        self.bimanual_radio.setStyleSheet("color: #e0e0e0; font-size: 15px;")
+        self.bimanual_radio.setMinimumHeight(50)
+        self.bimanual_radio.setStyleSheet("""
+            QRadioButton {
+                color: #e0e0e0;
+                font-size: 16px;
+                font-weight: bold;
+                spacing: 12px;
+                padding: 8px;
+            }
+            QRadioButton::indicator {
+                width: 30px;
+                height: 30px;
+                border: 3px solid #4CAF50;
+                border-radius: 16px;
+                background-color: #2d2d2d;
+            }
+            QRadioButton::indicator:checked {
+                background-color: #4CAF50;
+                border: 4px solid #2E7D32;
+            }
+            QRadioButton::indicator:hover {
+                border-color: #66BB6A;
+            }
+        """)
         self.button_group.addButton(self.bimanual_radio)
         layout.addWidget(self.bimanual_radio)
         
@@ -201,33 +247,6 @@ class SingleArmConfig(QFrame):
             home_row.addWidget(self.home_edit)
             layout.addLayout(home_row)
             
-            # Home velocity
-            vel_row = QHBoxLayout()
-            vel_label = QLabel("Velocity:")
-            vel_label.setStyleSheet("color: #e0e0e0; font-size: 14px; min-width: 100px;")
-            vel_row.addWidget(vel_label)
-            
-            self.vel_spin = QSpinBox()
-            self.vel_spin.setRange(50, 2000)
-            self.vel_spin.setValue(600)
-            self.vel_spin.setButtonSymbols(QSpinBox.NoButtons)
-            self.vel_spin.setStyleSheet("""
-                QSpinBox {
-                    background-color: #505050;
-                    color: #ffffff;
-                    border: 2px solid #707070;
-                    border-radius: 6px;
-                    padding: 8px;
-                    font-size: 14px;
-                }
-                QSpinBox:focus {
-                    border-color: #4CAF50;
-                }
-            """)
-            vel_row.addWidget(self.vel_spin)
-            vel_row.addStretch()
-            layout.addLayout(vel_row)
-            
             # Control buttons
             btn_row = QHBoxLayout()
             
@@ -260,18 +279,30 @@ class SingleArmConfig(QFrame):
             layout.addLayout(btn_row)
     
     def _populate_calibration_ids(self):
-        """Load available calibration files"""
+        """Load available calibration files from LeRobot cache"""
         from pathlib import Path
-        calib_dir = Path.home() / ".cache" / "calibration"
         
         self.id_combo.clear()
-        if calib_dir.exists():
-            calib_files = list(calib_dir.glob("*.pkl"))
-            for file in calib_files:
-                self.id_combo.addItem(file.stem)  # Filename without extension
+        found_ids = set()
+        
+        # Scan both robots and teleoperators directories
+        base_dir = Path.home() / ".cache" / "huggingface" / "lerobot" / "calibration"
+        
+        for subdir in ["robots", "teleoperators"]:
+            calib_subdir = base_dir / subdir
+            if calib_subdir.exists():
+                # Recursively find all .json files
+                for json_file in calib_subdir.rglob("*.json"):
+                    calib_id = json_file.stem  # Filename without extension
+                    found_ids.add(calib_id)
+        
+        # Add found calibration IDs
+        for calib_id in sorted(found_ids):
+            self.id_combo.addItem(calib_id)
         
         # Add common defaults if not already present
-        for default_id in ["follower_arm", "leader_arm", "follower_arm_2", "leader_arm_2"]:
+        for default_id in ["follower_arm", "leader_arm", "follower_arm_2", "leader_arm_2", 
+                          "follower_white", "leader_white"]:
             if self.id_combo.findText(default_id) == -1:
                 self.id_combo.addItem(default_id)
     
@@ -302,6 +333,4 @@ class SingleArmConfig(QFrame):
     def set_home_positions(self, positions):
         import json
         self.home_edit.setText(json.dumps(positions))
-    def get_velocity(self): return self.vel_spin.value()
-    def set_velocity(self, vel): self.vel_spin.setValue(vel)
 
