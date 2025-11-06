@@ -5,5 +5,5 @@ python-dateutil>=2.8
 pytz>=2023.3
 pyyaml>=6.0
 psutil>=5.9.0
-lerobot @ git+https://github.com/huggingface/lerobot@main
+lerobot[feetech] @ git+https://github.com/huggingface/lerobot@main
 
