@@ -11,7 +11,12 @@ import socket
 import subprocess
 import sys
 import time
+from pathlib import Path
 from PySide6.QtCore import QThread, Signal
+
+# Add utils to path for config_compat
+sys.path.insert(0, str(Path(__file__).parent))
+from utils.config_compat import get_first_enabled_arm, get_arm_port
 
 
 class RobotWorker(QThread):
@@ -113,18 +118,18 @@ class RobotWorker(QThread):
     
     def _build_client_command(self):
         """Build robot client command from config"""
-        r = self.config.get("robot", {})
         p = self.config.get("policy", {})
         cams = self.config.get("cameras", {})
         async_cfg = self.config.get("async_inference", {})
         
-        # Validate required robot configuration
-        if not isinstance(r, dict):
-            raise ValueError("Robot configuration missing or invalid")
+        # Get first enabled robot arm (supports both old and new config formats)
+        arm = get_first_enabled_arm(self.config, "robot")
+        if not arm:
+            raise ValueError("No enabled robot arm configured")
 
-        robot_type = r.get("type")
-        robot_port = r.get("port")
-        robot_id = r.get("id", "follower_arm")
+        robot_type = arm.get("type")
+        robot_port = arm.get("port")
+        robot_id = arm.get("id", "follower_arm")
 
         if not robot_type:
             raise ValueError("Robot type not configured")
@@ -267,22 +272,20 @@ class RobotWorker(QThread):
         """Parse stderr to determine error type"""
         stderr_lower = stderr_text.lower()
         
-        robot_cfg = self.config.get("robot", {})
+        # Get port using config helper (supports both old and new formats)
+        port = get_arm_port(self.config, 0, "robot") or "unknown"
         cameras_cfg = self.config.get("cameras", {})
 
         # Serial permission error
         if 'permission denied' in stderr_lower and '/dev/tty' in stderr_lower:
-            port = robot_cfg.get("port", "unknown")
             return 'serial_permission', {'port': port, 'stderr': stderr_text}
 
         # Serial not found
         if 'no such file or directory' in stderr_lower and '/dev/tty' in stderr_lower:
-            port = robot_cfg.get("port", "unknown")
             return 'serial_not_found', {'port': port, 'stderr': stderr_text}
 
         # Port busy
         if 'device or resource busy' in stderr_lower and '/dev/tty' in stderr_lower:
-            port = robot_cfg.get("port", "unknown")
             return 'serial_busy', {'port': port, 'stderr': stderr_text}
 
         # Camera error

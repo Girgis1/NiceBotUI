@@ -16,6 +16,9 @@ except ImportError:
     MOTOR_CONTROL_AVAILABLE = False
     print("Warning: Motor control not available")
 
+# Import config compatibility layer
+from utils.config_compat import get_arm_port, get_arm_config
+
 
 class MotorController:
     """Unified motor control interface for action recording and playback with position feedback"""
@@ -25,16 +28,23 @@ class MotorController:
     POLL_INTERVAL = 0.05  # Seconds - how often to check position during verification
     POSITION_STABLE_TIME = 0.1  # Seconds - position must be stable for this long
     
-    def __init__(self, config: dict = None):
+    def __init__(self, config: dict = None, arm_index: int = 0):
         """
         Args:
             config: Robot configuration dict (from config.json)
+            arm_index: Index of the arm to control (0 for first arm, 1 for second arm)
         """
         if config is None:
             config = read_config()
         
         self.config = config
-        self.port = config["robot"]["port"]
+        self.arm_index = arm_index
+        
+        # Get port using config compatibility layer
+        self.port = get_arm_port(config, arm_index, "robot")
+        if not self.port:
+            raise ValueError(f"No robot arm configured at index {arm_index}. Check config.json")
+        
         self.motor_names = MOTOR_NAMES
         self.bus = None
         control_cfg = config.get("control", {})
@@ -43,8 +53,9 @@ class MotorController:
             self.speed_multiplier = 1.0
         
         # Load position tolerance from config if available
-        if "position_tolerance" in config.get("robot", {}):
-            self.POSITION_TOLERANCE = config["robot"]["position_tolerance"]
+        robot_cfg = config.get("robot", {})
+        if "position_tolerance" in robot_cfg:
+            self.POSITION_TOLERANCE = robot_cfg["position_tolerance"]
     
     def read_positions(self) -> list[int]:
         """Read current motor positions

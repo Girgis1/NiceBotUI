@@ -33,7 +33,8 @@ class RecordTab(QWidget):
         super().__init__(parent)
         self.config = config
         self.actions_manager = ActionsManager()
-        self.motor_controller = MotorController(config)
+        # Use first robot arm (arm_index=0) for recording
+        self.motor_controller = MotorController(config, arm_index=0)
         
         self.current_action_name = "NewAction01"
         self.is_playing = False

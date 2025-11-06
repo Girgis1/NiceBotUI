@@ -7,8 +7,12 @@ Real Feetech motor control implementation.
 import argparse
 import json
 import os
+import sys
 import time
 from pathlib import Path
+
+# Add current directory to path for config_compat
+sys.path.insert(0, str(Path(__file__).parent))
 
 try:
     from lerobot.motors.feetech import FeetechMotorsBus
@@ -18,6 +22,11 @@ except ImportError:
     FEETECH_AVAILABLE = False
     print("Warning: Feetech library not available")
 
+# Import config compatibility layer
+from utils.config_compat import (
+    get_arm_port, get_home_positions, get_home_velocity, 
+    set_home_positions, ensure_multi_arm_config
+)
 
 CONFIG_PATH = Path(__file__).parent / "config.json"
 
@@ -67,16 +76,19 @@ def create_motor_bus(port):
         raise
 
 
-def emergency_catch_and_hold():
+def emergency_catch_and_hold(arm_index: int = 0):
     """EMERGENCY: Catch arm at current position immediately after stop
     
     This opens connection, reads current position, enables torque, and sets
     goal position to current position to hold the arm exactly where it is.
     Must be called IMMEDIATELY after robot_client disconnects.
+    
+    Args:
+        arm_index: Index of the arm (0 for first arm)
     """
     try:
         cfg = read_config()
-        port = cfg["robot"]["port"]
+        port = get_arm_port(cfg, arm_index, "robot")
         
         # Quick connection - no delays
         bus = create_motor_bus(port)
@@ -105,18 +117,23 @@ def emergency_catch_and_hold():
         return False, None
 
 
-def go_to_rest(disable_torque=None):
+def go_to_rest(disable_torque=None, arm_index: int = 0):
     """Return robot Home
     
     Args:
         disable_torque: Override config setting - if None, uses config value.
                        Set to False to keep torque enabled (safety for emergency stops)
+        arm_index: Index of the arm (0 for first arm)
     """
     cfg = read_config()
-    port = cfg["robot"]["port"]
-    rest_config = cfg["rest_position"]
-    positions = rest_config["positions"]
-    velocity = rest_config.get("velocity", 1200)
+    port = get_arm_port(cfg, arm_index, "robot")
+    positions = get_home_positions(cfg, arm_index)
+    velocity = get_home_velocity(cfg, arm_index)
+    
+    if not positions:
+        raise ValueError(f"No home positions configured for arm {arm_index}")
+    if not port:
+        raise ValueError(f"No port configured for arm {arm_index}")
     control_cfg = cfg.get("control", {})
     speed_multiplier = control_cfg.get("speed_multiplier", 1.0)
     env_multiplier = os.environ.get("LEROBOT_SPEED_MULTIPLIER")
@@ -131,7 +148,7 @@ def go_to_rest(disable_torque=None):
     
     # Allow override of disable_torque setting (important for emergency stops)
     if disable_torque is None:
-        disable_torque = rest_config.get("disable_torque_on_arrival", True)
+        disable_torque = True  # Default behavior: disable torque on arrival
     
     print(f"[HomePos] Returning Home:")
     print(f"  Port: {port}")
@@ -188,12 +205,19 @@ def go_to_rest(disable_torque=None):
         return False
 
 
-def read_current_position():
-    """Read current joint positions from robot"""
-    cfg = read_config()
-    port = cfg["robot"]["port"]
+def read_current_position(arm_index: int = 0):
+    """Read current joint positions from robot
     
-    print(f"[HomePos] Reading current position from {port}")
+    Args:
+        arm_index: Index of the arm (0 for first arm)
+    """
+    cfg = read_config()
+    port = get_arm_port(cfg, arm_index, "robot")
+    
+    if not port:
+        raise ValueError(f"No port configured for arm {arm_index}")
+    
+    print(f"[HomePos] Reading current position from {port} (arm {arm_index})")
     
     try:
         # Connect to motors
@@ -220,14 +244,18 @@ def read_current_position():
         return None
 
 
-def save_current_as_home():
-    """Read current position and save as home"""
-    positions = read_current_position()
+def save_current_as_home(arm_index: int = 0):
+    """Read current position and save as home
+    
+    Args:
+        arm_index: Index of the arm (0 for first arm)
+    """
+    positions = read_current_position(arm_index)
     if positions:
         cfg = read_config()
-        cfg["rest_position"]["positions"] = positions
+        set_home_positions(cfg, positions, arm_index)
         write_config(cfg)
-        print(f"\n✓ Saved current position as home: {positions}")
+        print(f"\n✓ Saved current position as home for arm {arm_index}: {positions}")
         return True
     return False
 
@@ -300,31 +328,36 @@ if __name__ == "__main__":
     parser.add_argument('--test', action='store_true', help='Test connection')
     parser.add_argument('--keep-torque', action='store_true', help='Keep torque enabled after reaching home (safety feature)')
     parser.add_argument('--emergency-catch', action='store_true', help='EMERGENCY: Catch and hold arm at current position')
+    parser.add_argument('--arm-index', type=int, default=0, help='Arm index (0 for first arm, 1 for second arm)')
     
     args = parser.parse_args()
     
     if args.emergency_catch:
         # CRITICAL SAFETY: Catch arm at current position, hold it there
-        success, positions = emergency_catch_and_hold()
+        success, positions = emergency_catch_and_hold(arm_index=args.arm_index)
         exit(0 if success else 1)
     elif args.go:
         # If --keep-torque is set, disable_torque=False (keep it on)
-        success = go_to_rest(disable_torque=(not args.keep_torque))
+        success = go_to_rest(disable_torque=(not args.keep_torque), arm_index=args.arm_index)
         exit(0 if success else 1)
     elif args.read:
-        positions = read_current_position()
+        positions = read_current_position(arm_index=args.arm_index)
         if positions:
             print(f"\nCurrent positions: {positions}")
             exit(0)
         exit(1)
     elif args.save:
-        success = save_current_as_home()
+        success = save_current_as_home(arm_index=args.arm_index)
         exit(0 if success else 1)
     elif args.test:
         cfg = read_config()
         try:
-            bus = create_motor_bus(cfg["robot"]["port"])
-            print("✓ Connection test successful")
+            port = get_arm_port(cfg, args.arm_index, "robot")
+            if not port:
+                print(f"✗ No arm configured at index {args.arm_index}")
+                exit(1)
+            bus = create_motor_bus(port)
+            print(f"✓ Connection test successful for arm {args.arm_index} on {port}")
             bus.disconnect()
             exit(0)
         except Exception as e:

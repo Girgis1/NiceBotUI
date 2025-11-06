@@ -8,6 +8,7 @@ from typing import Any, Mapping, Optional
 from PySide6.QtCore import QObject, Signal, Slot
 
 from .motor_controller import MotorController
+from .config_compat import get_home_positions, get_home_velocity, get_arm_port
 
 
 @dataclass(slots=True)
@@ -16,6 +17,7 @@ class HomeMoveRequest:
 
     config: Mapping[str, Any]
     velocity_override: Optional[int] = None
+    arm_index: int = 0  # Which arm to home (0 for first arm)
 
 
 class HomeMoveWorker(QObject):
@@ -33,19 +35,22 @@ class HomeMoveWorker(QObject):
         """Perform the home move while emitting progress updates."""
 
         config = dict(self._request.config or {})
-        rest_config = dict(config.get("rest_position") or {})
-        positions = rest_config.get("positions")
-
+        arm_index = self._request.arm_index
+        
+        # Get home positions using config helper
+        positions = get_home_positions(config, arm_index)
         if not positions:
-            self.finished.emit(False, "No home position configured. Set home first.")
+            self.finished.emit(False, f"No home position configured for arm {arm_index}. Set home first.")
             return
 
-        robot_cfg = config.get("robot") or {}
-        if not robot_cfg.get("port"):
-            self.finished.emit(False, "Robot port not configured. Check settings.")
+        # Check port is configured
+        port = get_arm_port(config, arm_index, "robot")
+        if not port:
+            self.finished.emit(False, f"Robot port not configured for arm {arm_index}. Check settings.")
             return
 
-        base_velocity = rest_config.get("velocity", 600)
+        # Get velocity
+        base_velocity = get_home_velocity(config, arm_index)
         velocity = self._request.velocity_override or base_velocity
 
         try:
@@ -53,10 +58,10 @@ class HomeMoveWorker(QObject):
         except Exception:
             velocity = int(max(50, min(1200, base_velocity)))
 
-        self.progress.emit("Connecting to motors...")
+        self.progress.emit(f"Connecting to motors (arm {arm_index})...")
 
         try:
-            controller = MotorController(config)
+            controller = MotorController(config, arm_index=arm_index)
         except Exception as exc:  # pragma: no cover - controller init touches hardware libs
             self.finished.emit(False, f"Motor controller initialisation failed: {exc}")
             return

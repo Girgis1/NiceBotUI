@@ -63,7 +63,8 @@ class ExecutionWorker(QThread):
         # Managers
         self.actions_mgr = ActionsManager()
         self.sequences_mgr = SequencesManager()
-        self.motor_controller = MotorController(config)
+        # Use first robot arm (arm_index=0) for execution
+        self.motor_controller = MotorController(config, arm_index=0)
         self.speed_multiplier = config.get("control", {}).get("speed_multiplier", 1.0)
         self.motor_controller.speed_multiplier = self.speed_multiplier
         self._model_hold_requested_home = False

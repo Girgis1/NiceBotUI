@@ -26,6 +26,8 @@ except ImportError:  # pragma: no cover - optional dependency
 
 from utils.camera_hub import CameraStreamHub
 from utils.home_move_worker import HomeMoveWorker, HomeMoveRequest
+from utils.multi_arm_widgets import ArmConfigSection
+from utils.config_compat import get_enabled_arms, ensure_multi_arm_config
 
 class SettingsTab(QWidget):
     """Settings configuration tab"""
@@ -41,6 +43,10 @@ class SettingsTab(QWidget):
         self._home_thread: Optional[QThread] = None
         self._home_worker: Optional[HomeMoveWorker] = None
         self._pending_home_velocity: Optional[int] = None
+        
+        # Multi-arm tracking
+        self.robot_arm_widgets: List[ArmConfigSection] = []  # Follower arm widgets
+        self.teleop_arm_widgets: List[ArmConfigSection] = []  # Leader arm widgets
         
         # Device status tracking (synced with device_manager)
         self.robot_status = "empty"          # empty/online/offline
@@ -274,11 +280,11 @@ class SettingsTab(QWidget):
             combo.addItem("(no calibrations found)")
     
     def create_robot_tab(self) -> QWidget:
-        """Create robot settings tab - optimized for 1024x600 touchscreen"""
+        """Create robot settings tab with multi-arm support"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setSpacing(12)
         
         # ========== HOME ROW ==========
         rest_section = QLabel("🏠 Home Position")
@@ -343,9 +349,15 @@ class SettingsTab(QWidget):
         layout.addSpacing(8)
         
         # ========== ROBOT CONFIGURATION ==========
-        config_section = QLabel("🤖 Robot Configuration")
+        config_section = QLabel("🤖 Robot Configuration (Arm 1)")
         config_section.setStyleSheet("color: #4CAF50; font-size: 14px; font-weight: bold; margin-bottom: 2px;")
         layout.addWidget(config_section)
+        
+        # Note about multi-arm support
+        multi_arm_note = QLabel("💡 Multi-arm support: Configure first arm below. Additional arms coming soon!")
+        multi_arm_note.setStyleSheet("color: #909090; font-size: 11px; font-style: italic;")
+        multi_arm_note.setWordWrap(True)
+        layout.addWidget(multi_arm_note)
         
         # Serial Port Row with Status Circle and Calibrate Button
         port_row = QHBoxLayout()
@@ -1092,14 +1104,34 @@ class SettingsTab(QWidget):
     
     def load_settings(self):
         """Load settings from config"""
-        # Robot settings
-        self.robot_port_edit.setText(self.config.get("robot", {}).get("port", "/dev/ttyACM0"))
-        self.robot_id_combo.setCurrentText(self.config.get("robot", {}).get("id", "follower_arm"))
+        from utils.config_compat import get_arm_config, get_home_velocity
+        
+        # Robot settings (first arm)
+        robot_arm = get_arm_config(self.config, 0, "robot")
+        if robot_arm:
+            self.robot_port_edit.setText(robot_arm.get("port", "/dev/ttyACM0"))
+            self.robot_id_combo.setCurrentText(robot_arm.get("id", "follower_arm"))
+        else:
+            self.robot_port_edit.setText("/dev/ttyACM0")
+            self.robot_id_combo.setCurrentText("follower_arm")
+        
         self.robot_fps_spin.setValue(self.config.get("robot", {}).get("fps", 30))
-        self.teleop_port_edit.setText(self.config.get("teleop", {}).get("port", "/dev/ttyACM1"))
-        self.teleop_id_combo.setCurrentText(self.config.get("teleop", {}).get("id", "leader_arm"))
+        
+        # Teleop settings (first arm)
+        teleop_arm = get_arm_config(self.config, 0, "teleop")
+        if teleop_arm:
+            self.teleop_port_edit.setText(teleop_arm.get("port", "/dev/ttyACM1"))
+            self.teleop_id_combo.setCurrentText(teleop_arm.get("id", "leader_arm"))
+        else:
+            self.teleop_port_edit.setText("/dev/ttyACM1")
+            self.teleop_id_combo.setCurrentText("leader_arm")
+        
         self.position_tolerance_spin.setValue(self.config.get("robot", {}).get("position_tolerance", 10))
         self.position_verification_check.setChecked(self.config.get("robot", {}).get("position_verification_enabled", True))
+        
+        # Load home velocity for first arm
+        home_vel = get_home_velocity(self.config, 0)
+        self.rest_velocity_spin.setValue(home_vel)
         
         # Camera settings
         front_cam = self.config.get("cameras", {}).get("front", {})
@@ -1143,19 +1175,55 @@ class SettingsTab(QWidget):
 
     def save_settings(self):
         """Save settings to config file"""
-        # Update config dict
+        # Ensure config is in multi-arm format
+        self.config = ensure_multi_arm_config(self.config)
+        
+        # Update first robot arm
         if "robot" not in self.config:
-            self.config["robot"] = {}
-        self.config["robot"]["port"] = self.robot_port_edit.text()
-        self.config["robot"]["id"] = self.robot_id_combo.currentText()
+            self.config["robot"] = {"arms": []}
+        if "arms" not in self.config["robot"]:
+            self.config["robot"]["arms"] = []
+        
+        # Ensure at least one arm exists
+        if len(self.config["robot"]["arms"]) == 0:
+            self.config["robot"]["arms"].append({
+                "enabled": True,
+                "name": "Follower 1",
+                "type": "so100_follower",
+                "port": "/dev/ttyACM0",
+                "id": "follower_arm",
+                "home_positions": [],
+                "home_velocity": 600
+            })
+        
+        # Update first arm settings
+        self.config["robot"]["arms"][0]["port"] = self.robot_port_edit.text()
+        self.config["robot"]["arms"][0]["id"] = self.robot_id_combo.currentText()
+        self.config["robot"]["arms"][0]["home_velocity"] = self.rest_velocity_spin.value()
+        
+        # Update shared robot settings
         self.config["robot"]["fps"] = self.robot_fps_spin.value()
         self.config["robot"]["position_tolerance"] = self.position_tolerance_spin.value()
         self.config["robot"]["position_verification_enabled"] = self.position_verification_check.isChecked()
         
+        # Update first teleop arm
         if "teleop" not in self.config:
-            self.config["teleop"] = {}
-        self.config["teleop"]["port"] = self.teleop_port_edit.text()
-        self.config["teleop"]["id"] = self.teleop_id_combo.currentText()
+            self.config["teleop"] = {"arms": []}
+        if "arms" not in self.config["teleop"]:
+            self.config["teleop"]["arms"] = []
+        
+        # Ensure at least one teleop arm exists
+        if len(self.config["teleop"]["arms"]) == 0:
+            self.config["teleop"]["arms"].append({
+                "enabled": True,
+                "name": "Leader 1",
+                "type": "so100_leader",
+                "port": "/dev/ttyACM1",
+                "id": "leader_arm"
+            })
+        
+        self.config["teleop"]["arms"][0]["port"] = self.teleop_port_edit.text()
+        self.config["teleop"]["arms"][0]["id"] = self.teleop_id_combo.currentText()
         
         # Camera settings
         if "cameras" not in self.config:
@@ -1259,16 +1327,16 @@ class SettingsTab(QWidget):
     # ========== HOME METHODS ==========
 
     def set_rest_position(self):
-        """Read current motor positions and save as Home position"""
+        """Read current motor positions and save as Home position for first arm"""
         try:
             from utils.motor_controller import MotorController
+            from utils.config_compat import set_home_positions
             
-            self.status_label.setText("⏳ Reading motor positions...")
+            self.status_label.setText("⏳ Reading motor positions from Arm 1...")
             self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
             
-            # Initialize motor controller
-            motor_config = self.config.get("robot", {})
-            motor_controller = MotorController(motor_config)
+            # Initialize motor controller for first arm
+            motor_controller = MotorController(self.config, arm_index=0)
             
             # Connect and read positions
             if not motor_controller.connect():
@@ -1284,18 +1352,18 @@ class SettingsTab(QWidget):
                 self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
                 return
             
-            # Save to config
-            if "rest_position" not in self.config:
-                self.config["rest_position"] = {}
+            # Save to config using helper (handles both old and new formats)
+            set_home_positions(self.config, positions, arm_index=0)
             
-            self.config["rest_position"]["positions"] = positions
-            self.config["rest_position"]["velocity"] = self.rest_velocity_spin.value()
+            # Also update velocity for first arm
+            if "arms" in self.config.get("robot", {}):
+                self.config["robot"]["arms"][0]["home_velocity"] = self.rest_velocity_spin.value()
             
             # Write to file
             with open(self.config_path, 'w') as f:
                 json.dump(self.config, f, indent=2)
             
-            self.status_label.setText(f"✓ Home saved: {positions}")
+            self.status_label.setText(f"✓ Home saved for Arm 1: {positions}")
             self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
             self.config_changed.emit()
             
@@ -1305,27 +1373,31 @@ class SettingsTab(QWidget):
     
     def go_home(self):
         """Move the arm to the saved home position without blocking the UI thread."""
+        from utils.config_compat import get_home_positions
+        
         if self._home_thread and self._home_thread.isRunning():
             self.status_label.setText("⏳ Already moving to home...")
             self.status_label.setStyleSheet("QLabel { color: #FFB74D; font-size: 15px; padding: 8px; }")
             return
 
-        rest_config = self.config.get("rest_position", {}) if self.config else {}
-        if not rest_config.get("positions"):
-            self.status_label.setText("❌ No home position saved. Click 'Set Home' first.")
+        # Check if home positions exist for first arm
+        home_pos = get_home_positions(self.config, arm_index=0)
+        if not home_pos:
+            self.status_label.setText("❌ No home position saved for Arm 1. Click 'Set Home' first.")
             self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
             return
 
         velocity = int(self.rest_velocity_spin.value())
         self._pending_home_velocity = velocity
 
-        self.status_label.setText("🏠 Moving to home position...")
+        self.status_label.setText("🏠 Moving Arm 1 to home position...")
         self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
         self.home_btn.setEnabled(False)
 
         request = HomeMoveRequest(
             config=self.config,
             velocity_override=velocity,
+            arm_index=0,  # Home first arm
         )
 
         worker = HomeMoveWorker(request)
