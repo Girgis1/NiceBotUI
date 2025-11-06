@@ -1,0 +1,138 @@
+{
+  "robot": {
+    "arms": [
+      {
+        "enabled": true,
+        "name": "Follower 1",
+        "type": "so100_follower",
+        "port": "/dev/ttyACM0",
+        "id": "follower_arm",
+        "home_positions": [
+          2082,
+          1106,
+          2994,
+          2421,
+          1044,
+          2054
+        ],
+        "home_velocity": 600
+      }
+    ],
+    "fps": 60,
+    "min_time_to_move_multiplier": 3.0,
+    "enable_motor_torque": true,
+    "position_tolerance": 45,
+    "position_verification_enabled": true
+  },
+  "cameras": {
+    "front": {
+      "type": "opencv",
+      "index_or_path": "/dev/video2",
+      "width": 640,
+      "height": 480,
+      "fps": 30
+    },
+    "wrist": {
+      "type": "opencv",
+      "index_or_path": "/dev/video0",
+      "width": 640,
+      "height": 480,
+      "fps": 30
+    }
+  },
+  "teleop": {
+    "arms": [
+      {
+        "enabled": true,
+        "name": "Leader 1",
+        "type": "so100_leader",
+        "port": "/dev/ttyACM1",
+        "id": "my_leader_arm"
+      }
+    ]
+  },
+  "policy": {
+    "path": "/home/daniel/lerobot/outputs/train/GrabBlock1/checkpoints/020000/pretrained_model",
+    "device": "cuda",
+    "base_path": "/home/daniel/lerobot/outputs/train",
+    "local_mode": true
+  },
+  "control": {
+    "warmup_time_s": 0.0,
+    "episode_time_s": 20.0,
+    "reset_time_s": 0.0,
+    "num_episodes": 1,
+    "single_task": "PickPlace v1",
+    "push_to_hub": false,
+    "repo_id": null,
+    "num_image_writer_processes": 0,
+    "display_data": true,
+    "speed_multiplier": 1.0,
+    "loop_enabled": false
+  },
+  "ui": {
+    "object_gate": true,
+    "roi": [
+      220,
+      140,
+      200,
+      180
+    ],
+    "presence_threshold": 0.12
+  },
+  "safety": {
+    "soft_limits_deg": [
+      [
+        -90,
+        90
+      ],
+      [
+        -60,
+        60
+      ],
+      [
+        -60,
+        60
+      ],
+      [
+        -90,
+        90
+      ],
+      [
+        -180,
+        180
+      ],
+      [
+        0,
+        100
+      ]
+    ],
+    "max_speed_scale": 1.0,
+    "motor_temp_monitoring_enabled": false,
+    "motor_temp_threshold_c": 75,
+    "motor_temp_poll_interval_s": 2.0,
+    "torque_monitoring_enabled": false,
+    "torque_limit_percent": 120.0,
+    "torque_auto_disable": false
+  },
+  "async_inference": {
+    "server_host": "127.0.0.1",
+    "server_port": 8080,
+    "policy_type": "act",
+    "actions_per_chunk": 30,
+    "chunk_size_threshold": 0.6
+  },
+  "kiosk": {
+    "enabled": true,
+    "preferred_screen": 1,
+    "disable_virtual_keyboard": true,
+    "prevent_accidental_exit": true,
+    "notes": "Kiosk mode: fullscreen by default on secondary screen (7\" touchscreen), Escape disabled, exit via Ctrl+Q or Alt+F4"
+  },
+  "dashboard_state": {
+    "speed_percent": 100,
+    "loop_enabled": false,
+    "run_selection": "🔗 Sequence: VisionTest_03"
+  }
+}
+

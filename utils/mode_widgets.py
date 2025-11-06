@@ -67,9 +67,10 @@ class SingleArmConfig(QFrame):
     set_home_clicked = Signal()
     calibrate_clicked = Signal()
     
-    def __init__(self, arm_name="Arm 1", parent=None):
+    def __init__(self, arm_name="Arm 1", show_home_controls=True, parent=None):
         super().__init__(parent)
         self.arm_name = arm_name
+        self.show_home_controls = show_home_controls
         self.init_ui()
     
     def init_ui(self):
@@ -139,76 +140,88 @@ class SingleArmConfig(QFrame):
         id_row.addWidget(self.id_edit)
         layout.addLayout(id_row)
         
-        # Home positions
-        home_row = QHBoxLayout()
-        home_label = QLabel("Home:")
-        home_label.setStyleSheet("color: #e0e0e0; font-size: 14px; min-width: 100px;")
-        home_row.addWidget(home_label)
-        
-        self.home_edit = QLineEdit()
-        self.home_edit.setPlaceholderText("[2048, 2048, 2048, 2048, 2048, 2048]")
-        self.home_edit.setStyleSheet("""
-            QLineEdit {
-                background-color: #505050;
-                color: #ffffff;
-                border: 2px solid #707070;
-                border-radius: 6px;
-                padding: 8px;
-                font-size: 14px;
-            }
-            QLineEdit:focus {
-                border-color: #4CAF50;
-            }
-        """)
-        home_row.addWidget(self.home_edit)
-        layout.addLayout(home_row)
-        
-        # Home velocity
-        vel_row = QHBoxLayout()
-        vel_label = QLabel("Velocity:")
-        vel_label.setStyleSheet("color: #e0e0e0; font-size: 14px; min-width: 100px;")
-        vel_row.addWidget(vel_label)
-        
-        self.vel_spin = QSpinBox()
-        self.vel_spin.setRange(50, 2000)
-        self.vel_spin.setValue(600)
-        self.vel_spin.setButtonSymbols(QSpinBox.NoButtons)
-        self.vel_spin.setStyleSheet("""
-            QSpinBox {
-                background-color: #505050;
-                color: #ffffff;
-                border: 2px solid #707070;
-                border-radius: 6px;
-                padding: 8px;
-                font-size: 14px;
-            }
-            QSpinBox:focus {
-                border-color: #4CAF50;
-            }
-        """)
-        vel_row.addWidget(self.vel_spin)
-        vel_row.addStretch()
-        layout.addLayout(vel_row)
-        
-        # Control buttons
-        btn_row = QHBoxLayout()
-        
-        self.home_btn = QPushButton("🏠 Home")
-        self.home_btn.setFixedHeight(35)
-        self.home_btn.clicked.connect(self.home_clicked.emit)
-        btn_row.addWidget(self.home_btn)
-        
-        self.set_home_btn = QPushButton("Set Home")
-        self.set_home_btn.setFixedHeight(35)
-        self.set_home_btn.clicked.connect(self.set_home_clicked.emit)
-        btn_row.addWidget(self.set_home_btn)
-        
-        self.calib_btn = QPushButton("Calibrate")
-        self.calib_btn.setFixedHeight(35)
-        self.calib_btn.clicked.connect(self.calibrate_clicked.emit)
-        btn_row.addWidget(self.calib_btn)
-        
-        layout.addLayout(btn_row)
+        # Home positions (only for robot arms, not teleop)
+        if self.show_home_controls:
+            home_row = QHBoxLayout()
+            home_label = QLabel("Home:")
+            home_label.setStyleSheet("color: #e0e0e0; font-size: 14px; min-width: 100px;")
+            home_row.addWidget(home_label)
+            
+            self.home_edit = QLineEdit()
+            self.home_edit.setPlaceholderText("[2048, 2048, 2048, 2048, 2048, 2048]")
+            self.home_edit.setStyleSheet("""
+                QLineEdit {
+                    background-color: #505050;
+                    color: #ffffff;
+                    border: 2px solid #707070;
+                    border-radius: 6px;
+                    padding: 8px;
+                    font-size: 14px;
+                }
+                QLineEdit:focus {
+                    border-color: #4CAF50;
+                }
+            """)
+            home_row.addWidget(self.home_edit)
+            layout.addLayout(home_row)
+            
+            # Home velocity
+            vel_row = QHBoxLayout()
+            vel_label = QLabel("Velocity:")
+            vel_label.setStyleSheet("color: #e0e0e0; font-size: 14px; min-width: 100px;")
+            vel_row.addWidget(vel_label)
+            
+            self.vel_spin = QSpinBox()
+            self.vel_spin.setRange(50, 2000)
+            self.vel_spin.setValue(600)
+            self.vel_spin.setButtonSymbols(QSpinBox.NoButtons)
+            self.vel_spin.setStyleSheet("""
+                QSpinBox {
+                    background-color: #505050;
+                    color: #ffffff;
+                    border: 2px solid #707070;
+                    border-radius: 6px;
+                    padding: 8px;
+                    font-size: 14px;
+                }
+                QSpinBox:focus {
+                    border-color: #4CAF50;
+                }
+            """)
+            vel_row.addWidget(self.vel_spin)
+            vel_row.addStretch()
+            layout.addLayout(vel_row)
+            
+            # Control buttons
+            btn_row = QHBoxLayout()
+            
+            self.home_btn = QPushButton("🏠 Home")
+            self.home_btn.setFixedHeight(35)
+            self.home_btn.clicked.connect(self.home_clicked.emit)
+            btn_row.addWidget(self.home_btn)
+            
+            self.set_home_btn = QPushButton("Set Home")
+            self.set_home_btn.setFixedHeight(35)
+            self.set_home_btn.clicked.connect(self.set_home_clicked.emit)
+            btn_row.addWidget(self.set_home_btn)
+            
+            self.calib_btn = QPushButton("Calibrate")
+            self.calib_btn.setFixedHeight(35)
+            self.calib_btn.clicked.connect(self.calibrate_clicked.emit)
+            btn_row.addWidget(self.calib_btn)
+            
+            layout.addLayout(btn_row)
+        else:
+            # For teleop arms, only show calibrate button
+            btn_row = QHBoxLayout()
+            
+            self.calib_btn = QPushButton("Calibrate")
+            self.calib_btn.setFixedHeight(35)
+            self.calib_btn.clicked.connect(self.calibrate_clicked.emit)
+            btn_row.addWidget(self.calib_btn)
+            btn_row.addStretch()
+            
+            layout.addLayout(btn_row)
     
     # Getters and setters
     def get_port(self): return self.port_edit.text()

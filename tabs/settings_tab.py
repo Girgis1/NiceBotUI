@@ -27,8 +27,8 @@ except ImportError:  # pragma: no cover - optional dependency
 from utils.camera_hub import CameraStreamHub
 from utils.home_move_worker import HomeMoveWorker, HomeMoveRequest
 from utils.multi_arm_widgets import ArmConfigSection
-from utils.config_compat import get_enabled_arms, ensure_multi_arm_config
 from utils.mode_widgets import ModeSelector, SingleArmConfig
+from utils.config_compat import get_enabled_arms, ensure_multi_arm_config
 
 class SettingsTab(QWidget):
     """Settings configuration tab"""
@@ -359,31 +359,81 @@ class SettingsTab(QWidget):
         layout.addSpacing(8)
         
         # ========== ROBOT ARMS (FOLLOWERS) ==========
-        robot_header_row = QHBoxLayout()
-        robot_header_row.setSpacing(10)
-        
         config_section = QLabel("🤖 Robot Arms (Followers)")
         config_section.setStyleSheet("color: #4CAF50; font-size: 15px; font-weight: bold;")
-        robot_header_row.addWidget(config_section)
+        layout.addWidget(config_section)
         
-        robot_header_row.addStretch()
+        # Mode Selector
+        self.robot_mode_selector = ModeSelector()
+        self.robot_mode_selector.mode_changed.connect(self.on_robot_mode_changed)
+        layout.addWidget(self.robot_mode_selector)
         
-        # Add Arm button
-        self.add_robot_arm_btn = QPushButton("➕ Add Arm")
-        self.add_robot_arm_btn.setFixedHeight(35)
-        self.add_robot_arm_btn.setStyleSheet(self.get_button_style("#4CAF50", "#388E3C"))
-        self.add_robot_arm_btn.clicked.connect(self.add_robot_arm)
-        robot_header_row.addWidget(self.add_robot_arm_btn)
+        # Solo Mode UI (Arm selector + config)
+        self.solo_container = QWidget()
+        solo_layout = QVBoxLayout(self.solo_container)
+        solo_layout.setContentsMargins(0, 0, 0, 0)
         
-        layout.addLayout(robot_header_row)
+        # Arm selector dropdown
+        arm_select_row = QHBoxLayout()
+        arm_select_label = QLabel("Select Arm:")
+        arm_select_label.setStyleSheet("color: #e0e0e0; font-size: 14px;")
+        arm_select_row.addWidget(arm_select_label)
         
-        # Container for robot arm widgets
-        self.robot_arms_container = QVBoxLayout()
-        self.robot_arms_container.setSpacing(10)
-        layout.addLayout(self.robot_arms_container)
+        self.solo_arm_selector = QComboBox()
+        self.solo_arm_selector.addItem("Arm 1")
+        self.solo_arm_selector.addItem("Arm 2")
+        self.solo_arm_selector.setStyleSheet("""
+            QComboBox {
+                background-color: #505050;
+                color: #ffffff;
+                border: 2px solid #707070;
+                border-radius: 6px;
+                padding: 8px;
+                font-size: 14px;
+            }
+        """)
+        self.solo_arm_selector.currentIndexChanged.connect(self.on_solo_arm_changed)
+        arm_select_row.addWidget(self.solo_arm_selector)
+        arm_select_row.addStretch()
+        solo_layout.addLayout(arm_select_row)
         
-        # Home All button
-        self.home_all_btn = QPushButton("🏠 Home All Enabled Arms")
+        # Single arm config widget
+        self.solo_arm_config = SingleArmConfig("Arm 1")
+        self.solo_arm_config.home_clicked.connect(lambda: self.home_arm(self.solo_arm_selector.currentIndex()))
+        self.solo_arm_config.set_home_clicked.connect(lambda: self.set_home_arm(self.solo_arm_selector.currentIndex()))
+        self.solo_arm_config.calibrate_clicked.connect(lambda: self.calibrate_arm_at_index(self.solo_arm_selector.currentIndex()))
+        solo_layout.addWidget(self.solo_arm_config)
+        
+        layout.addWidget(self.solo_container)
+        
+        # Bimanual Mode UI (Both arms side by side)
+        self.bimanual_container = QWidget()
+        bimanual_layout = QVBoxLayout(self.bimanual_container)
+        bimanual_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Both arms in horizontal layout
+        arms_row = QHBoxLayout()
+        
+        # Arm 1 config
+        self.robot_arm1_config = SingleArmConfig("Left Arm (Arm 1)")
+        self.robot_arm1_config.home_clicked.connect(lambda: self.home_arm(0))
+        self.robot_arm1_config.set_home_clicked.connect(lambda: self.set_home_arm(0))
+        self.robot_arm1_config.calibrate_clicked.connect(lambda: self.calibrate_arm_at_index(0))
+        arms_row.addWidget(self.robot_arm1_config)
+        
+        # Arm 2 config
+        self.robot_arm2_config = SingleArmConfig("Right Arm (Arm 2)")
+        self.robot_arm2_config.home_clicked.connect(lambda: self.home_arm(1))
+        self.robot_arm2_config.set_home_clicked.connect(lambda: self.set_home_arm(1))
+        self.robot_arm2_config.calibrate_clicked.connect(lambda: self.calibrate_arm_at_index(1))
+        arms_row.addWidget(self.robot_arm2_config)
+        
+        bimanual_layout.addLayout(arms_row)
+        
+        layout.addWidget(self.bimanual_container)
+        
+        # Home All button (for bimanual mode)
+        self.home_all_btn = QPushButton("🏠 Home All Arms")
         self.home_all_btn.setFixedHeight(40)
         self.home_all_btn.setStyleSheet(self.get_button_style("#2196F3", "#1976D2"))
         self.home_all_btn.clicked.connect(self.home_all_arms)
@@ -434,31 +484,31 @@ class SettingsTab(QWidget):
         # Spacer instead of separator
         layout.addSpacing(8)
         
-        # Teleop Port
-        teleop_section = QLabel("🎮 Teleoperation")
-        teleop_section.setStyleSheet("color: #4CAF50; font-size: 14px; font-weight: bold; margin-bottom: 2px;")
+        # ========== TELEOPERATION (LEADERS) ==========
+        teleop_section = QLabel("🎮 Teleoperation (Leaders)")
+        teleop_section.setStyleSheet("color: #4CAF50; font-size: 15px; font-weight: bold;")
         layout.addWidget(teleop_section)
         
-        self.teleop_port_edit = self.add_setting_row(layout, "Teleop Port:", "/dev/ttyACM1")
+        # Mode Selector
+        self.teleop_mode_selector = ModeSelector()
+        self.teleop_mode_selector.mode_changed.connect(self.on_teleop_mode_changed)
+        layout.addWidget(self.teleop_mode_selector)
         
-        # Teleop Calibration ID Row
-        teleop_id_row = QHBoxLayout()
-        teleop_id_row.setSpacing(6)
+        # Solo Mode UI (Arm selector + config)
+        self.teleop_solo_container = QWidget()
+        teleop_solo_layout = QVBoxLayout(self.teleop_solo_container)
+        teleop_solo_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Empty space for alignment
-        teleop_id_row.addSpacing(20)
+        # Arm selector dropdown
+        teleop_arm_select_row = QHBoxLayout()
+        teleop_arm_select_label = QLabel("Select Arm:")
+        teleop_arm_select_label.setStyleSheet("color: #e0e0e0; font-size: 14px;")
+        teleop_arm_select_row.addWidget(teleop_arm_select_label)
         
-        teleop_id_label = QLabel("Calib ID:")
-        teleop_id_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
-        teleop_id_label.setFixedWidth(75)
-        teleop_id_row.addWidget(teleop_id_label)
-        
-        self.teleop_id_combo = QComboBox()
-        self.teleop_id_combo.setEditable(True)
-        # Load existing calibration files
-        self._populate_calibration_ids(self.teleop_id_combo)
-        self.teleop_id_combo.setFixedHeight(45)
-        self.teleop_id_combo.setStyleSheet("""
+        self.teleop_solo_arm_selector = QComboBox()
+        self.teleop_solo_arm_selector.addItem("Arm 1")
+        self.teleop_solo_arm_selector.addItem("Arm 2")
+        self.teleop_solo_arm_selector.setStyleSheet("""
             QComboBox {
                 background-color: #505050;
                 color: #ffffff;
@@ -467,32 +517,37 @@ class SettingsTab(QWidget):
                 padding: 8px;
                 font-size: 14px;
             }
-            QComboBox:focus {
-                border-color: #4CAF50;
-                background-color: #555555;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 30px;
-            }
-            QComboBox::down-arrow {
-                image: none;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 6px solid #ffffff;
-                margin-right: 10px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #505050;
-                color: #ffffff;
-                selection-background-color: #4CAF50;
-                border: 2px solid #707070;
-            }
         """)
-        teleop_id_row.addWidget(self.teleop_id_combo)
-        teleop_id_row.addStretch()
+        self.teleop_solo_arm_selector.currentIndexChanged.connect(self.on_teleop_solo_arm_changed)
+        teleop_arm_select_row.addWidget(self.teleop_solo_arm_selector)
+        teleop_arm_select_row.addStretch()
+        teleop_solo_layout.addLayout(teleop_arm_select_row)
         
-        layout.addLayout(teleop_id_row)
+        # Single arm config widget (no home controls for teleop)
+        self.teleop_solo_arm_config = SingleArmConfig("Leader Arm 1", show_home_controls=False)
+        teleop_solo_layout.addWidget(self.teleop_solo_arm_config)
+        
+        layout.addWidget(self.teleop_solo_container)
+        
+        # Bimanual Mode UI (Both arms side by side)
+        self.teleop_bimanual_container = QWidget()
+        teleop_bimanual_layout = QVBoxLayout(self.teleop_bimanual_container)
+        teleop_bimanual_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Both arms in horizontal layout
+        teleop_arms_row = QHBoxLayout()
+        
+        # Arm 1 config (no home controls for teleop)
+        self.teleop_arm1_config = SingleArmConfig("Left Leader (Arm 1)", show_home_controls=False)
+        teleop_arms_row.addWidget(self.teleop_arm1_config)
+        
+        # Arm 2 config (no home controls for teleop)
+        self.teleop_arm2_config = SingleArmConfig("Right Leader (Arm 2)", show_home_controls=False)
+        teleop_arms_row.addWidget(self.teleop_arm2_config)
+        
+        teleop_bimanual_layout.addLayout(teleop_arms_row)
+        
+        layout.addWidget(self.teleop_bimanual_container)
         
         
         # Position verification settings
@@ -1040,12 +1095,98 @@ class SettingsTab(QWidget):
         layout.addLayout(row)
         return spin
     
+    def on_robot_mode_changed(self, mode: str):
+        """Handle robot mode change (solo/bimanual)"""
+        if mode == "solo":
+            self.solo_container.setVisible(True)
+            self.bimanual_container.setVisible(False)
+            self.home_all_btn.setText("🏠 Home Current Arm")
+        else:  # bimanual
+            self.solo_container.setVisible(False)
+            self.bimanual_container.setVisible(True)
+            self.home_all_btn.setText("🏠 Home All Arms")
+    
+    def on_solo_arm_changed(self, index: int):
+        """Handle solo arm selection change"""
+        # Load config for selected arm
+        arms = self.config.get("robot", {}).get("arms", [])
+        if index < len(arms):
+            arm = arms[index]
+            self.solo_arm_config.set_port(arm.get("port", ""))
+            self.solo_arm_config.set_id(arm.get("id", ""))
+            self.solo_arm_config.set_home_positions(arm.get("home_positions", []))
+            self.solo_arm_config.set_velocity(arm.get("home_velocity", 600))
+            
+            # Update label
+            arm_name = f"Arm {index + 1}"
+            # Find the label widget and update it
+            for child in self.solo_arm_config.findChildren(QLabel):
+                if "🤖" in child.text():
+                    child.setText(f"🤖 {arm_name}")
+                    break
+    
+    def on_teleop_mode_changed(self, mode: str):
+        """Handle teleop mode change (solo/bimanual)"""
+        if mode == "solo":
+            self.teleop_solo_container.setVisible(True)
+            self.teleop_bimanual_container.setVisible(False)
+        else:  # bimanual
+            self.teleop_solo_container.setVisible(False)
+            self.teleop_bimanual_container.setVisible(True)
+    
+    def on_teleop_solo_arm_changed(self, index: int):
+        """Handle teleop solo arm selection change"""
+        # Load config for selected arm
+        arms = self.config.get("teleop", {}).get("arms", [])
+        if index < len(arms):
+            arm = arms[index]
+            self.teleop_solo_arm_config.set_port(arm.get("port", ""))
+            self.teleop_solo_arm_config.set_id(arm.get("id", ""))
+            
+            # Update label
+            arm_name = f"Leader Arm {index + 1}"
+            # Find the label widget and update it
+            for child in self.teleop_solo_arm_config.findChildren(QLabel):
+                if "🤖" in child.text():
+                    child.setText(f"🤖 {arm_name}")
+                    break
+    
     def load_settings(self):
         """Load settings from config"""
         from utils.config_compat import get_arm_config, get_home_velocity
         
-        # Populate robot arms from config
-        self.populate_robot_arms_from_config()
+        # Load robot mode and set UI
+        robot_mode = self.config.get("robot", {}).get("mode", "solo")
+        self.robot_mode_selector.set_mode(robot_mode)
+        self.on_robot_mode_changed(robot_mode)  # Update UI visibility
+        
+        # Load arm configurations
+        arms = self.config.get("robot", {}).get("arms", [])
+        
+        if len(arms) >= 1:
+            # Load Arm 1
+            arm1 = arms[0]
+            if self.robot_arm1_config:
+                self.robot_arm1_config.set_port(arm1.get("port", ""))
+                self.robot_arm1_config.set_id(arm1.get("id", ""))
+                self.robot_arm1_config.set_home_positions(arm1.get("home_positions", []))
+                self.robot_arm1_config.set_velocity(arm1.get("home_velocity", 600))
+            if self.solo_arm_config:
+                self.solo_arm_config.set_port(arm1.get("port", ""))
+                self.solo_arm_config.set_id(arm1.get("id", ""))
+                self.solo_arm_config.set_home_positions(arm1.get("home_positions", []))
+                self.solo_arm_config.set_velocity(arm1.get("home_velocity", 600))
+        
+        if len(arms) >= 2:
+            # Load Arm 2
+            arm2 = arms[1]
+            if self.robot_arm2_config:
+                self.robot_arm2_config.set_port(arm2.get("port", ""))
+                self.robot_arm2_config.set_id(arm2.get("id", ""))
+                self.robot_arm2_config.set_home_positions(arm2.get("home_positions", []))
+                self.robot_arm2_config.set_velocity(arm2.get("home_velocity", 600))
+        
+        # Note: Robot arms are now loaded directly into mode selector widgets above
         
         # Shared robot settings
         self.robot_fps_spin.setValue(self.config.get("robot", {}).get("fps", 30))
@@ -1056,12 +1197,30 @@ class SettingsTab(QWidget):
         home_vel = get_home_velocity(self.config, 0)
         self.rest_velocity_spin.setValue(home_vel)
         
-        # Teleop settings (first arm - for backward compat)
-        teleop_arm = get_arm_config(self.config, 0, "teleop")
-        if teleop_arm and hasattr(self, 'teleop_port_edit'):
-            self.teleop_port_edit.setText(teleop_arm.get("port", "/dev/ttyACM1"))
-            if hasattr(self, 'teleop_id_combo'):
-                self.teleop_id_combo.setCurrentText(teleop_arm.get("id", "leader_arm"))
+        # Load teleop mode and set UI
+        teleop_mode = self.config.get("teleop", {}).get("mode", "solo")
+        self.teleop_mode_selector.set_mode(teleop_mode)
+        self.on_teleop_mode_changed(teleop_mode)  # Update UI visibility
+        
+        # Load teleop arm configurations
+        teleop_arms = self.config.get("teleop", {}).get("arms", [])
+        
+        if len(teleop_arms) >= 1:
+            # Load Leader 1
+            teleop_arm1 = teleop_arms[0]
+            if self.teleop_arm1_config:
+                self.teleop_arm1_config.set_port(teleop_arm1.get("port", ""))
+                self.teleop_arm1_config.set_id(teleop_arm1.get("id", ""))
+            if self.teleop_solo_arm_config:
+                self.teleop_solo_arm_config.set_port(teleop_arm1.get("port", ""))
+                self.teleop_solo_arm_config.set_id(teleop_arm1.get("id", ""))
+        
+        if len(teleop_arms) >= 2:
+            # Load Leader 2
+            teleop_arm2 = teleop_arms[1]
+            if self.teleop_arm2_config:
+                self.teleop_arm2_config.set_port(teleop_arm2.get("port", ""))
+                self.teleop_arm2_config.set_id(teleop_arm2.get("id", ""))
         
         # Camera settings
         front_cam = self.config.get("cameras", {}).get("front", {})
@@ -1108,24 +1267,96 @@ class SettingsTab(QWidget):
         # Ensure config is in multi-arm format
         self.config = ensure_multi_arm_config(self.config)
         
-        # Save all robot arms from widgets
+        # Save all robot arms from new UI widgets
         if "robot" not in self.config:
             self.config["robot"] = {"arms": []}
         
-        # Clear and rebuild arms array from widgets
-        self.config["robot"]["arms"] = []
-        for i, widget in enumerate(self.robot_arm_widgets):
-            arm = {
-                "enabled": widget.get_enabled(),
-                "name": widget.arm_name,
-                "type": "so100_follower",  # Default type
-                "port": widget.get_port(),
-                "id": widget.get_id(),
-                "arm_id": i + 1,  # 1-indexed arm IDs
-                "home_positions": widget.get_home_positions(),
-                "home_velocity": widget.get_home_velocity()
+        mode = self.robot_mode_selector.get_mode()
+        
+        # Always maintain 2 arms in config
+        arms = []
+        
+        # Arm 1
+        if mode == "solo":
+            # Solo mode: Save from solo_arm_config for the currently selected arm
+            # Preserve data for the non-selected arm
+            current_arm_index = self.solo_arm_selector.currentIndex()
+            existing_arms = self.config.get("robot", {}).get("arms", [{}, {}])
+            
+            # Ensure we have at least 2 arm slots
+            while len(existing_arms) < 2:
+                existing_arms.append({})
+            
+            # Arm 1: If currently selected, save from UI; otherwise preserve existing
+            if current_arm_index == 0:
+                arm1_data = {
+                    "enabled": True,
+                    "name": "Follower 1",
+                    "type": "so100_follower",
+                    "port": self.solo_arm_config.get_port(),
+                    "id": self.solo_arm_config.get_id(),
+                    "arm_id": 1,
+                    "home_positions": self.solo_arm_config.get_home_positions(),
+                    "home_velocity": self.solo_arm_config.get_velocity()
+                }
+            else:
+                arm1_data = existing_arms[0] if len(existing_arms) > 0 else {}
+                arm1_data.update({
+                    "enabled": False,
+                    "name": "Follower 1",
+                    "type": "so100_follower",
+                    "arm_id": 1
+                })
+            arms.append(arm1_data)
+            
+            # Arm 2: If currently selected, save from UI; otherwise preserve existing
+            if current_arm_index == 1:
+                arm2_data = {
+                    "enabled": True,
+                    "name": "Follower 2",
+                    "type": "so100_follower",
+                    "port": self.solo_arm_config.get_port(),
+                    "id": self.solo_arm_config.get_id(),
+                    "arm_id": 2,
+                    "home_positions": self.solo_arm_config.get_home_positions(),
+                    "home_velocity": self.solo_arm_config.get_velocity()
+                }
+            else:
+                arm2_data = existing_arms[1] if len(existing_arms) > 1 else {}
+                arm2_data.update({
+                    "enabled": False,
+                    "name": "Follower 2",
+                    "type": "so100_follower",
+                    "arm_id": 2
+                })
+            arms.append(arm2_data)
+        else:
+            # Bimanual mode: Save from both arm configs
+            arm1_data = {
+                "enabled": True,
+                "name": "Follower 1",
+                "type": "so100_follower",
+                "port": self.robot_arm1_config.get_port(),
+                "id": self.robot_arm1_config.get_id(),
+                "arm_id": 1,
+                "home_positions": self.robot_arm1_config.get_home_positions(),
+                "home_velocity": self.robot_arm1_config.get_velocity()
             }
-            self.config["robot"]["arms"].append(arm)
+            arms.append(arm1_data)
+            
+            arm2_data = {
+                "enabled": True,
+                "name": "Follower 2",
+                "type": "so100_follower",
+                "port": self.robot_arm2_config.get_port(),
+                "id": self.robot_arm2_config.get_id(),
+                "arm_id": 2,
+                "home_positions": self.robot_arm2_config.get_home_positions(),
+                "home_velocity": self.robot_arm2_config.get_velocity()
+            }
+            arms.append(arm2_data)
+        
+        self.config["robot"]["arms"] = arms
         
         # Save robot mode (default to solo if not set)
         if self.robot_mode_selector:
@@ -1138,33 +1369,94 @@ class SettingsTab(QWidget):
         self.config["robot"]["position_tolerance"] = self.position_tolerance_spin.value()
         self.config["robot"]["position_verification_enabled"] = self.position_verification_check.isChecked()
         
-        # Teleop arms (keep existing or create minimal)
+        # Save teleop arms from new UI widgets
         if "teleop" not in self.config:
             self.config["teleop"] = {"arms": []}
-        if "arms" not in self.config["teleop"]:
-            self.config["teleop"]["arms"] = []
         
-        # Keep first teleop arm if it exists
-        if len(self.config["teleop"]["arms"]) == 0:
-            self.config["teleop"]["arms"].append({
+        teleop_mode = self.teleop_mode_selector.get_mode()
+        
+        # Always maintain 2 teleop arms in config
+        teleop_arms = []
+        
+        # Teleop Arm 1
+        if teleop_mode == "solo":
+            # Solo mode: Save from solo_arm_config for the currently selected arm
+            # Preserve data for the non-selected arm
+            current_arm_index = self.teleop_solo_arm_selector.currentIndex()
+            existing_teleop_arms = self.config.get("teleop", {}).get("arms", [{}, {}])
+            
+            # Ensure we have at least 2 arm slots
+            while len(existing_teleop_arms) < 2:
+                existing_teleop_arms.append({})
+            
+            # Arm 1: If currently selected, save from UI; otherwise preserve existing
+            if current_arm_index == 0:
+                teleop_arm1_data = {
+                    "enabled": True,
+                    "name": "Leader 1",
+                    "type": "so100_leader",
+                    "port": self.teleop_solo_arm_config.get_port(),
+                    "id": self.teleop_solo_arm_config.get_id(),
+                    "arm_id": 1
+                }
+            else:
+                teleop_arm1_data = existing_teleop_arms[0] if len(existing_teleop_arms) > 0 else {}
+                teleop_arm1_data.update({
+                    "enabled": False,
+                    "name": "Leader 1",
+                    "type": "so100_leader",
+                    "arm_id": 1
+                })
+            teleop_arms.append(teleop_arm1_data)
+            
+            # Arm 2: If currently selected, save from UI; otherwise preserve existing
+            if current_arm_index == 1:
+                teleop_arm2_data = {
+                    "enabled": True,
+                    "name": "Leader 2",
+                    "type": "so100_leader",
+                    "port": self.teleop_solo_arm_config.get_port(),
+                    "id": self.teleop_solo_arm_config.get_id(),
+                    "arm_id": 2
+                }
+            else:
+                teleop_arm2_data = existing_teleop_arms[1] if len(existing_teleop_arms) > 1 else {}
+                teleop_arm2_data.update({
+                    "enabled": False,
+                    "name": "Leader 2",
+                    "type": "so100_leader",
+                    "arm_id": 2
+                })
+            teleop_arms.append(teleop_arm2_data)
+        else:
+            # Bimanual mode: Save from both arm configs
+            teleop_arm1_data = {
                 "enabled": True,
                 "name": "Leader 1",
                 "type": "so100_leader",
-                "port": "/dev/ttyACM1",
-                "id": "leader_arm"
-            })
+                "port": self.teleop_arm1_config.get_port(),
+                "id": self.teleop_arm1_config.get_id(),
+                "arm_id": 1
+            }
+            teleop_arms.append(teleop_arm1_data)
+            
+            teleop_arm2_data = {
+                "enabled": True,
+                "name": "Leader 2",
+                "type": "so100_leader",
+                "port": self.teleop_arm2_config.get_port(),
+                "id": self.teleop_arm2_config.get_id(),
+                "arm_id": 2
+            }
+            teleop_arms.append(teleop_arm2_data)
+        
+        self.config["teleop"]["arms"] = teleop_arms
         
         # Save teleop mode (default to solo if not set)
         if self.teleop_mode_selector:
             self.config["teleop"]["mode"] = self.teleop_mode_selector.get_mode()
         elif "mode" not in self.config.get("teleop", {}):
             self.config["teleop"]["mode"] = "solo"
-        
-        # Update teleop from old UI if it exists
-        if hasattr(self, 'teleop_port_edit'):
-            self.config["teleop"]["arms"][0]["port"] = self.teleop_port_edit.text()
-        if hasattr(self, 'teleop_id_combo'):
-            self.config["teleop"]["arms"][0]["id"] = self.teleop_id_combo.currentText()
         
         # Camera settings
         if "cameras" not in self.config:
