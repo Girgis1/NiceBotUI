@@ -1027,7 +1027,6 @@ class SettingsTab(QWidget):
             self.solo_arm_config.set_port(arm.get("port", ""))
             self.solo_arm_config.set_id(arm.get("id", ""))
             self.solo_arm_config.set_home_positions(arm.get("home_positions", []))
-            self.solo_arm_config.set_velocity(arm.get("home_velocity", 600))
             
             # Update label
             arm_name = f"Arm {index + 1}"
@@ -2109,36 +2108,46 @@ class SettingsTab(QWidget):
             motor_controller = MotorController(self.config, arm_index=arm_index)
             
             if not motor_controller.connect():
-                self.status_label.setText("❌ Failed to connect to motors")
+                self.status_label.setText(f"❌ Failed to connect to Arm {arm_index + 1}")
                 return
             
             positions = motor_controller.read_positions()
             motor_controller.disconnect()
             
             if positions is None:
-                self.status_label.setText("❌ Failed to read positions")
+                self.status_label.setText(f"❌ Failed to read positions from Arm {arm_index + 1}")
                 return
             
-            # Save to config
+            # Save to config using config_compat
             set_home_positions(self.config, positions, arm_index)
             
-            # Also update velocity
+            # Update the velocity to use master velocity
             if "arms" in self.config.get("robot", {}) and arm_index < len(self.config["robot"]["arms"]):
-                if arm_index < len(self.robot_arm_widgets):
-                    velocity = self.robot_arm_widgets[arm_index].get_home_velocity()
-                    self.config["robot"]["arms"][arm_index]["home_velocity"] = velocity
-                    # Update widget display
-                    self.robot_arm_widgets[arm_index].set_home_positions(positions)
+                self.config["robot"]["arms"][arm_index]["home_velocity"] = self.rest_velocity_spin.value()
+            
+            # Update the UI widget display
+            if arm_index == 0:
+                if hasattr(self, 'robot_arm1_config'):
+                    self.robot_arm1_config.set_home_positions(positions)
+                if hasattr(self, 'solo_arm_config') and self.solo_arm_selector.currentIndex() == 0:
+                    self.solo_arm_config.set_home_positions(positions)
+            elif arm_index == 1:
+                if hasattr(self, 'robot_arm2_config'):
+                    self.robot_arm2_config.set_home_positions(positions)
+                if hasattr(self, 'solo_arm_config') and self.solo_arm_selector.currentIndex() == 1:
+                    self.solo_arm_config.set_home_positions(positions)
             
             # Write to file
             with open(self.config_path, 'w') as f:
                 json.dump(self.config, f, indent=2)
             
-            self.status_label.setText(f"✓ Home saved for Arm {arm_index + 1}: {positions}")
+            self.status_label.setText(f"✓ Home position saved for Arm {arm_index + 1}: {positions}")
+            self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
             self.config_changed.emit()
             
         except Exception as e:
-            self.status_label.setText(f"❌ Error: {str(e)}")
+            self.status_label.setText(f"❌ Error setting home for Arm {arm_index + 1}: {str(e)}")
+            self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
     
     def calibrate_arm_at_index(self, arm_index: int):
         """Calibrate a specific arm"""
