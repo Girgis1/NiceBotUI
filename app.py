@@ -6,11 +6,12 @@ Touch-friendly interface for SO-100/101 robot control with action recording
 
 import sys
 import json
+import fcntl
 from pathlib import Path
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QStackedWidget, QPushButton, QButtonGroup
+    QStackedWidget, QPushButton, QButtonGroup, QMessageBox
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPalette, QColor, QShortcut, QKeySequence
@@ -42,6 +43,10 @@ class MainWindow(QMainWindow):
         self.device_manager = DeviceManager(self.config)
         
         self.init_ui()
+        
+        # Add Ctrl+Q shortcut to quit
+        quit_shortcut = QShortcut(QKeySequence("Ctrl+Q"), self)
+        quit_shortcut.activated.connect(self.close)
         
         # Set fullscreen if requested
         if self.fullscreen_mode:
@@ -416,6 +421,15 @@ def main():
     fullscreen = not (args.windowed or args.no_fullscreen)
 
     try:
+        # Single instance lock
+        lockfile_path = Path.home() / '.nicebot.lock'
+        lockfile = open(lockfile_path, 'w')
+        try:
+            fcntl.lockf(lockfile, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except IOError:
+            print("NiceBot UI is already running!")
+            sys.exit(1)
+        
         app = QApplication(sys.argv)
         
         # Set application style and palette once

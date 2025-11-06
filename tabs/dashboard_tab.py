@@ -736,12 +736,13 @@ class DashboardTab(QWidget):
         # Log text area (expand to fill height)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
+        # Set font with emoji support
+        log_font = QFont("DejaVu Sans Mono, Noto Color Emoji, monospace", 13)
+        self.log_text.setFont(log_font)
         self.log_text.setStyleSheet("""
             QTextEdit {
                 background-color: #2d2d2d;
                 color: #ffffff;
-                font-family: monospace;
-                font-size: 13px;
                 border: 1px solid #404040;
                 border-radius: 4px;
             }
