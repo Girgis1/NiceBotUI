@@ -410,15 +410,23 @@ class CompositeSequence:
             return ""
     
     def add_home_step(self, name: str = "Home", enabled: bool = True, 
-                     delay_after: float = 0.0) -> str:
+                     delay_after: float = 0.0, home_arm_1: bool = True,
+                     home_arm_2: bool = True) -> str:
         """Create and save a home step
+        
+        Args:
+            name: Name for the step
+            enabled: Whether step is enabled
+            delay_after: Delay in seconds after this step
+            home_arm_1: Whether to home arm 1
+            home_arm_2: Whether to home arm 2
         
         Returns:
             step_id: ID of created step
         """
         try:
             # Create step object
-            step_obj = HomeStep(name, enabled, delay_after)
+            step_obj = HomeStep(name, enabled, delay_after, home_arm_1, home_arm_2)
             
             # Generate filename
             filename = f"{self._next_step_number:02d}_{name.lower().replace(' ', '_')}_home.json"

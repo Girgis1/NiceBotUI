@@ -496,7 +496,9 @@ class ExecutionWorker(QThread):
                     
                     elif step_type == "home":
                         # Return to home position
-                        self._execute_home_inline()
+                        home_arm_1 = step.get("home_arm_1", True)
+                        home_arm_2 = step.get("home_arm_2", True)
+                        self._execute_home_inline(home_arm_1, home_arm_2)
                         
                     elif step_type == "model":
                         # Execute trained policy model
@@ -958,34 +960,74 @@ class ExecutionWorker(QThread):
             if remaining > 0:
                 time.sleep(remaining)
     
-    def _execute_home_inline(self):
-        """Return arm Home"""
-        # Connect if not already connected
-        if not self.motor_controller.bus:
-            if not self.motor_controller.connect():
-                self.log_message.emit('error', "Failed to connect to motors")
-                return
+    def _execute_home_inline(self, home_arm_1: bool = True, home_arm_2: bool = True):
+        """Return arm(s) to home position
         
-        # Get home position from config (rest_position, not home_position!)
-        rest_config = self.config.get("rest_position", {})
-        home_positions = rest_config.get("positions", [2048, 2048, 2048, 2048, 2048, 2048])
-        home_velocity = rest_config.get("velocity", 600)
+        Args:
+            home_arm_1: Whether to home arm 1
+            home_arm_2: Whether to home arm 2
+        """
+        from utils.config_compat import get_home_positions, get_home_velocity
+        from utils.motor_controller import MotorController
         
-        self.log_message.emit('info', f"Moving to home position: {home_positions}")
+        # Get all robot arms
+        robot_arms = self.config.get("robot", {}).get("arms", [])
         
-        try:
-            # Move to home position
-            self.motor_controller.set_positions(
-                home_positions,
-                velocity=home_velocity,
-                wait=True,
-                keep_connection=True
-            )
+        # Collect arms to home based on flags and arm_id
+        arms_to_home = []
+        for i, arm in enumerate(robot_arms):
+            if not arm.get("enabled", False):
+                continue
+                
+            arm_id = arm.get("arm_id", i + 1)
             
-            self.log_message.emit('info', "✓ Reached home position")
+            # Check if this arm should be homed based on flags
+            if arm_id == 1 and not home_arm_1:
+                continue
+            if arm_id == 2 and not home_arm_2:
+                continue
+            if arm_id > 2:  # Future: Support more arms
+                continue
+                
+            arms_to_home.append((i, arm_id, arm.get("name", f"Arm {arm_id}")))
+        
+        if not arms_to_home:
+            self.log_message.emit('warning', "No arms selected for homing")
+            return
+        
+        # Home each selected arm
+        for arm_index, arm_id, arm_name in arms_to_home:
+            home_positions = get_home_positions(self.config, arm_index)
+            home_velocity = get_home_velocity(self.config, arm_index)
             
-        except Exception as e:
-            self.log_message.emit('error', f"Failed to reach home: {e}")
+            if not home_positions:
+                self.log_message.emit('warning', f"No home position configured for {arm_name}")
+                continue
+            
+            self.log_message.emit('info', f"Homing {arm_name} (Arm {arm_id}): {home_positions}")
+            
+            try:
+                # Create controller for this specific arm
+                arm_controller = MotorController(self.config, arm_index=arm_index)
+                
+                if not arm_controller.bus:
+                    if not arm_controller.connect():
+                        self.log_message.emit('error', f"Failed to connect to {arm_name}")
+                        continue
+                
+                # Move to home position
+                arm_controller.set_positions(
+                    home_positions,
+                    velocity=home_velocity,
+                    wait=True,
+                    keep_connection=False
+                )
+                
+                arm_controller.disconnect()
+                self.log_message.emit('info', f"✓ {arm_name} reached home position")
+                
+            except Exception as e:
+                self.log_message.emit('error', f"Failed to home {arm_name}: {e}")
 
     def _stabilize_arm_after_model(self, hold_seconds: float = 1.0) -> bool:
         """Re-enable torque and hold current pose after model execution.

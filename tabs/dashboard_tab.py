@@ -310,6 +310,7 @@ class DashboardTab(QWidget):
         self._last_vision_signature = None
         self._home_thread: Optional[QThread] = None
         self._home_worker: Optional[HomeMoveWorker] = None
+        self._home_arms_queue: List[Dict] = []  # Queue for multi-arm homing
         self._fatal_error_active = False
         self._last_log_code: Optional[str] = None
         self._last_log_message: Optional[str] = None
@@ -2028,7 +2029,9 @@ class DashboardTab(QWidget):
             )
     
     def go_home(self):
-        """Move to the configured home position without blocking the UI thread."""
+        """Move all enabled robot arms to their configured home positions."""
+        from utils.config_compat import get_enabled_arms
+        
         if self._home_thread and self._home_thread.isRunning():
             self._append_log_entry(
                 "warning",
@@ -2037,35 +2040,93 @@ class DashboardTab(QWidget):
             )
             return
 
-        rest_config = self.config.get("rest_position", {}) if self.config else {}
-        if not rest_config.get("positions"):
-            self.action_label.setText("⚠️ No home position configured")
+        # Get all enabled robot arms
+        enabled_arms = get_enabled_arms(self.config, "robot")
+        
+        if not enabled_arms:
+            self.action_label.setText("⚠️ No robot arms configured")
             self._append_log_entry(
                 "error",
-                "No home position configured. Set home first in Settings.",
+                "No enabled robot arms found. Configure arms in Settings.",
+                code="home_no_arms",
+            )
+            return
+        
+        # Check that at least one arm has home positions
+        has_home = any(arm.get("home_positions") for arm in enabled_arms)
+        if not has_home:
+            self.action_label.setText("⚠️ No home positions configured")
+            self._append_log_entry(
+                "error",
+                "No home positions configured. Set home in Settings.",
                 code="home_not_configured",
             )
             return
 
-        home_velocity = rest_config.get("velocity")
-
-        self.action_label.setText("Moving to home...")
+        self.action_label.setText("Homing all enabled arms...")
         self._append_log_entry(
             "info",
-            "Moving to the home position…",
+            f"Homing {len(enabled_arms)} arm(s)…",
             code="home_start",
         )
-        if home_velocity is not None:
+        self.home_btn.setEnabled(False)
+
+        # Home each enabled arm
+        self._home_arms_queue = []
+        for i, arm in enumerate(enabled_arms):
+            arm_id = arm.get("arm_id", i + 1)
+            arm_name = arm.get("name", f"Arm {arm_id}")
+            home_velocity = arm.get("home_velocity")
+            
+            # Find arm index in config
+            robot_arms = self.config.get("robot", {}).get("arms", [])
+            arm_index = next((idx for idx, a in enumerate(robot_arms) if a.get("arm_id") == arm_id), i)
+            
+            self._home_arms_queue.append({
+                "arm_index": arm_index,
+                "arm_id": arm_id,
+                "arm_name": arm_name,
+                "velocity": home_velocity
+            })
+        
+        # Start homing first arm
+        self._home_next_arm()
+    
+    def _home_next_arm(self):
+        """Home the next arm in the queue"""
+        if not self._home_arms_queue:
+            # All done
+            self.action_label.setText("✅ All arms homed")
+            self._append_log_entry(
+                "success",
+                "All enabled arms have been homed.",
+                code="home_complete",
+            )
+            self.home_btn.setEnabled(True)
+            return
+        
+        arm_info = self._home_arms_queue.pop(0)
+        arm_index = arm_info["arm_index"]
+        arm_name = arm_info["arm_name"]
+        velocity = arm_info["velocity"]
+        
+        self.action_label.setText(f"Homing {arm_name}...")
+        self._append_log_entry(
+            "info",
+            f"Homing {arm_name} (Arm {arm_info['arm_id']})…",
+            code="home_arm_start",
+        )
+        if velocity is not None:
             self._append_log_entry(
                 "speed",
-                f"Home velocity set to {home_velocity}.",
+                f"Velocity: {velocity}",
                 code="home_speed",
             )
-        self.home_btn.setEnabled(False)
 
         request = HomeMoveRequest(
             config=self.config,
-            velocity_override=home_velocity,
+            velocity_override=velocity,
+            arm_index=arm_index
         )
 
         worker = HomeMoveWorker(request)
@@ -2073,7 +2134,7 @@ class DashboardTab(QWidget):
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.progress.connect(self._on_home_progress)
-        worker.finished.connect(self._on_home_finished)
+        worker.finished.connect(self._on_home_finished_multi)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(self._on_home_thread_finished)
@@ -2082,6 +2143,16 @@ class DashboardTab(QWidget):
         self._home_worker = worker
 
         thread.start()
+    
+    def _on_home_finished_multi(self, success: bool, message: str) -> None:
+        """Handle completion of single arm home, then move to next"""
+        if success:
+            self._append_log_entry("success", message, code="home_arm_success")
+        else:
+            self._append_log_entry("error", message, code="home_arm_error")
+        
+        # Continue to next arm
+        self._home_next_arm()
 
     def _on_home_progress(self, message: str) -> None:
         self.action_label.setText(message)

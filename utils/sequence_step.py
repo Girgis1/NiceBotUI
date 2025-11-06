@@ -245,11 +245,22 @@ class VisionStep(SequenceStep):
 class HomeStep(SequenceStep):
     """Home position step
     
-    Returns robot arm to configured rest/home position.
+    Returns robot arm(s) to configured rest/home position.
+    Supports multi-arm selection via home_arm_1 and home_arm_2 flags.
     """
     
-    def __init__(self, name: str = "Home", enabled: bool = True, delay_after: float = 0.0):
+    def __init__(self, name: str = "Home", enabled: bool = True, delay_after: float = 0.0,
+                 home_arm_1: bool = True, home_arm_2: bool = True):
         super().__init__("home", name, enabled, delay_after)
+        self.home_arm_1 = home_arm_1
+        self.home_arm_2 = home_arm_2
+    
+    def to_dict(self) -> dict:
+        """Convert to dictionary with arm selection"""
+        data = super().to_dict()
+        data["home_arm_1"] = self.home_arm_1
+        data["home_arm_2"] = self.home_arm_2
+        return data
     
     @staticmethod
     def from_dict(data: dict) -> 'HomeStep':
@@ -257,7 +268,9 @@ class HomeStep(SequenceStep):
         step = HomeStep(
             name=data.get("name", "Home"),
             enabled=data.get("enabled", True),
-            delay_after=data.get("delay_after", 0.0)
+            delay_after=data.get("delay_after", 0.0),
+            home_arm_1=data.get("home_arm_1", True),  # Default both arms enabled
+            home_arm_2=data.get("home_arm_2", True)
         )
         
         # Restore metadata if available

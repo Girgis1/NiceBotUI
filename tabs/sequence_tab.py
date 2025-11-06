@@ -10,7 +10,7 @@ from typing import Optional
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QComboBox, QInputDialog, QMessageBox, QListWidget, QListWidgetItem,
-    QDialog
+    QDialog, QCheckBox, QFrame
 )
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor
@@ -50,6 +50,58 @@ except ImportError:
                 "zones": [],
             },
         }
+
+
+class HomeStepWidget(QFrame):
+    """Custom widget for home steps with arm selection checkboxes"""
+    
+    def __init__(self, step_number: int, step_data: dict, parent=None):
+        super().__init__(parent)
+        self.step_data = step_data
+        self.step_number = step_number
+        
+        # Set background color for home steps
+        self.setStyleSheet("""
+            HomeStepWidget {
+                background-color: #1b5e20;
+                border-radius: 4px;
+                padding: 4px;
+            }
+        """)
+        
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(12)
+        
+        # Step label
+        label = QLabel(f"{step_number}. 🏠 Home:")
+        label.setStyleSheet("color: white; font-weight: bold;")
+        layout.addWidget(label)
+        
+        # Arm 1 checkbox
+        self.arm1_check = QCheckBox("Arm 1")
+        self.arm1_check.setChecked(step_data.get("home_arm_1", True))
+        self.arm1_check.setStyleSheet("color: white;")
+        self.arm1_check.stateChanged.connect(self._on_arm_changed)
+        layout.addWidget(self.arm1_check)
+        
+        # Arm 2 checkbox
+        self.arm2_check = QCheckBox("Arm 2")
+        self.arm2_check.setChecked(step_data.get("home_arm_2", True))
+        self.arm2_check.setStyleSheet("color: white;")
+        self.arm2_check.stateChanged.connect(self._on_arm_changed)
+        layout.addWidget(self.arm2_check)
+        
+        layout.addStretch()
+    
+    def _on_arm_changed(self):
+        """Update step data when checkboxes change"""
+        self.step_data["home_arm_1"] = self.arm1_check.isChecked()
+        self.step_data["home_arm_2"] = self.arm2_check.isChecked()
+    
+    def get_step_data(self) -> dict:
+        """Return updated step data"""
+        return self.step_data
 
 
 class SequenceTab(QWidget):
@@ -455,8 +507,19 @@ class SequenceTab(QWidget):
             text = f"{number}. ⏱️ Delay: {duration:.1f}s"
             color = QColor("#FF9800")
         elif step_type == "home":
-            text = f"{number}. 🏠 Home: Return Home"
-            color = QColor("#4CAF50")
+            # Use custom widget for home steps with arm checkboxes
+            item = QListWidgetItem()
+            item.setData(Qt.UserRole, step)
+            self.steps_list.addItem(item)
+            
+            # Create and set custom widget
+            widget = HomeStepWidget(number, step, self)
+            self.steps_list.setItemWidget(item, widget)
+            
+            # Set size hint to fit widget content
+            item.setSizeHint(widget.sizeHint())
+            return  # Early return since we handled this differently
+            
         elif step_type == "vision":
             text = self._format_vision_step_text(step, number)
             color = QColor("#AA00FF")
@@ -575,11 +638,21 @@ class SequenceTab(QWidget):
         """Renumber all steps after reordering or deletion"""
         for idx in range(self.steps_list.count()):
             item = self.steps_list.item(idx)
-            text = item.text()
-            # Replace number at start
-            parts = text.split(". ", 1)
-            if len(parts) == 2:
-                item.setText(f"{idx + 1}. {parts[1]}")
+            
+            # Check if this is a custom widget (like HomeStepWidget)
+            widget = self.steps_list.itemWidget(item)
+            if widget and isinstance(widget, HomeStepWidget):
+                # Recreate widget with new number
+                step_data = widget.get_step_data()
+                new_widget = HomeStepWidget(idx + 1, step_data, self)
+                self.steps_list.setItemWidget(item, new_widget)
+            else:
+                # Regular text item
+                text = item.text()
+                # Replace number at start
+                parts = text.split(". ", 1)
+                if len(parts) == 2:
+                    item.setText(f"{idx + 1}. {parts[1]}")
     
     def get_all_steps(self) -> list:
         """Get all steps as list of dicts"""
@@ -587,6 +660,12 @@ class SequenceTab(QWidget):
         for idx in range(self.steps_list.count()):
             item = self.steps_list.item(idx)
             step_data = item.data(Qt.UserRole)
+            
+            # For home steps with custom widgets, get updated data from widget
+            widget = self.steps_list.itemWidget(item)
+            if widget and isinstance(widget, HomeStepWidget):
+                step_data = widget.get_step_data()
+            
             if step_data:
                 steps.append(step_data)
         return steps

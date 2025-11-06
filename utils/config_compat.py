@@ -225,7 +225,20 @@ def migrate_to_multi_arm(config: Dict[str, Any]) -> Dict[str, Any]:
         New configuration dictionary with arms array
     """
     if is_multi_arm_config(config):
-        return config  # Already in new format
+        # Already in new format, but ensure arm_id exists
+        robot_cfg = config.get("robot", {})
+        if "arms" in robot_cfg:
+            for i, arm in enumerate(robot_cfg["arms"]):
+                if "arm_id" not in arm:
+                    arm["arm_id"] = i + 1  # 1-indexed arm IDs
+        
+        teleop_cfg = config.get("teleop", {})
+        if "arms" in teleop_cfg:
+            for i, arm in enumerate(teleop_cfg["arms"]):
+                if "arm_id" not in arm:
+                    arm["arm_id"] = i + 1
+        
+        return config
     
     # Migrate robot config
     robot_cfg = config.get("robot", {})
@@ -236,6 +249,7 @@ def migrate_to_multi_arm(config: Dict[str, Any]) -> Dict[str, Any]:
             "type": robot_cfg.get("type", "so100_follower"),
             "port": robot_cfg["port"],
             "id": robot_cfg.get("id", "follower_arm"),
+            "arm_id": 1,  # First arm gets ID 1
             "home_positions": [],
             "home_velocity": 600
         }
@@ -270,7 +284,8 @@ def migrate_to_multi_arm(config: Dict[str, Any]) -> Dict[str, Any]:
             "name": "Leader 1",
             "type": teleop_cfg.get("type", "so100_leader"),
             "port": teleop_cfg["port"],
-            "id": teleop_cfg.get("id", "leader_arm")
+            "id": teleop_cfg.get("id", "leader_arm"),
+            "arm_id": 1  # First teleop arm gets ID 1
         }
         config["teleop"] = {"arms": [arm]}
     

@@ -1111,6 +1111,7 @@ class SettingsTab(QWidget):
                 "type": "so100_follower",  # Default type
                 "port": widget.get_port(),
                 "id": widget.get_id(),
+                "arm_id": i + 1,  # 1-indexed arm IDs
                 "home_positions": widget.get_home_positions(),
                 "home_velocity": widget.get_home_velocity()
             }
