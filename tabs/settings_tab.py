@@ -28,6 +28,7 @@ from utils.camera_hub import CameraStreamHub
 from utils.home_move_worker import HomeMoveWorker, HomeMoveRequest
 from utils.multi_arm_widgets import ArmConfigSection
 from utils.config_compat import get_enabled_arms, ensure_multi_arm_config
+from utils.mode_widgets import ModeSelector, SingleArmConfig
 
 class SettingsTab(QWidget):
     """Settings configuration tab"""
@@ -47,6 +48,15 @@ class SettingsTab(QWidget):
         # Multi-arm tracking
         self.robot_arm_widgets: List[ArmConfigSection] = []  # Follower arm widgets
         self.teleop_arm_widgets: List[ArmConfigSection] = []  # Leader arm widgets
+        
+        # Solo/Bimanual mode tracking
+        self.robot_mode_selector: Optional[ModeSelector] = None
+        self.teleop_mode_selector: Optional[ModeSelector] = None
+        self.robot_arm1_config: Optional[SingleArmConfig] = None
+        self.robot_arm2_config: Optional[SingleArmConfig] = None
+        self.teleop_arm1_config: Optional[SingleArmConfig] = None
+        self.teleop_arm2_config: Optional[SingleArmConfig] = None
+        self.solo_arm_selector: Optional[QComboBox] = None  # Dropdown to select Arm 1 or Arm 2 in solo mode
         
         # Device status tracking (synced with device_manager)
         self.robot_status = "empty"          # empty/online/offline
@@ -1117,6 +1127,12 @@ class SettingsTab(QWidget):
             }
             self.config["robot"]["arms"].append(arm)
         
+        # Save robot mode (default to solo if not set)
+        if self.robot_mode_selector:
+            self.config["robot"]["mode"] = self.robot_mode_selector.get_mode()
+        elif "mode" not in self.config.get("robot", {}):
+            self.config["robot"]["mode"] = "solo"
+        
         # Update shared robot settings
         self.config["robot"]["fps"] = self.robot_fps_spin.value()
         self.config["robot"]["position_tolerance"] = self.position_tolerance_spin.value()
@@ -1137,6 +1153,12 @@ class SettingsTab(QWidget):
                 "port": "/dev/ttyACM1",
                 "id": "leader_arm"
             })
+        
+        # Save teleop mode (default to solo if not set)
+        if self.teleop_mode_selector:
+            self.config["teleop"]["mode"] = self.teleop_mode_selector.get_mode()
+        elif "mode" not in self.config.get("teleop", {}):
+            self.config["teleop"]["mode"] = "solo"
         
         # Update teleop from old UI if it exists
         if hasattr(self, 'teleop_port_edit'):

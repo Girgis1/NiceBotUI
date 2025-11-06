@@ -256,9 +256,10 @@ class MainWindow(QMainWindow):
             json.dump(self.config, f, indent=2)
     
     def create_default_config(self):
-        """Create default configuration (new multi-arm format)"""
+        """Create default configuration with solo/bimanual mode support"""
         return {
             "robot": {
+                "mode": "solo",  # "solo" or "bimanual"
                 "arms": [
                     {
                         "enabled": True,
@@ -266,6 +267,17 @@ class MainWindow(QMainWindow):
                         "type": "so100_follower",
                         "port": "/dev/ttyACM0",
                         "id": "follower_arm",
+                        "arm_id": 1,
+                        "home_positions": [2082, 1106, 2994, 2421, 1044, 2054],
+                        "home_velocity": 600
+                    },
+                    {
+                        "enabled": False,
+                        "name": "Follower 2",
+                        "type": "so100_follower",
+                        "port": "/dev/ttyACM1",
+                        "id": "follower_arm_2",
+                        "arm_id": 2,
                         "home_positions": [2082, 1106, 2994, 2421, 1044, 2054],
                         "home_velocity": 600
                     }
@@ -277,7 +289,25 @@ class MainWindow(QMainWindow):
                 "position_verification_enabled": True
             },
             "teleop": {
-                "arms": []  # No teleop configured by default
+                "mode": "solo",  # "solo" or "bimanual"
+                "arms": [
+                    {
+                        "enabled": False,
+                        "name": "Leader 1",
+                        "type": "so100_leader",
+                        "port": "/dev/ttyACM2",
+                        "id": "leader_arm",
+                        "arm_id": 1
+                    },
+                    {
+                        "enabled": False,
+                        "name": "Leader 2",
+                        "type": "so100_leader",
+                        "port": "/dev/ttyACM3",
+                        "id": "leader_arm_2",
+                        "arm_id": 2
+                    }
+                ]
             },
             "cameras": {
                 "front": {

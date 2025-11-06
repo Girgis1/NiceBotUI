@@ -216,24 +216,32 @@ def set_home_positions(config: Dict[str, Any], positions: List[int], arm_index: 
 
 
 def migrate_to_multi_arm(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Migrate old single-arm config to new multi-arm format.
+    """Migrate old single-arm config to new multi-arm format with solo/bimanual mode.
     
     Args:
         config: Configuration dictionary in old format
         
     Returns:
-        New configuration dictionary with arms array
+        New configuration dictionary with arms array and mode
     """
     if is_multi_arm_config(config):
-        # Already in new format, but ensure arm_id exists
+        # Already in new format, but ensure arm_id and mode exist
         robot_cfg = config.get("robot", {})
         if "arms" in robot_cfg:
+            # Add mode if missing (default to solo)
+            if "mode" not in robot_cfg:
+                robot_cfg["mode"] = "solo"
+            
             for i, arm in enumerate(robot_cfg["arms"]):
                 if "arm_id" not in arm:
                     arm["arm_id"] = i + 1  # 1-indexed arm IDs
         
         teleop_cfg = config.get("teleop", {})
         if "arms" in teleop_cfg:
+            # Add mode if missing (default to solo)
+            if "mode" not in teleop_cfg:
+                teleop_cfg["mode"] = "solo"
+            
             for i, arm in enumerate(teleop_cfg["arms"]):
                 if "arm_id" not in arm:
                     arm["arm_id"] = i + 1
@@ -243,13 +251,13 @@ def migrate_to_multi_arm(config: Dict[str, Any]) -> Dict[str, Any]:
     # Migrate robot config
     robot_cfg = config.get("robot", {})
     if "port" in robot_cfg:
-        arm = {
+        arm1 = {
             "enabled": True,
             "name": "Follower 1",
             "type": robot_cfg.get("type", "so100_follower"),
             "port": robot_cfg["port"],
             "id": robot_cfg.get("id", "follower_arm"),
-            "arm_id": 1,  # First arm gets ID 1
+            "arm_id": 1,
             "home_positions": [],
             "home_velocity": 600
         }
@@ -257,13 +265,26 @@ def migrate_to_multi_arm(config: Dict[str, Any]) -> Dict[str, Any]:
         # Migrate old rest_position to home_positions
         rest_pos = config.get("rest_position", {})
         if "positions" in rest_pos:
-            arm["home_positions"] = rest_pos["positions"]
+            arm1["home_positions"] = rest_pos["positions"]
         if "velocity" in rest_pos:
-            arm["home_velocity"] = rest_pos["velocity"]
+            arm1["home_velocity"] = rest_pos["velocity"]
         
-        # Keep shared settings, replace with arms array
+        # Create a second arm slot (disabled by default)
+        arm2 = {
+            "enabled": False,
+            "name": "Follower 2",
+            "type": "so100_follower",
+            "port": "/dev/ttyACM1",
+            "id": "follower_arm_2",
+            "arm_id": 2,
+            "home_positions": [2082, 1106, 2994, 2421, 1044, 2054],
+            "home_velocity": 600
+        }
+        
+        # Keep shared settings, replace with arms array and mode
         new_robot_cfg = {
-            "arms": [arm],
+            "mode": "solo",  # Default to solo mode
+            "arms": [arm1, arm2],
             "fps": robot_cfg.get("fps", 60),
             "min_time_to_move_multiplier": robot_cfg.get("min_time_to_move_multiplier", 3.0),
             "enable_motor_torque": robot_cfg.get("enable_motor_torque", True),
@@ -279,15 +300,32 @@ def migrate_to_multi_arm(config: Dict[str, Any]) -> Dict[str, Any]:
     # Migrate teleop config
     teleop_cfg = config.get("teleop", {})
     if "port" in teleop_cfg:
-        arm = {
+        arm1 = {
             "enabled": True,
             "name": "Leader 1",
             "type": teleop_cfg.get("type", "so100_leader"),
             "port": teleop_cfg["port"],
             "id": teleop_cfg.get("id", "leader_arm"),
-            "arm_id": 1  # First teleop arm gets ID 1
+            "arm_id": 1
         }
-        config["teleop"] = {"arms": [arm]}
+        arm2 = {
+            "enabled": False,
+            "name": "Leader 2",
+            "type": "so100_leader",
+            "port": "/dev/ttyACM3",
+            "id": "leader_arm_2",
+            "arm_id": 2
+        }
+        config["teleop"] = {
+            "mode": "solo",
+            "arms": [arm1, arm2]
+        }
+    elif "arms" not in teleop_cfg:
+        # No teleop configured, create empty structure
+        config["teleop"] = {
+            "mode": "solo",
+            "arms": []
+        }
     
     return config
 

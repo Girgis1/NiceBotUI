@@ -117,53 +117,97 @@ class RobotWorker(QThread):
         return args
     
     def _build_client_command(self):
-        """Build robot client command from config"""
+        """Build robot client command from config (supports solo and bimanual modes)"""
         p = self.config.get("policy", {})
         cams = self.config.get("cameras", {})
         async_cfg = self.config.get("async_inference", {})
         
-        # Get first enabled robot arm (supports both old and new config formats)
-        arm = get_first_enabled_arm(self.config, "robot")
-        if not arm:
-            raise ValueError("No enabled robot arm configured")
-
-        robot_type = arm.get("type")
-        robot_port = arm.get("port")
-        robot_id = arm.get("id", "follower_arm")
-
-        if not robot_type:
-            raise ValueError("Robot type not configured")
-        if not robot_port:
-            raise ValueError("Robot port not configured")
-
+        robot_cfg = self.config.get("robot", {})
+        mode = robot_cfg.get("mode", "solo")
+        
         # Build camera dict string
         camera_dict = self._build_camera_dict(cams)
-
+        
         # Server address
         server_host = async_cfg.get("server_host", "127.0.0.1")
         server_port = async_cfg.get("server_port", 8080)
         server_address = f"{server_host}:{server_port}"
-
+        
         # Validate policy configuration
         pretrained_path = p.get("path") if isinstance(p, dict) else None
         if not pretrained_path:
             raise ValueError("Policy path not configured")
-
-        args = [
+        
+        # Build args based on mode
+        base_args = [
             sys.executable, "-m", "lerobot.async_inference.robot_client",
             f"--server_address={server_address}",
-            "--robot.type", robot_type,
-            "--robot.port", robot_port,
-            "--robot.id", robot_id,
-            f"--robot.cameras={camera_dict}",
-            "--policy_type", async_cfg.get("policy_type", "act"),
-            f"--pretrained_name_or_path={pretrained_path}",
-            "--policy_device", p.get("device", "cpu") if isinstance(p, dict) else "cpu",
-            "--actions_per_chunk", str(async_cfg.get("actions_per_chunk", 30)),
-            "--chunk_size_threshold", str(async_cfg.get("chunk_size_threshold", 0.6)),
-            "--debug_visualize_queue_size=False"
         ]
-
+        
+        if mode == "bimanual":
+            # Bimanual mode: use bi_so100_follower with left/right arm ports
+            arms = robot_cfg.get("arms", [])
+            if len(arms) < 2:
+                raise ValueError("Bimanual mode requires 2 arms configured")
+            
+            arm1 = arms[0] if len(arms) > 0 else {}
+            arm2 = arms[1] if len(arms) > 1 else {}
+            
+            # Determine robot type (bi_so100_follower or bi_so101_follower)
+            base_type = arm1.get("type", "so100_follower")
+            if "so101" in base_type:
+                robot_type = "bi_so101_follower"
+            else:
+                robot_type = "bi_so100_follower"
+            
+            left_port = arm1.get("port")
+            right_port = arm2.get("port")
+            robot_id = robot_cfg.get("id", "bimanual_follower")
+            
+            if not left_port or not right_port:
+                raise ValueError("Bimanual mode requires both arm ports configured")
+            
+            args = base_args + [
+                "--robot.type", robot_type,
+                "--robot.left_arm_port", left_port,
+                "--robot.right_arm_port", right_port,
+                "--robot.id", robot_id,
+                f"--robot.cameras={camera_dict}",
+                "--policy_type", async_cfg.get("policy_type", "act"),
+                f"--pretrained_name_or_path={pretrained_path}",
+                "--policy_device", p.get("device", "cpu") if isinstance(p, dict) else "cpu",
+                "--actions_per_chunk", str(async_cfg.get("actions_per_chunk", 30)),
+                "--chunk_size_threshold", str(async_cfg.get("chunk_size_threshold", 0.6)),
+                "--debug_visualize_queue_size=False"
+            ]
+        else:
+            # Solo mode: use single arm (so100_follower or so101_follower)
+            arm = get_first_enabled_arm(self.config, "robot")
+            if not arm:
+                raise ValueError("No enabled robot arm configured")
+            
+            robot_type = arm.get("type")
+            robot_port = arm.get("port")
+            robot_id = arm.get("id", "follower_arm")
+            
+            if not robot_type:
+                raise ValueError("Robot type not configured")
+            if not robot_port:
+                raise ValueError("Robot port not configured")
+            
+            args = base_args + [
+                "--robot.type", robot_type,
+                "--robot.port", robot_port,
+                "--robot.id", robot_id,
+                f"--robot.cameras={camera_dict}",
+                "--policy_type", async_cfg.get("policy_type", "act"),
+                f"--pretrained_name_or_path={pretrained_path}",
+                "--policy_device", p.get("device", "cpu") if isinstance(p, dict) else "cpu",
+                "--actions_per_chunk", str(async_cfg.get("actions_per_chunk", 30)),
+                "--chunk_size_threshold", str(async_cfg.get("chunk_size_threshold", 0.6)),
+                "--debug_visualize_queue_size=False"
+            ]
+        
         return args
 
     def _build_camera_dict(self, cameras):
