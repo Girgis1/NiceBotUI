@@ -10,13 +10,13 @@ The NiceBot UI now includes calibration ID dropdowns in the Settings tab, allowi
 
 1. **Robot Configuration Section** (🤖)
    - **Calib ID**: Select or enter the calibration ID for your follower/robot arm
-   - Default options: `follower_arm`, `follower_white`, `follower_black`, `follower_left`, `follower_right`
-   - You can also type custom IDs
+   - The dropdown automatically scans `~/.cache/lerobot/calibration/` and shows all available calibration files
+   - You can also type custom IDs if needed
 
 2. **Teleoperation Section** (🎮)
    - **Calib ID**: Select or enter the calibration ID for your leader/teleop device
-   - Default options: `leader_arm`, `leader_white`, `leader_black`, `leader_left`, `leader_right`
-   - You can also type custom IDs
+   - The dropdown automatically scans `~/.cache/lerobot/calibration/` and shows all available calibration files
+   - You can also type custom IDs if needed
 
 ### Creating Calibration Files
 
@@ -37,11 +37,12 @@ lerobot-calibrate \
 ```
 
 The calibration data is saved in:
-- `~/.cache/calibration/{robot_type}/{id}.json`
+- `~/.cache/lerobot/calibration/{id}.json`
 
 For example:
-- `~/.cache/calibration/so100_follower/follower_white.json`
-- `~/.cache/calibration/so101_leader/leader_white.json`
+- `~/.cache/lerobot/calibration/follower_white.json`
+- `~/.cache/lerobot/calibration/leader_white.json`
+- `~/.cache/lerobot/calibration/follower_arm.json`
 
 ### Using Multiple Robots
 

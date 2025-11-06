@@ -234,6 +234,34 @@ class SettingsTab(QWidget):
             }}
         """)
     
+    def _populate_calibration_ids(self, combo: QComboBox):
+        """Populate combo box with existing calibration files from ~/.cache/lerobot/calibration/
+        
+        Args:
+            combo: QComboBox to populate with calibration IDs
+        """
+        import os
+        from pathlib import Path
+        
+        # Path where lerobot stores calibration files
+        calib_dir = Path.home() / ".cache" / "lerobot" / "calibration"
+        
+        calibration_ids = []
+        
+        # Scan for .json files if directory exists
+        if calib_dir.exists() and calib_dir.is_dir():
+            for json_file in sorted(calib_dir.glob("*.json")):
+                # Remove .json extension to get the calibration ID
+                calib_id = json_file.stem
+                calibration_ids.append(calib_id)
+        
+        # Add found calibration IDs to combo box
+        if calibration_ids:
+            combo.addItems(calibration_ids)
+        else:
+            # If no calibration files found, add a placeholder
+            combo.addItem("(no calibrations found)")
+    
     def create_robot_tab(self) -> QWidget:
         """Create robot settings tab - optimized for 1024x600 touchscreen"""
         widget = QWidget()
@@ -366,13 +394,8 @@ class SettingsTab(QWidget):
         
         self.robot_id_combo = QComboBox()
         self.robot_id_combo.setEditable(True)
-        self.robot_id_combo.addItems([
-            "follower_arm",
-            "follower_white",
-            "follower_black", 
-            "follower_left",
-            "follower_right"
-        ])
+        # Load existing calibration files
+        self._populate_calibration_ids(self.robot_id_combo)
         self.robot_id_combo.setFixedHeight(45)
         self.robot_id_combo.setStyleSheet("""
             QComboBox {
@@ -471,13 +494,8 @@ class SettingsTab(QWidget):
         
         self.teleop_id_combo = QComboBox()
         self.teleop_id_combo.setEditable(True)
-        self.teleop_id_combo.addItems([
-            "leader_arm",
-            "leader_white",
-            "leader_black",
-            "leader_left",
-            "leader_right"
-        ])
+        # Load existing calibration files
+        self._populate_calibration_ids(self.teleop_id_combo)
         self.teleop_id_combo.setFixedHeight(45)
         self.teleop_id_combo.setStyleSheet("""
             QComboBox {
