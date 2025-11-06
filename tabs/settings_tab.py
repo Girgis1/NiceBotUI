@@ -304,31 +304,24 @@ class SettingsTab(QWidget):
         rest_row = QHBoxLayout()
         rest_row.setSpacing(6)
         
-        # Home button (matches Dashboard icon)
-        self.home_btn = QPushButton("🏠 Home")
+        # Home All Arms button (blue)
+        self.home_btn = QPushButton("🏠 Home All Arms")
         self.home_btn.setFixedHeight(45)
         self.home_btn.setStyleSheet(self.get_button_style("#2196F3", "#1976D2"))
-        self.home_btn.clicked.connect(self.go_home)
+        self.home_btn.clicked.connect(self.home_all_arms)
         rest_row.addWidget(self.home_btn)
         
-        # Set Home button (saves current position as home)
-        self.set_home_btn = QPushButton("Set Home")
-        self.set_home_btn.setFixedHeight(45)
-        self.set_home_btn.setStyleSheet(self.get_button_style("#4CAF50", "#388E3C"))
-        self.set_home_btn.clicked.connect(self.set_rest_position)
-        rest_row.addWidget(self.set_home_btn)
-        
-        velocity_label = QLabel("Vel:")
+        velocity_label = QLabel("Master Velocity:")
         velocity_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
-        velocity_label.setFixedWidth(30)
+        velocity_label.setFixedWidth(110)
         rest_row.addWidget(velocity_label)
         
         self.rest_velocity_spin = QSpinBox()
         self.rest_velocity_spin.setMinimum(50)
         self.rest_velocity_spin.setMaximum(2000)
-        self.rest_velocity_spin.setValue(400)
+        self.rest_velocity_spin.setValue(600)
         self.rest_velocity_spin.setFixedHeight(45)
-        self.rest_velocity_spin.setFixedWidth(75)
+        self.rest_velocity_spin.setFixedWidth(80)
         self.rest_velocity_spin.setButtonSymbols(QSpinBox.NoButtons)
         self.rest_velocity_spin.setStyleSheet("""
             QSpinBox {
@@ -439,48 +432,6 @@ class SettingsTab(QWidget):
         self.home_all_btn.clicked.connect(self.home_all_arms)
         layout.addWidget(self.home_all_btn)
         
-        # Spacer
-        layout.addSpacing(8)
-        
-        # Shared robot settings
-        shared_section = QLabel("⚙️ Shared Robot Settings")
-        shared_section.setStyleSheet("color: #4CAF50; font-size: 14px; font-weight: bold; margin-bottom: 2px;")
-        layout.addWidget(shared_section)
-        
-        # Hertz Row
-        hertz_row = QHBoxLayout()
-        hertz_row.setSpacing(6)
-        
-        hertz_label = QLabel("Hertz:")
-        hertz_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
-        hertz_label.setFixedWidth(75)
-        hertz_row.addWidget(hertz_label)
-        
-        self.robot_fps_spin = QSpinBox()
-        self.robot_fps_spin.setMinimum(1)
-        self.robot_fps_spin.setMaximum(120)
-        self.robot_fps_spin.setValue(30)
-        self.robot_fps_spin.setFixedHeight(45)
-        self.robot_fps_spin.setButtonSymbols(QSpinBox.NoButtons)
-        self.robot_fps_spin.setStyleSheet("""
-            QSpinBox {
-                background-color: #505050;
-                color: #ffffff;
-                border: 2px solid #707070;
-                border-radius: 6px;
-                padding: 8px;
-                font-size: 14px;
-            }
-            QSpinBox:focus {
-                border-color: #4CAF50;
-                background-color: #555555;
-            }
-        """)
-        hertz_row.addWidget(self.robot_fps_spin)
-        hertz_row.addStretch()
-        
-        layout.addLayout(hertz_row)
-        
         # Spacer instead of separator
         layout.addSpacing(8)
         
@@ -548,45 +499,6 @@ class SettingsTab(QWidget):
         teleop_bimanual_layout.addLayout(teleop_arms_row)
         
         layout.addWidget(self.teleop_bimanual_container)
-        
-        
-        # Position verification settings
-        label = QLabel("🎯 Position Accuracy")
-        label.setStyleSheet("color: #4CAF50; font-size: 16px; font-weight: bold; margin-top: 15px;")
-        layout.addWidget(label)
-        
-        self.position_tolerance_spin = self.add_spinbox_row(layout, "Position Tolerance (units):", 1, 100, 10)
-        
-        # Add checkbox for verification enabled
-        verify_row = QHBoxLayout()
-        verify_label = QLabel("Enable Position Verification:")
-        verify_label.setStyleSheet("color: #d0d0d0; font-size: 15px;")
-        verify_label.setMinimumWidth(220)
-        verify_row.addWidget(verify_label)
-        
-        from PySide6.QtWidgets import QCheckBox
-        self.position_verification_check = QCheckBox()
-        self.position_verification_check.setChecked(True)
-        self.position_verification_check.setStyleSheet("""
-            QCheckBox {
-                font-size: 15px;
-                spacing: 10px;
-            }
-            QCheckBox::indicator {
-                width: 26px;
-                height: 26px;
-                border: 2px solid #707070;
-                border-radius: 6px;
-                background-color: #505050;
-            }
-            QCheckBox::indicator:checked {
-                background-color: #4CAF50;
-                border-color: #4CAF50;
-            }
-        """)
-        verify_row.addWidget(self.position_verification_check)
-        verify_row.addStretch()
-        layout.addLayout(verify_row)
         
         layout.addStretch()
         return widget
@@ -820,7 +732,16 @@ class SettingsTab(QWidget):
         self.episode_time_spin = self.add_doublespinbox_row(layout, "Episode Time (s):", 1.0, 300.0, 20.0)
         self.warmup_spin = self.add_doublespinbox_row(layout, "Warmup (s):", 0.0, 60.0, 3.0)
         self.reset_time_spin = self.add_doublespinbox_row(layout, "Reset Time (s):", 0.0, 60.0, 8.0)
+        
+        # Robot control settings
+        self.robot_fps_spin = self.add_spinbox_row(layout, "Robot Hertz (FPS):", 1, 120, 60)
+        self.position_tolerance_spin = self.add_spinbox_row(layout, "Position Tolerance (units):", 1, 100, 45)
 
+        # Checkboxes
+        self.position_verification_check = QCheckBox("Enable Position Verification")
+        self.position_verification_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 8px; }")
+        layout.addWidget(self.position_verification_check)
+        
         # Checkboxes
         self.display_data_check = QCheckBox("Display Data")
         self.display_data_check.setStyleSheet("QCheckBox { color: #e0e0e0; font-size: 15px; padding: 8px; }")
@@ -2168,9 +2089,8 @@ class SettingsTab(QWidget):
             self.status_label.setText(f"❌ No home position for Arm {arm_index + 1}. Set home first.")
             return
         
-        velocity = 600
-        if arm_index < len(self.robot_arm_widgets):
-            velocity = self.robot_arm_widgets[arm_index].get_home_velocity()
+        # Use master velocity from top of settings
+        velocity = self.rest_velocity_spin.value()
         
         self.status_label.setText(f"🏠 Moving Arm {arm_index + 1} to home...")
         self.home_btn.setEnabled(False)

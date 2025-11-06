@@ -92,16 +92,17 @@ class SingleArmConfig(QFrame):
         name_label.setStyleSheet("color: #4CAF50; font-size: 15px; font-weight: bold;")
         layout.addWidget(name_label)
         
-        # Port
+        # Port dropdown
         port_row = QHBoxLayout()
         port_label = QLabel("Port:")
         port_label.setStyleSheet("color: #e0e0e0; font-size: 14px; min-width: 100px;")
         port_row.addWidget(port_label)
         
-        self.port_edit = QLineEdit()
-        self.port_edit.setPlaceholderText("/dev/ttyACM0")
-        self.port_edit.setStyleSheet("""
-            QLineEdit {
+        self.port_combo = QComboBox()
+        self.port_combo.setEditable(True)
+        self.port_combo.addItems(["ACM0", "ACM1", "ACM2", "ACM3", "ACM4", "ACM5"])
+        self.port_combo.setStyleSheet("""
+            QComboBox {
                 background-color: #505050;
                 color: #ffffff;
                 border: 2px solid #707070;
@@ -109,23 +110,41 @@ class SingleArmConfig(QFrame):
                 padding: 8px;
                 font-size: 14px;
             }
-            QLineEdit:focus {
+            QComboBox:focus {
                 border-color: #4CAF50;
             }
+            QComboBox::drop-down {
+                border: none;
+                width: 30px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid #ffffff;
+                margin-right: 10px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #505050;
+                color: #ffffff;
+                selection-background-color: #4CAF50;
+                border: 2px solid #707070;
+            }
         """)
-        port_row.addWidget(self.port_edit)
+        port_row.addWidget(self.port_combo)
         layout.addLayout(port_row)
         
-        # Calibration ID
+        # Calibration ID dropdown
         id_row = QHBoxLayout()
         id_label = QLabel("Calib ID:")
         id_label.setStyleSheet("color: #e0e0e0; font-size: 14px; min-width: 100px;")
         id_row.addWidget(id_label)
         
-        self.id_edit = QLineEdit()
-        self.id_edit.setPlaceholderText("follower_arm")
-        self.id_edit.setStyleSheet("""
-            QLineEdit {
+        self.id_combo = QComboBox()
+        self.id_combo.setEditable(True)
+        self._populate_calibration_ids()
+        self.id_combo.setStyleSheet("""
+            QComboBox {
                 background-color: #505050;
                 color: #ffffff;
                 border: 2px solid #707070;
@@ -133,11 +152,28 @@ class SingleArmConfig(QFrame):
                 padding: 8px;
                 font-size: 14px;
             }
-            QLineEdit:focus {
+            QComboBox:focus {
                 border-color: #4CAF50;
             }
+            QComboBox::drop-down {
+                border: none;
+                width: 30px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid #ffffff;
+                margin-right: 10px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #505050;
+                color: #ffffff;
+                selection-background-color: #4CAF50;
+                border: 2px solid #707070;
+            }
         """)
-        id_row.addWidget(self.id_edit)
+        id_row.addWidget(self.id_combo)
         layout.addLayout(id_row)
         
         # Home positions (only for robot arms, not teleop)
@@ -223,11 +259,40 @@ class SingleArmConfig(QFrame):
             
             layout.addLayout(btn_row)
     
+    def _populate_calibration_ids(self):
+        """Load available calibration files"""
+        from pathlib import Path
+        calib_dir = Path.home() / ".cache" / "calibration"
+        
+        self.id_combo.clear()
+        if calib_dir.exists():
+            calib_files = list(calib_dir.glob("*.pkl"))
+            for file in calib_files:
+                self.id_combo.addItem(file.stem)  # Filename without extension
+        
+        # Add common defaults if not already present
+        for default_id in ["follower_arm", "leader_arm", "follower_arm_2", "leader_arm_2"]:
+            if self.id_combo.findText(default_id) == -1:
+                self.id_combo.addItem(default_id)
+    
     # Getters and setters
-    def get_port(self): return self.port_edit.text()
-    def set_port(self, port): self.port_edit.setText(port)
-    def get_id(self): return self.id_edit.text()
-    def set_id(self, calib_id): self.id_edit.setText(calib_id)
+    def get_port(self):
+        """Get port in full path format"""
+        port_text = self.port_combo.currentText()
+        if not port_text.startswith("/dev/"):
+            return f"/dev/tty{port_text}"
+        return port_text
+    
+    def set_port(self, port):
+        """Set port from full path, display short form"""
+        if port.startswith("/dev/tty"):
+            short_form = port.replace("/dev/tty", "")
+            self.port_combo.setCurrentText(short_form)
+        else:
+            self.port_combo.setCurrentText(port)
+    
+    def get_id(self): return self.id_combo.currentText()
+    def set_id(self, calib_id): self.id_combo.setCurrentText(calib_id)
     def get_home_positions(self):
         try:
             import json
