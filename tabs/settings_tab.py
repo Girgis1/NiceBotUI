@@ -29,6 +29,7 @@ from utils.home_move_worker import HomeMoveWorker, HomeMoveRequest
 from utils.multi_arm_widgets import ArmConfigSection
 from utils.mode_widgets import ModeSelector, SingleArmConfig
 from utils.config_compat import get_enabled_arms, ensure_multi_arm_config
+from tabs.diagnostics_tab import DiagnosticsTab
 
 class SettingsTab(QWidget):
     """Settings configuration tab"""
@@ -149,6 +150,12 @@ class SettingsTab(QWidget):
         # Safety tab
         safety_tab = self.wrap_tab(self.create_safety_tab())
         self.tab_widget.addTab(safety_tab, "🛡️ Safety")
+        
+        # Diagnostics tab
+        self.diagnostics_tab = DiagnosticsTab(self.config, self)
+        self.diagnostics_tab.status_changed.connect(self.on_diagnostics_status)
+        diagnostics_wrapper = self.wrap_tab(self.diagnostics_tab)
+        self.tab_widget.addTab(diagnostics_wrapper, "🔧 Diagnostics")
         
         main_layout.addWidget(self.tab_widget)
         
@@ -2027,6 +2034,21 @@ class SettingsTab(QWidget):
             self.camera_wrist_status = status
             if self.camera_wrist_circle:
                 self.update_status_circle(self.camera_wrist_circle, status)
+    
+    def on_diagnostics_status(self, status: str):
+        """Handle diagnostics status messages
+        
+        Args:
+            status: Status message from diagnostics tab
+        """
+        self.status_label.setText(status)
+        # Auto-clear success messages after 3 seconds
+        if "✓" in status or "Started" in status:
+            self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+        elif "❌" in status or "Error" in status:
+            self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+        else:
+            self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
     
     # ========== MULTI-ARM MANAGEMENT METHODS ==========
     
