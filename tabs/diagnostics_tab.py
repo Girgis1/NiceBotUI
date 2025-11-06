@@ -3,12 +3,10 @@ Diagnostics Tab - Real-time motor diagnostics in a compact table view
 """
 
 import json
-from datetime import datetime
-from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QRadioButton, QButtonGroup,
-    QComboBox, QHeaderView, QFrame
+    QComboBox, QHeaderView, QFrame, QSizePolicy
 )
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont
@@ -42,26 +40,25 @@ class DiagnosticsTab(QWidget):
         self.motor_controller = None
         self.current_arm_index = 0
         self.is_connected = False
-        self.last_update_time = None
-        self.logging_enabled = False
-        self.log_data = []
         
         self.init_ui()
         
-        # Setup auto-refresh timer
+        # Setup auto-refresh timer (0.2s = 5 Hz)
         self.refresh_timer = QTimer(self)
         self.refresh_timer.timeout.connect(self.refresh_data)
-        # Don't start timer yet - wait for manual connection
+        
+        # Auto-connect on startup
+        QTimer.singleShot(500, self.connect_motors)
         
     def init_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
         
-        # ========== HEADER ROW ==========
+        # ========== HEADER ROW (Simplified) ==========
         header_row = QHBoxLayout()
         
-        title = QLabel("🔧 Motor Diagnostics")
+        title = QLabel("🔧 Motor Diagnostics - Real-time (5 Hz)")
         title.setStyleSheet("color: #4CAF50; font-size: 16px; font-weight: bold;")
         header_row.addWidget(title)
         
@@ -69,78 +66,65 @@ class DiagnosticsTab(QWidget):
         
         # Arm selector
         arm_label = QLabel("Arm:")
-        arm_label.setStyleSheet("color: #e0e0e0; font-size: 14px;")
+        arm_label.setStyleSheet("color: #e0e0e0; font-size: 15px; font-weight: bold;")
         header_row.addWidget(arm_label)
         
         self.arm_group = QButtonGroup(self)
         
         self.arm1_radio = QRadioButton("Arm 1")
         self.arm1_radio.setChecked(True)
-        self.arm1_radio.setStyleSheet("color: #e0e0e0; font-size: 14px;")
+        self.arm1_radio.setMinimumHeight(35)
+        self.arm1_radio.setStyleSheet("""
+            QRadioButton {
+                color: #e0e0e0;
+                font-size: 15px;
+                font-weight: bold;
+                spacing: 8px;
+            }
+            QRadioButton::indicator {
+                width: 20px;
+                height: 20px;
+                border: 2px solid #4CAF50;
+                border-radius: 10px;
+                background-color: #2d2d2d;
+            }
+            QRadioButton::indicator:checked {
+                background-color: #4CAF50;
+                border: 3px solid #2E7D32;
+            }
+        """)
         self.arm1_radio.toggled.connect(lambda checked: self.on_arm_changed(0) if checked else None)
         self.arm_group.addButton(self.arm1_radio)
         header_row.addWidget(self.arm1_radio)
         
         self.arm2_radio = QRadioButton("Arm 2")
-        self.arm2_radio.setStyleSheet("color: #e0e0e0; font-size: 14px;")
+        self.arm2_radio.setMinimumHeight(35)
+        self.arm2_radio.setStyleSheet("""
+            QRadioButton {
+                color: #e0e0e0;
+                font-size: 15px;
+                font-weight: bold;
+                spacing: 8px;
+            }
+            QRadioButton::indicator {
+                width: 20px;
+                height: 20px;
+                border: 2px solid #4CAF50;
+                border-radius: 10px;
+                background-color: #2d2d2d;
+            }
+            QRadioButton::indicator:checked {
+                background-color: #4CAF50;
+                border: 3px solid #2E7D32;
+            }
+        """)
         self.arm2_radio.toggled.connect(lambda checked: self.on_arm_changed(1) if checked else None)
         self.arm_group.addButton(self.arm2_radio)
         header_row.addWidget(self.arm2_radio)
         
-        # Refresh rate selector
-        refresh_label = QLabel("Refresh:")
-        refresh_label.setStyleSheet("color: #e0e0e0; font-size: 14px;")
-        header_row.addWidget(refresh_label)
-        
-        self.refresh_combo = QComboBox()
-        self.refresh_combo.addItems(["Manual", "0.5s", "1.0s", "2.0s"])
-        self.refresh_combo.setCurrentText("1.0s")
-        self.refresh_combo.setStyleSheet("""
-            QComboBox {
-                background-color: #505050;
-                color: #ffffff;
-                border: 2px solid #707070;
-                border-radius: 4px;
-                padding: 4px 8px;
-                font-size: 13px;
-                min-width: 80px;
-            }
-        """)
-        self.refresh_combo.currentTextChanged.connect(self.on_refresh_rate_changed)
-        header_row.addWidget(self.refresh_combo)
-        
         layout.addLayout(header_row)
         
-        # ========== CONNECTION STATUS ==========
-        status_frame = QFrame()
-        status_frame.setStyleSheet("""
-            QFrame {
-                background-color: #3a3a3a;
-                border: 1px solid #555555;
-                border-radius: 4px;
-                padding: 8px;
-            }
-        """)
-        status_layout = QHBoxLayout(status_frame)
-        status_layout.setContentsMargins(8, 4, 8, 4)
-        
-        self.connection_label = QLabel("● Disconnected")
-        self.connection_label.setStyleSheet("color: #f44336; font-size: 13px; font-weight: bold;")
-        status_layout.addWidget(self.connection_label)
-        
-        self.port_label = QLabel("")
-        self.port_label.setStyleSheet("color: #999999; font-size: 13px;")
-        status_layout.addWidget(self.port_label)
-        
-        status_layout.addStretch()
-        
-        self.last_update_label = QLabel("Last: Never")
-        self.last_update_label.setStyleSheet("color: #999999; font-size: 13px;")
-        status_layout.addWidget(self.last_update_label)
-        
-        layout.addWidget(status_frame)
-        
-        # ========== DIAGNOSTICS TABLE ==========
+        # ========== DIAGNOSTICS TABLE (Maximized) ==========
         self.table = QTableWidget()
         self.table.setColumnCount(9)
         self.table.setHorizontalHeaderLabels([
@@ -194,89 +178,10 @@ class DiagnosticsTab(QWidget):
         # Fill with placeholder data
         self.clear_table_data()
         
-        layout.addWidget(self.table)
+        # Make table expand to fill available space
+        self.table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
-        # ========== SUMMARY BAR ==========
-        summary_frame = QFrame()
-        summary_frame.setStyleSheet("""
-            QFrame {
-                background-color: #3a3a3a;
-                border: 1px solid #555555;
-                border-radius: 4px;
-                padding: 8px;
-            }
-        """)
-        summary_layout = QHBoxLayout(summary_frame)
-        summary_layout.setContentsMargins(8, 4, 8, 4)
-        
-        self.summary_label = QLabel("Summary: Not connected")
-        self.summary_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
-        summary_layout.addWidget(self.summary_label)
-        
-        summary_layout.addStretch()
-        
-        self.status_indicator = QLabel("Status: ⚪ Idle")
-        self.status_indicator.setStyleSheet("color: #999999; font-size: 13px; font-weight: bold;")
-        summary_layout.addWidget(self.status_indicator)
-        
-        layout.addWidget(summary_frame)
-        
-        # ========== CONTROL BUTTONS ==========
-        button_row = QHBoxLayout()
-        
-        self.connect_btn = QPushButton("🔌 Connect")
-        self.connect_btn.setFixedHeight(35)
-        self.connect_btn.setStyleSheet(self.get_button_style("#4CAF50", "#388E3C"))
-        self.connect_btn.clicked.connect(self.toggle_connection)
-        button_row.addWidget(self.connect_btn)
-        
-        self.refresh_btn = QPushButton("🔄 Refresh Now")
-        self.refresh_btn.setFixedHeight(35)
-        self.refresh_btn.setEnabled(False)
-        self.refresh_btn.setStyleSheet(self.get_button_style("#2196F3", "#1976D2"))
-        self.refresh_btn.clicked.connect(self.refresh_data)
-        button_row.addWidget(self.refresh_btn)
-        
-        self.log_btn = QPushButton("📊 Start Logging")
-        self.log_btn.setFixedHeight(35)
-        self.log_btn.setEnabled(False)
-        self.log_btn.setStyleSheet(self.get_button_style("#FF9800", "#F57C00"))
-        self.log_btn.clicked.connect(self.toggle_logging)
-        button_row.addWidget(self.log_btn)
-        
-        self.export_btn = QPushButton("💾 Export CSV")
-        self.export_btn.setFixedHeight(35)
-        self.export_btn.setEnabled(False)
-        self.export_btn.setStyleSheet(self.get_button_style("#9C27B0", "#7B1FA2"))
-        self.export_btn.clicked.connect(self.export_data)
-        button_row.addWidget(self.export_btn)
-        
-        button_row.addStretch()
-        
-        layout.addLayout(button_row)
-    
-    def get_button_style(self, color: str, hover_color: str) -> str:
-        return f"""
-            QPushButton {{
-                background-color: {color};
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 8px 16px;
-                font-size: 13px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{
-                background-color: {hover_color};
-            }}
-            QPushButton:pressed {{
-                background-color: {color};
-            }}
-            QPushButton:disabled {{
-                background-color: #555555;
-                color: #999999;
-            }}
-        """
+        layout.addWidget(self.table, stretch=1)  # Give it a stretch factor
     
     def clear_table_data(self):
         """Fill table with placeholder data"""
@@ -303,28 +208,8 @@ class DiagnosticsTab(QWidget):
         if was_connected:
             self.connect_motors()
     
-    def on_refresh_rate_changed(self, rate_text: str):
-        """Handle refresh rate change"""
-        self.refresh_timer.stop()
-        
-        if rate_text == "Manual":
-            return
-        
-        # Extract seconds from text
-        rate_ms = int(float(rate_text.replace("s", "")) * 1000)
-        
-        if self.is_connected:
-            self.refresh_timer.start(rate_ms)
-    
-    def toggle_connection(self):
-        """Connect or disconnect from motors"""
-        if self.is_connected:
-            self.disconnect_motors()
-        else:
-            self.connect_motors()
-    
     def connect_motors(self):
-        """Connect to motor bus"""
+        """Connect to motor bus and start auto-refresh at 0.2s (5 Hz)"""
         try:
             from utils.motor_controller import MotorController
             
@@ -336,23 +221,9 @@ class DiagnosticsTab(QWidget):
                 return
             
             self.is_connected = True
-            port = self.motor_controller.port
             
-            # Update UI
-            self.connection_label.setText("● Connected")
-            self.connection_label.setStyleSheet("color: #4CAF50; font-size: 13px; font-weight: bold;")
-            self.port_label.setText(port)
-            self.port_label.setStyleSheet("color: #4CAF50; font-size: 13px;")
-            self.connect_btn.setText("🔌 Disconnect")
-            self.refresh_btn.setEnabled(True)
-            self.log_btn.setEnabled(True)
-            self.export_btn.setEnabled(True)
-            
-            # Start auto-refresh if enabled
-            rate_text = self.refresh_combo.currentText()
-            if rate_text != "Manual":
-                rate_ms = int(float(rate_text.replace("s", "")) * 1000)
-                self.refresh_timer.start(rate_ms)
+            # Start auto-refresh at 200ms (0.2s = 5 Hz)
+            self.refresh_timer.start(200)
             
             # Do initial refresh
             self.refresh_data()
@@ -373,19 +244,8 @@ class DiagnosticsTab(QWidget):
         
         self.is_connected = False
         
-        # Update UI
-        self.connection_label.setText("● Disconnected")
-        self.connection_label.setStyleSheet("color: #f44336; font-size: 13px; font-weight: bold;")
-        self.port_label.setText("")
-        self.connect_btn.setText("🔌 Connect")
-        self.refresh_btn.setEnabled(False)
-        self.log_btn.setEnabled(False)
-        self.export_btn.setEnabled(False)
-        
+        # Clear table
         self.clear_table_data()
-        self.summary_label.setText("Summary: Disconnected")
-        self.status_indicator.setText("Status: ⚪ Idle")
-        self.status_indicator.setStyleSheet("color: #999999; font-size: 13px; font-weight: bold;")
         
         self.status_changed.emit(f"Disconnected from Arm {self.current_arm_index + 1}")
     
@@ -420,21 +280,6 @@ class DiagnosticsTab(QWidget):
             
             # Update table
             self.update_table(motor_data)
-            
-            # Update summary
-            self.update_summary(motor_data)
-            
-            # Update last update time
-            self.last_update_time = datetime.now()
-            self.last_update_label.setText(f"Last: {self.last_update_time.strftime('%H:%M:%S')}")
-            
-            # Log data if enabled
-            if self.logging_enabled:
-                self.log_data.append({
-                    'timestamp': self.last_update_time.isoformat(),
-                    'arm': self.current_arm_index + 1,
-                    'motors': motor_data
-                })
             
         except Exception as e:
             self.status_changed.emit(f"❌ Error reading data: {str(e)}")
@@ -505,88 +350,6 @@ class DiagnosticsTab(QWidget):
             is_moving = data['moving'] == 1
             move_item.setText("Yes" if is_moving else "No")
             move_item.setBackground(QColor("#2196F3") if is_moving else QColor("#2d2d2d"))
-    
-    def update_summary(self, motor_data: list):
-        """Update summary bar with system-wide metrics"""
-        valid_data = [d for d in motor_data if d is not None]
-        
-        if not valid_data:
-            self.summary_label.setText("Summary: No data")
-            self.status_indicator.setText("Status: ❌ Error")
-            self.status_indicator.setStyleSheet("color: #f44336; font-size: 13px; font-weight: bold;")
-            return
-        
-        # Calculate metrics
-        max_temp = max(d['temperature'] for d in valid_data)
-        total_current = sum(d['current'] for d in valid_data)
-        avg_voltage = sum(d['voltage'] for d in valid_data) / len(valid_data) / 10.0
-        
-        # Determine status
-        if max_temp > self.TEMP_CRITICAL:
-            status = "🔴 CRITICAL"
-            status_color = "#f44336"
-        elif max_temp > self.TEMP_WARNING:
-            status = "🟡 WARNING"
-            status_color = "#FF9800"
-        else:
-            status = "✓ OK"
-            status_color = "#4CAF50"
-        
-        self.summary_label.setText(
-            f"Summary: Max Temp {max_temp}°C │ Total Current {total_current}mA │ "
-            f"Avg Voltage {avg_voltage:.1f}V"
-        )
-        
-        self.status_indicator.setText(f"Status: {status}")
-        self.status_indicator.setStyleSheet(f"color: {status_color}; font-size: 13px; font-weight: bold;")
-    
-    def toggle_logging(self):
-        """Toggle data logging"""
-        self.logging_enabled = not self.logging_enabled
-        
-        if self.logging_enabled:
-            self.log_btn.setText("📊 Stop Logging")
-            self.log_data = []
-            self.status_changed.emit("Started logging diagnostics data")
-        else:
-            self.log_btn.setText("📊 Start Logging")
-            self.status_changed.emit(f"Stopped logging ({len(self.log_data)} samples)")
-    
-    def export_data(self):
-        """Export diagnostic data to CSV"""
-        if not self.log_data:
-            self.status_changed.emit("⚠️ No data to export. Start logging first.")
-            return
-        
-        try:
-            # Create logs directory
-            logs_dir = Path("logs/diagnostics")
-            logs_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Generate filename
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            arm_num = self.current_arm_index + 1
-            filename = logs_dir / f"diagnostics_arm{arm_num}_{timestamp}.csv"
-            
-            # Write CSV
-            with open(filename, 'w') as f:
-                # Header
-                f.write("Timestamp,Arm,Motor,Position,Goal,Velocity,Load,Temperature,Current,Voltage,Moving\n")
-                
-                # Data
-                for entry in self.log_data:
-                    ts = entry['timestamp']
-                    arm = entry['arm']
-                    for idx, motor_data in enumerate(entry['motors']):
-                        if motor_data:
-                            f.write(f"{ts},{arm},{idx+1},{motor_data['position']},{motor_data['goal']},"
-                                   f"{motor_data['velocity']},{motor_data['load']},{motor_data['temperature']},"
-                                   f"{motor_data['current']},{motor_data['voltage']},{motor_data['moving']}\n")
-            
-            self.status_changed.emit(f"✓ Exported {len(self.log_data)} samples to {filename}")
-            
-        except Exception as e:
-            self.status_changed.emit(f"❌ Export failed: {str(e)}")
     
     def cleanup(self):
         """Cleanup when tab is closed"""
