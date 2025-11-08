@@ -645,14 +645,14 @@ class DashboardExecutionMixin:
                         code="worker_cleanup_warning",
                     )
                 finally:
-            self.worker = None
-    except Exception as e:
-        self._append_log_entry(
-            "error",
-            "We ran into a problem while resetting the dashboard state.",
-            action=f"Details: {e}",
-            code="reset_ui_error",
-        )
+                    self.worker = None
+        except Exception as e:
+            self._append_log_entry(
+                "error",
+                "We ran into a problem while resetting the dashboard state.",
+                action=f"Details: {e}",
+                code="reset_ui_error",
+            )
 
     def run_from_dashboard(self):
         """Execute the selected RUN item (same as pressing START)."""
@@ -727,5 +727,3 @@ class DashboardExecutionMixin:
     def on_discovery_log(self, message: str):
         """Handle discovery log messages from the device manager."""
         self._append_log_entry("info", message, code="discovery_log")
-
-
