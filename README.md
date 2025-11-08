@@ -1,264 +1,85 @@
-# LeRobot Operator Console
+# NiceBot UI
 
-A minimalist, touch-friendly GUI for operating SO-100/101 robot arms with Hugging Face LeRobot.
+Industrial-friendly control station for SO-100/101 robots powered by Hugging Face **LeRobot**. Designed for touch panels and operators who just need a single button to get everything running.
+
+## 1‑Click Setup
+
+```bash
+# 1. Clone (or pull latest) repository
+cd /path/to/parent
+git clone https://github.com/Girgis1/NiceBotUI.git
+cd NiceBotUI
+
+# 2. Run the guided installer (installs system deps + Python stack)
+./Setup/install.sh
+
+# 3. Launch the UI (windowed for testing; fullscreen by default)
+.venv/bin/python app.py --windowed
+```
+
+The installer:
+- Installs required Ubuntu packages (Python, build tools, OpenCV/Video4Linux, FFmpeg, etc.).
+- Adds the current user to the `dialout` group for motor controllers.
+- Creates/updates `.venv`, upgrades `pip`, and installs everything in `requirements.txt` (including `lerobot[feetech]`).
+- Generates a fresh `config.json` via the new app bootstrap so the UI is ready on first launch.
+
+> **Heads up:** If this is the first time your user has been added to `dialout`, log out and back in before attempting to move the robot.
+
+## Running The UI
+
+```bash
+# Touchscreen / kiosk mode
+.venv/bin/python app.py
+
+# Development laptop
+.venv/bin/python app.py --windowed
+
+# Vision designer only
+.venv/bin/python app.py --vision
+```
+
+Keyboard shortcuts:
+- `Ctrl+1…4` – dashboard / sequence / record / settings
+- `F11` – toggle fullscreen
+- `Esc` – exit fullscreen
+- `Ctrl+Q` – quit immediately
 
 ## Features
 
-- **Large Touch-Friendly Buttons** - Designed for touchscreen operation
-- **Simple Interface** - Start, Stop, Go Home controls
-- **Real-Time Status** - Connection indicators, episode progress, elapsed time
-- **Error Handling** - Clear problem/solution messages for common issues
-- **Settings Editor** - GUI for all configuration parameters
-- **Run History** - Track last 10 runs with timestamps and status
-- **Object Gate** - Optional presence detection before starting
-- **Timezone Aware** - Displays times in Australia/Sydney timezone
+- **Dashboard**: live status, camera previews, master speed, run selector, emergency stop helpers.
+- **Sequence Tab**: build composite jobs that mix recordings, model runs, home moves, delays, and vision triggers.
+- **Record Tab**: modernized transport controls for capturing individual poses or live trajectories with teleop keypad.
+- **Settings Tab**: full multi-arm configuration, camera discovery, policy paths, diagnostics, safety systems.
+- **Execution Engine**: modular strategies for live/composite playback plus model execution with optional policy servers.
+- **Vision Triggers**: zone-based camera checks integrated into sequences (idle + hold timers, Qt overlay updates).
 
-## Quick Start
-
-### 1. Install
-
-```bash
-cd /home/daniel/LerobotGUI
-./setup.sh
-```
-
-The setup script will:
-- Create a virtual environment
-- Install all Python dependencies including LeRobot
-- Set up udev rules for serial access
-- Add your user to the dialout group
-- On NVIDIA Jetson boards (JetPack 6.x), install the required system packages (OpenCV, GStreamer, V4L2 tools) and attempt to pull the NVIDIA-optimised PyTorch wheels
-
-**Important:** After setup, log out and back in for group permissions to take effect.
-
-> **Jetson tip:** If the PyTorch install step prints a warning, follow the official wheel instructions at [docs.nvidia.com](https://docs.nvidia.com/deeplearning/frameworks/install-pytorch-jetson-platform/index.html) and re-run `pip install -r requirements.txt` inside `.venv`.
-
-### 2. Configure
-
-Edit `config.json` or use the Settings dialog in the app to set:
-- Serial port for your robot (e.g., `/dev/ttyACM0`)
-- Camera index (usually `0`)
-- Policy checkpoint path
-- Number of episodes
-
-To find your robot's serial port:
-```bash
-source .venv/bin/activate
-lerobot-find-port
-```
-
-### 3. Run
-
-**Fullscreen mode (default - for touch displays):**
-```bash
-source .venv/bin/activate
-python app.py
-```
-
-**Windowed mode (for testing):**
-```bash
-python app.py --windowed
-```
-
-Or directly:
-```bash
-.venv/bin/python app.py
-```
-
-**Keyboard shortcuts:**
-- `F11` - Toggle fullscreen
-- `Escape` - Exit fullscreen
-
-## Usage
-
-### Main Controls
-
-- **START** - Begin recording episodes with the trained policy
-- **STOP** - Interrupt the current run
-- **GO HOME** - Move robot Home
-- **⚙ Settings** - Open configuration editor
-
-### Settings Dialog
-
-**Robot Tab:**
-- Serial port, FPS, motor parameters
-
-**Camera Tab:**
-- Camera index, resolution, FPS
-
-**Policy Tab:**
-- Trained model checkpoint path
-- Compute device (CPU/CUDA)
-
-**Control Tab:**
-- Number of episodes
-- Warmup, episode, and reset timings
-- Task name
-
-**Advanced Tab:**
-- **SET HOME** - Capture current position as home
-- Home position angles
-- Object presence gate
-- Safety limits
-- Motor temperature and torque monitoring
-
-## Hardware Setup
-
-### SO-100 Assembly
-
-Follow the official guide: https://huggingface.co/docs/lerobot/so100
-
-Key steps:
-1. 3D print parts
-2. Configure motor IDs using `lerobot-setup-motors`
-3. Assemble leader and follower arms
-4. Calibrate using `lerobot-calibrate`
-
-### Connections
-
-- **Power:** Connect 12V power supply to motor controller
-- **USB:** Connect controller to computer
-- **Camera:** Connect USB camera
-- **E-Stop:** Wire emergency stop to power supply (recommended)
-- **Jetson CSI Cameras:** Use the `CSI://0` shorthand in the Camera tab; the app will expand it into the correct GStreamer pipeline.
-
-## Error Messages
-
-The application provides clear error messages with solutions:
-
-| Error | Meaning | Solution |
-|-------|---------|----------|
-| **Motors Not Found** | Serial port not detected | Check USB cable and power supply |
-| **Cannot Access Motors** | Permission denied | Run `./setup.sh` and log out/in |
-| **Joint X Not Responding** | Motor timeout | Check cable at joint X |
-| **Power Lost** | Unexpected disconnect | Check E-stop and power supply |
-| **Camera Not Found** | Can't open camera | Check USB and camera index |
-| **Policy Missing** | Checkpoint not found | Check path in Settings |
-
-## Development
-
-### Project Structure
+## Repository Layout
 
 ```
-LerobotGUI/
-├── app.py                  # Main application
-├── robot_worker.py         # Async policy runner
-├── tabs/                   # Dashboard, Sequence, Record, Settings tabs
-├── utils/                  # Device, camera, execution helpers
-├── HomePos.py              # Home position helper
-├── config.json             # Configuration
-├── run_history.json        # Recent runs log
-├── requirements.txt        # Python dependencies
-├── setup.sh                # Setup script
-├── udev/
-│   └── 99-so100.rules     # Serial port access rules
-└── README.md              # This file
+NiceBotUI/
+├── app.py                  # Qt entrypoint + MainWindow
+├── app/                    # Bootstrap helpers (args, config, theme, single-instance guard)
+├── Setup/install.sh        # 1-click installer for operators
+├── tabs/                   # Dashboard / Sequence / Record / Settings packages
+├── utils/
+│   ├── execution_manager.py
+│   └── execution/          # Strategy helpers extracted from the manager
+├── widgets/                # Shared Qt widgets (tables, buttons)
+├── requirements.txt        # Python dependencies (incl. lerobot[feetech])
+├── config.json             # Auto-created on first launch
+└── README.md               # You are here
 ```
 
-### Safety
+## Operator Notes
 
-This build does **not** ship with the experimental hand-detection safety monitor that previously depended on YOLO/MediaPipe. Rely on your physical e-stop chain, motor temperature limits, torque trip logic, and operator procedures for safety in industrial environments.
-
-### Integrating Hardware
-
-The `HomePos.py` file is currently a stub. To integrate with real hardware:
-
-1. Uncomment the Feetech SDK code in `HomePos.py`
-2. Update `settings_dialog.py` `_set_home_position()` method
-3. Test with: `python HomePos.py --go`
-
-Example integration:
-```python
-from lerobot.common.robot_devices.motors.feetech import FeetechMotorsBus
-
-bus = FeetechMotorsBus(
-    port="/dev/ttyACM0",
-    motors={
-        'shoulder_pan': (1, 'sts3215'),
-        'shoulder_lift': (2, 'sts3215'),
-        # ... etc
-    }
-)
-bus.connect()
-# Read/write positions
-bus.disconnect()
-```
-
-### Dependencies
-
-- **PySide6** - Qt6 GUI framework
-- **numpy** - Numerical operations
-- **opencv-python** - Camera access (installed from system packages on Jetson)
-- **pytz** - Timezone support
-- **python-dateutil** - Date parsing
-- **lerobot** - Hugging Face LeRobot package
-
-## Troubleshooting
-
-### "Permission denied" on serial port
-```bash
-sudo usermod -aG dialout $USER
-# Log out and back in
-```
-
-### Can't find lerobot-find-port
-```bash
-source .venv/bin/activate
-pip install -e ".[feetech]"
-```
-
-### Camera not working
-```bash
-# Check available cameras
-ls -l /dev/video*
-
-# Test camera
-python -c "import cv2; cap = cv2.VideoCapture(0); print(cap.isOpened())"
-```
-
-### Policy not found
-- Ensure you've trained a model first
-- Check path in Settings → Policy tab
-- Path should end in `.../pretrained_model`
-
-## Production Deployment
-
-### Kiosk Mode
-
-For production use on a dedicated touchscreen:
-
-1. Create a dedicated `operator` user
-2. Enable auto-login
-3. Add application to autostart
-4. Disable screen blanking
-5. Set up physical E-stop button
-
-### Autostart (.desktop file)
-
-Create `~/.config/autostart/lerobot-console.desktop`:
-
-```desktop
-[Desktop Entry]
-Type=Application
-Name=LeRobot Console
-Exec=/home/daniel/LerobotGUI/.venv/bin/python /home/daniel/LerobotGUI/app.py
-Terminal=false
-```
-
-### Safety
-
-- **Always use a physical E-stop** - Software stop is not sufficient
-- Wire E-stop to cut motor power directly
-- Test E-stop regularly
-- Keep safety limits configured in Settings → Advanced
+- **Robot ports**: Default config assumes `/dev/ttyACM0` for follower arm 1. Use the Settings tab to update ports; the new loader will persist them automatically.
+- **Dialout membership**: The installer takes care of `usermod -aG dialout $USER`; just log out/in afterwards.
+- **Vision cameras**: USB webcams work out of the box. For CSI/Jetson feeds, use `Settings → Camera` to set the GStreamer string or device path.
+- **Policy checkpoints**: Drop your LeRobot checkpoint into `outputs/train/...` (or point to a different directory) and select it via `Settings → Policy`.
+- **Safety**: Always keep a physical e-stop inline. Software torque/temperature watchdogs live under `Settings → Safety` and can kill runs automatically.
 
 ## Support
 
-- **LeRobot Docs:** https://huggingface.co/docs/lerobot
-- **Discord:** Hugging Face Discord server
-- **Issues:** Check configuration and error messages first
+If the installer prints an error you don’t recognize, grab the last 20 lines and share them with the robotics/software team. For hardware issues (motors not responding, camera feeds blank), use the Diagnostics tab or the status messages on the Dashboard before diving into logs.
 
-## License
-
-This operator console is provided as-is for use with LeRobot. 
-Refer to the LeRobot project for licensing information.
+Happy deploying! 🙌
