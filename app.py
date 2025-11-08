@@ -6,7 +6,6 @@ Touch-friendly interface for SO-100/101 robot control with action recording
 
 import sys
 import json
-import fcntl
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -14,13 +13,16 @@ from PySide6.QtWidgets import (
     QStackedWidget, QPushButton, QButtonGroup, QMessageBox
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPalette, QColor, QShortcut, QKeySequence
+from PySide6.QtGui import QShortcut, QKeySequence
 
 from tabs.dashboard_tab import DashboardTab
 from tabs.record_tab import RecordTab
 from tabs.sequence_tab import SequenceTab
 from utils.device_manager import DeviceManager
 from utils.camera_hub import shutdown_camera_hub
+
+from app.bootstrap import create_application, parse_args, should_use_fullscreen
+from app.instance_guard import SingleInstanceError, SingleInstanceGuard
 
 
 # Paths
@@ -447,97 +449,49 @@ def exception_hook(exctype, value, traceback_obj):
         pass
 
 
-def configure_app_palette(app: QApplication):
-    """Apply consistent dark palette across entry points."""
-    palette = QPalette()
-    palette.setColor(QPalette.Window, QColor(42, 42, 42))
-    palette.setColor(QPalette.WindowText, QColor(255, 255, 255))
-    palette.setColor(QPalette.Base, QColor(64, 64, 64))
-    palette.setColor(QPalette.AlternateBase, QColor(72, 72, 72))
-    palette.setColor(QPalette.ToolTipBase, QColor(255, 255, 255))
-    palette.setColor(QPalette.ToolTipText, QColor(0, 0, 0))
-    palette.setColor(QPalette.Text, QColor(255, 255, 255))
-    palette.setColor(QPalette.Button, QColor(70, 70, 70))
-    palette.setColor(QPalette.ButtonText, QColor(255, 255, 255))
-    palette.setColor(QPalette.BrightText, QColor(255, 100, 100))
-    palette.setColor(QPalette.Link, QColor(76, 175, 80))
-    palette.setColor(QPalette.Highlight, QColor(76, 175, 80))
-    palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))
-    app.setPalette(palette)
-
-
 def main():
-    """Main entry point"""
-    import argparse
+    """Main entry point."""
     import traceback
-    
-    # Install global exception handler
-    sys.excepthook = exception_hook
-    
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(description="LeRobot Operator Console")
-    parser.add_argument('--windowed', action='store_true',
-                       help='Start in windowed mode instead of fullscreen')
-    parser.add_argument('--no-fullscreen', action='store_true',
-                       help='Disable fullscreen mode (same as --windowed)')
-    parser.add_argument('--screen', type=int, default=0,
-                       help='Screen number to display on (0=primary, 1=secondary, etc.)')
-    parser.add_argument('--vision', action='store_true',
-                       help='Launch only the vision designer interface')
-    args = parser.parse_args()
 
-    # Determine fullscreen mode
-    fullscreen = not (args.windowed or args.no_fullscreen)
+    sys.excepthook = exception_hook
+    args = parse_args()
+    fullscreen = should_use_fullscreen(args)
 
     try:
-        # Single instance lock
-        lockfile_path = Path.home() / '.nicebot.lock'
-        lockfile = open(lockfile_path, 'w')
-        try:
-            fcntl.lockf(lockfile, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except IOError:
-            print("NiceBot UI is already running!")
-            sys.exit(1)
-        
-        app = QApplication(sys.argv)
-        
-        # Set application style and palette once
-        app.setStyle("Fusion")
-        configure_app_palette(app)
+        with SingleInstanceGuard():
+            app = create_application()
 
-        if args.vision:
-            from vision_ui import VisionDesignerWindow, create_default_vision_config
+            if args.vision:
+                from vision_ui import VisionDesignerWindow, create_default_vision_config
 
-            window = VisionDesignerWindow(create_default_vision_config())
-            window.show()
-            sys.exit(app.exec())
-    
-        # Create and show main window
-        window = MainWindow(fullscreen=fullscreen)
-        
-        # Move to specified screen
-        screens = app.screens()
-        if args.screen < len(screens):
-            target_screen = screens[args.screen]
-            window.setScreen(target_screen)
-            if fullscreen:
-                # Fullscreen on the target screen
-                window.windowHandle().setScreen(target_screen)
-                window.showFullScreen()
-            else:
-                # Center on target screen
-                screen_geometry = target_screen.geometry()
-                x = screen_geometry.x() + (screen_geometry.width() - 1024) // 2
-                y = screen_geometry.y() + (screen_geometry.height() - 600) // 2
-                window.move(x, y)
+                window = VisionDesignerWindow(create_default_vision_config())
                 window.show()
-        else:
-            window.show()
-        
-        # Run the application
-        sys.exit(app.exec())
-        
-    except Exception as e:
+                sys.exit(app.exec())
+
+            window = MainWindow(fullscreen=fullscreen)
+
+            screens = app.screens()
+            if args.screen < len(screens):
+                target_screen = screens[args.screen]
+                window.setScreen(target_screen)
+                if fullscreen:
+                    window.windowHandle().setScreen(target_screen)
+                    window.showFullScreen()
+                else:
+                    screen_geometry = target_screen.geometry()
+                    x = screen_geometry.x() + (screen_geometry.width() - 1024) // 2
+                    y = screen_geometry.y() + (screen_geometry.height() - 600) // 2
+                    window.move(x, y)
+                    window.show()
+            else:
+                window.show()
+
+            sys.exit(app.exec())
+
+    except SingleInstanceError as err:
+        print(err)
+        sys.exit(1)
+    except Exception as e:  # pragma: no cover - startup safety net
         print(f"\n{'='*60}")
         print("FATAL ERROR - Failed to start application")
         print(f"{'='*60}")
