@@ -5,7 +5,6 @@ Touch-friendly interface for SO-100/101 robot control with action recording
 """
 
 import sys
-import json
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -21,13 +20,19 @@ from tabs.sequence_tab import SequenceTab
 from utils.device_manager import DeviceManager
 from utils.camera_hub import shutdown_camera_hub
 
+from app.config import (
+    CONFIG_PATH,
+    create_default_config as build_default_config,
+    load_config as load_app_config,
+    save_config as save_app_config,
+)
+
 from app.bootstrap import create_application, parse_args, should_use_fullscreen
 from app.instance_guard import SingleInstanceError, SingleInstanceGuard
 
 
 # Paths
 ROOT = Path(__file__).parent
-CONFIG_PATH = ROOT / "config.json"
 
 
 class MainWindow(QMainWindow):
@@ -237,139 +242,16 @@ class MainWindow(QMainWindow):
                 button.setChecked(True)
     
     def load_config(self):
-        """Load configuration from JSON"""
-        from utils.config_compat import ensure_multi_arm_config
-        
-        if CONFIG_PATH.exists():
-            with open(CONFIG_PATH, 'r') as f:
-                config = json.load(f)
-            # Auto-migrate old configs to new multi-arm format
-            config = ensure_multi_arm_config(config)
-            # Save migrated config back
-            with open(CONFIG_PATH, 'w') as f:
-                json.dump(config, f, indent=2)
-            return config
-        else:
-            return self.create_default_config()
+        """Load configuration using the shared bootstrap helper."""
+        return load_app_config(CONFIG_PATH)
     
     def save_config(self):
-        """Save configuration to JSON"""
-        with open(CONFIG_PATH, 'w') as f:
-            json.dump(self.config, f, indent=2)
+        """Persist configuration to JSON."""
+        save_app_config(self.config, CONFIG_PATH)
     
     def create_default_config(self):
-        """Create default configuration with solo/bimanual mode support"""
-        return {
-            "robot": {
-                "mode": "solo",  # "solo" or "bimanual"
-                "arms": [
-                    {
-                        "enabled": True,
-                        "name": "Follower 1",
-                        "type": "so100_follower",
-                        "port": "/dev/ttyACM0",
-                        "id": "follower_arm",
-                        "arm_id": 1,
-                        "home_positions": [2082, 1106, 2994, 2421, 1044, 2054],
-                        "home_velocity": 600
-                    },
-                    {
-                        "enabled": False,
-                        "name": "Follower 2",
-                        "type": "so100_follower",
-                        "port": "/dev/ttyACM1",
-                        "id": "follower_arm_2",
-                        "arm_id": 2,
-                        "home_positions": [2082, 1106, 2994, 2421, 1044, 2054],
-                        "home_velocity": 600
-                    }
-                ],
-                "fps": 30,
-                "min_time_to_move_multiplier": 3.0,
-                "enable_motor_torque": True,
-                "position_tolerance": 45,
-                "position_verification_enabled": True
-            },
-            "teleop": {
-                "mode": "solo",  # "solo" or "bimanual"
-                "arms": [
-                    {
-                        "enabled": False,
-                        "name": "Leader 1",
-                        "type": "so100_leader",
-                        "port": "/dev/ttyACM2",
-                        "id": "leader_arm",
-                        "arm_id": 1
-                    },
-                    {
-                        "enabled": False,
-                        "name": "Leader 2",
-                        "type": "so100_leader",
-                        "port": "/dev/ttyACM3",
-                        "id": "leader_arm_2",
-                        "arm_id": 2
-                    }
-                ]
-            },
-            "cameras": {
-                "front": {
-                    "type": "opencv",
-                    "index_or_path": 0,
-                    "width": 640,
-                    "height": 480,
-                    "fps": 30
-                }
-            },
-            "policy": {
-                "path": "outputs/train/act_so100/checkpoints/last/pretrained_model",
-                "device": "cpu",
-                "base_path": "outputs/train",
-                "local_mode": True
-            },
-            "control": {
-                "warmup_time_s": 3,
-                "episode_time_s": 25,
-                "reset_time_s": 8,
-                "num_episodes": 3,
-                "single_task": "PickPlace v1",
-                "push_to_hub": False,
-                "repo_id": None,
-                "num_image_writer_processes": 0,
-                "display_data": True,
-                "speed_multiplier": 1.0,
-                "loop_enabled": False
-            },
-            "ui": {
-                "object_gate": False,
-                "roi": [220, 140, 200, 180],
-                "presence_threshold": 0.12
-            },
-            "safety": {
-                "soft_limits_deg": [
-                    [-90, 90], [-60, 60], [-60, 60],
-                    [-90, 90], [-180, 180], [0, 100]
-                ],
-                "max_speed_scale": 1.0,
-                "motor_temp_monitoring_enabled": False,
-                "motor_temp_threshold_c": 75,
-                "motor_temp_poll_interval_s": 2.0,
-                "torque_monitoring_enabled": False,
-                "torque_limit_percent": 120.0,
-                "torque_auto_disable": False
-            },
-            "async_inference": {
-                "server_host": "127.0.0.1",
-                "server_port": 8080,
-                "policy_type": "act",
-                "actions_per_chunk": 30,
-                "chunk_size_threshold": 0.6
-            },
-            "dashboard_state": {
-                "speed_percent": 100,
-                "loop_enabled": False,
-                "run_selection": ""
-            }
-        }
+        """Create default configuration with solo/bimanual mode support."""
+        return build_default_config()
     
     def open_settings(self):
         """Open settings - now handled by SettingsTab"""

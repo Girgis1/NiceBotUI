@@ -29,6 +29,12 @@ from utils.motor_controller import MotorController
 from utils.actions_manager import ActionsManager
 from utils.sequences_manager import SequencesManager
 from utils.camera_hub import CameraStreamHub
+from utils.execution import (
+    ExecutionContext,
+    execute_composite_recording,
+    playback_live_recording,
+    playback_position_recording,
+)
 
 
 class ExecutionWorker(QThread):
@@ -72,6 +78,16 @@ class ExecutionWorker(QThread):
             self.camera_hub: Optional[CameraStreamHub] = CameraStreamHub.instance(config)
         except Exception:
             self.camera_hub = None
+
+        self._context = ExecutionContext(
+            worker=self,
+            config=self.config,
+            motor_controller=self.motor_controller,
+            actions_mgr=self.actions_mgr,
+            sequences_mgr=self.sequences_mgr,
+            camera_hub=self.camera_hub,
+            options=self.options,
+        )
 
     def run(self):
         """Main execution thread
@@ -159,11 +175,11 @@ class ExecutionWorker(QThread):
 
                 try:
                     if recording_type == "composite_recording":
-                        self._execute_composite_recording(recording)
+                        execute_composite_recording(self._context, recording)
                     elif recording_type == "live_recording":
-                        self._playback_live_recording(recording)
+                        playback_live_recording(self._context, recording)
                     else:
-                        self._playback_position_recording(recording)
+                        playback_position_recording(self._context, recording)
                 except Exception as exc:  # pragma: no cover - hardware dependent
                     self.log_message.emit('error', f"Recording failed: {exc}")
                     recording_failed = True
@@ -190,234 +206,6 @@ class ExecutionWorker(QThread):
         else:
             self.log_message.emit('info', "✓ Recording completed successfully")
             self.execution_completed.emit(True, "Recording completed")
-    
-    def _execute_composite_recording(self, recording: dict):
-        """Execute a composite recording with multiple steps
-        
-        Each step can be a live_recording or position_set component.
-        Steps are executed in order with per-step speed and delays.
-        """
-        steps = recording.get("steps", [])
-        total_steps = len(steps)
-        
-        self.log_message.emit('info', f"Executing composite recording: {recording.get('name', 'Unknown')}")
-        self.log_message.emit('info', f"Total steps: {total_steps}")
-        
-        for step_idx, step in enumerate(steps):
-            if self._stop_requested:
-                break
-            
-            # Check if step is enabled
-            if not step.get('enabled', True):
-                self.log_message.emit('info', f"[{step_idx+1}/{total_steps}] Skipping disabled step: {step['name']}")
-                continue
-            
-            step_name = step.get('name', f'Step {step_idx + 1}')
-            step_type = step.get('type', 'unknown')
-            step_speed = step.get('speed', 100)
-            delay_before = step.get('delay_before', 0.0)
-            delay_after = step.get('delay_after', 0.0)
-            
-            self.log_message.emit('info', f"\n[{step_idx+1}/{total_steps}] === {step_name} ({step_type}) ===")
-            self.status_update.emit(f"Step {step_idx+1}/{total_steps}: {step_name}")
-            
-            # Delay before step
-            if delay_before > 0:
-                self.log_message.emit('info', f"⏱ Waiting {delay_before}s before step...")
-                time.sleep(delay_before)
-            
-            # Get component data
-            component_data = step.get('component_data', {})
-            if not component_data:
-                self.log_message.emit('warning', f"No component data for step: {step_name}")
-                continue
-            
-            # Execute step based on type
-            try:
-                if step_type == 'live_recording':
-                    self._execute_live_component(component_data, step_speed)
-                elif step_type == 'position_set':
-                    self._execute_position_component(component_data, step_speed)
-                else:
-                    self.log_message.emit('error', f"Unknown step type: {step_type}")
-            except Exception as e:
-                self.log_message.emit('error', f"Failed to execute step {step_name}: {e}")
-                if not self._stop_requested:
-                    continue  # Try next step
-            
-            # Delay after step
-            if delay_after > 0:
-                self.log_message.emit('info', f"⏱ Waiting {delay_after}s after step...")
-                time.sleep(delay_after)
-            
-            # Update overall progress
-            progress_pct = int(((step_idx + 1) / total_steps) * 100)
-            self.progress_update.emit(step_idx + 1, total_steps)
-            self.log_message.emit('info', f"✓ Step complete ({progress_pct}% overall)")
-    
-    def _execute_live_component(self, component: dict, speed_override: int):
-        """Execute a live recording component with speed override"""
-        recorded_data = component.get("recorded_data", [])
-        
-        if not recorded_data:
-            self.log_message.emit('warning', "No recorded data in component")
-            return
-        
-        total_points = len(recorded_data)
-        self.log_message.emit('info', f"Playing {total_points} recorded points at {speed_override}% speed")
-        
-        # Time-based playback
-        start_time = time.time()
-        
-        for idx, point in enumerate(recorded_data):
-            if self._stop_requested:
-                break
-            
-            positions = point['positions']
-            target_timestamp = point['timestamp'] * (100.0 / speed_override)  # Speed scaling
-            velocity = int(point.get('velocity', 600) * (speed_override / 100.0))
-            
-            # Wait until target time
-            current_time = time.time() - start_time
-            wait_time = target_timestamp - current_time
-            if wait_time > 0:
-                time.sleep(wait_time)
-            
-            # Update progress (every 10 points to avoid spam)
-            if idx % 10 == 0:
-                progress = int((idx / total_points) * 100)
-                self.log_message.emit('info', f"  → Point {idx}/{total_points} ({progress}%)")
-            
-            # Send position command
-            self.motor_controller.set_positions(
-                positions,
-                velocity=velocity,
-                wait=False,  # Don't wait for live recordings (time-based)
-                keep_connection=True
-            )
-    
-    def _execute_position_component(self, component: dict, speed_override: int):
-        """Execute a position set component with speed override"""
-        positions_list = component.get("positions", [])
-        
-        if not positions_list:
-            self.log_message.emit('warning', "No positions in component")
-            return
-        
-        total_positions = len(positions_list)
-        self.log_message.emit('info', f"Moving through {total_positions} waypoints at {speed_override}% speed")
-        
-        for idx, pos_data in enumerate(positions_list):
-            if self._stop_requested:
-                break
-            
-            # Extract position data
-            pos_name = pos_data.get("name", f"Position {idx + 1}")
-            motor_positions = pos_data.get("motor_positions", [])
-            velocity = pos_data.get("velocity", 600)
-            wait_for_completion = pos_data.get("wait_for_completion", True)
-            
-            # Apply speed scaling
-            velocity = int(velocity * (speed_override / 100.0))
-            
-            # Move to position
-            self.log_message.emit('info', f"  → {pos_name}: {motor_positions[:3]}... @ {velocity} vel")
-            self.motor_controller.set_positions(
-                motor_positions,
-                velocity=velocity,
-                wait=wait_for_completion,
-                keep_connection=True
-            )
-            
-            progress = int(((idx + 1) / total_positions) * 100)
-            self.log_message.emit('info', f"  ✓ Reached {pos_name} ({progress}%)")
-    
-    def _playback_position_recording(self, recording: dict):
-        """Play back a simple position recording"""
-        positions_list = recording.get("positions", [])
-        speed = recording.get("speed", 100)
-        delays = recording.get("delays", {})
-        
-        total_steps = len(positions_list)
-        self.log_message.emit('info', f"Playing {total_steps} positions at {speed}% speed")
-        
-        for idx, pos_data in enumerate(positions_list):
-            if self._stop_requested:
-                break
-            
-            # Extract position
-            if isinstance(pos_data, dict):
-                positions = pos_data.get("motor_positions", pos_data.get("positions", []))
-                velocity = pos_data.get("velocity", 600)
-            else:
-                positions = pos_data
-                velocity = 600
-            
-            # Apply speed scaling
-            velocity = int(velocity * (speed / 100.0))
-            
-            # Update progress
-            self.progress_update.emit(idx + 1, total_steps)
-            self.status_update.emit(f"Position {idx+1}/{total_steps}")
-            
-            # Move to position
-            self.log_message.emit('info', f"→ Position {idx+1}: {positions[:3]}... @ {velocity} vel")
-            self.motor_controller.set_positions(
-                positions,
-                velocity=velocity,
-                wait=True,
-                keep_connection=True
-            )
-            
-            # Apply delay if specified
-            delay = delays.get(str(idx), 0)
-            if delay > 0:
-                self.log_message.emit('info', f"Delay: {delay}s")
-                time.sleep(delay)
-    
-    def _playback_live_recording(self, recording: dict):
-        """Play back a live recording with time-based interpolation"""
-        recorded_data = recording.get("recorded_data", [])
-        speed = recording.get("speed", 100)
-        
-        if not recorded_data:
-            self.log_message.emit('warning', "No recorded data found")
-            return
-        
-        total_points = len(recorded_data)
-        self.log_message.emit('info', f"Playing {total_points} recorded points at {speed}% speed")
-        
-        # Time-based playback
-        start_time = time.time()
-        
-        for idx, point in enumerate(recorded_data):
-            if self._stop_requested:
-                break
-            
-            positions = point['positions']
-            target_timestamp = point['timestamp'] * (100.0 / speed)  # Speed scaling
-            velocity = int(point.get('velocity', 600) * (speed / 100.0))
-            
-            # Wait until target time
-            current_time = time.time() - start_time
-            wait_time = target_timestamp - current_time
-            if wait_time > 0:
-                time.sleep(wait_time)
-            
-            # Update progress (every 10 points to avoid spam)
-            if idx % 10 == 0:
-                progress = int((idx / total_points) * 100)
-                self.progress_update.emit(idx, total_points)
-                self.status_update.emit(f"Playing: {progress}%")
-                self.log_message.emit('info', f"→ Point {idx}/{total_points} ({progress}%)")
-            
-            # Send position command
-            self.motor_controller.set_positions(
-                positions,
-                velocity=velocity,
-                wait=False,  # Don't wait for live recordings (time-based)
-                keep_connection=True
-            )
     
     def _execute_sequence(self):
         """Execute a sequence of steps with optimized policy server management"""
@@ -891,12 +679,11 @@ class ExecutionWorker(QThread):
         recording_type = recording.get("type", "position")
         
         if recording_type == "composite_recording":
-            # New composite format - execute all steps
-            self._execute_composite_recording(recording)
+            execute_composite_recording(self._context, recording)
         elif recording_type == "live_recording":
-            self._playback_live_recording(recording)
+            playback_live_recording(self._context, recording)
         else:
-            self._playback_position_recording(recording)
+            playback_position_recording(self._context, recording)
     
     def _delay_with_hold(self, duration: float):
         """Delay while holding current motor position with torque enabled
