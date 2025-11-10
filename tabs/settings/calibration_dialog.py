@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
 from PySide6.QtCore import Qt, QProcess, QTimer, Signal
-from PySide6.QtGui import QGuiApplication, QPixmap, QTextCursor
+from PySide6.QtGui import QFont, QGuiApplication, QPixmap, QTextCursor
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -78,6 +78,9 @@ class SO101CalibrationDialog(QDialog):
         self._id_variants: List[str] = []
         self._id_variant_index = 0
         self.calibration_image_path = calibration_image_path
+        self._motor_snapshot_mode = False
+        self._motor_lines: Dict[str, str] = {}
+        self._log_fullscreen = False
 
         self._build_ui(
             default_robot_type,
@@ -121,15 +124,15 @@ class SO101CalibrationDialog(QDialog):
         self.log_output = QPlainTextEdit()
         self.log_output.setReadOnly(True)
         self.log_output.setMinimumHeight(160)
+        log_font = QFont("DejaVu Sans Mono, Noto Color Emoji, monospace", 11)
+        self.log_output.setFont(log_font)
         self.log_output.setStyleSheet(
             """
             QPlainTextEdit {
-                background-color: #111;
-                color: #33ff99;
-                font-family: 'JetBrains Mono', 'Consolas', monospace;
-                font-size: 14px;
-                border: 2px solid #2c2c2c;
-                border-radius: 6px;
+                background-color: #2d2d2d;
+                color: #ffffff;
+                border: 1px solid #404040;
+                border-radius: 4px;
                 padding: 8px;
             }
             """
@@ -165,7 +168,7 @@ class SO101CalibrationDialog(QDialog):
         container = QFrame()
         container.setFrameShape(QFrame.NoFrame)
         container.setStyleSheet(
-            "QFrame { background-color: #252525; border: 2px solid #3a3a3a; border-radius: 12px; }"
+            "QFrame { background-color: #303030; border: 2px solid #4a4a4a; border-radius: 12px; }"
         )
 
         layout = QVBoxLayout(container)
@@ -244,7 +247,7 @@ class SO101CalibrationDialog(QDialog):
         self.robot_id_edit = QLineEdit(default_robot_id)
         self.robot_id_edit.setMinimumHeight(48)
         self.robot_id_edit.setStyleSheet(
-            "QLineEdit { background-color: #1a1a1a; color: #f5f5f5; border: 2px solid #444; border-radius: 10px; padding: 0 12px; font-size: 16px; }"
+            "QLineEdit { background-color: #2a2a2a; color: #f5f5f5; border: 2px solid #5a5a5a; border-radius: 10px; padding: 0 12px; font-size: 16px; }"
         )
         self.robot_id_edit.textEdited.connect(self._on_name_edited)
         id_row.addWidget(self.robot_id_edit, stretch=1)
@@ -279,24 +282,11 @@ class SO101CalibrationDialog(QDialog):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(12)
 
-        title = QLabel("Move Arm To Center")
-        title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet("font-size: 20px; font-weight: bold; color: #f5f5f5;")
-        layout.addWidget(title)
-
-        subtitle = QLabel(
-            "Follow the LeRobot guide: place the wrist joint flat and align the elbow as shown before tapping Set."
-        )
-        subtitle.setWordWrap(True)
-        subtitle.setAlignment(Qt.AlignCenter)
-        subtitle.setStyleSheet("color: #d0d0d0; font-size: 15px;")
-        layout.addWidget(subtitle)
-
         self.center_image_label = QLabel()
         self.center_image_label.setAlignment(Qt.AlignCenter)
         self.center_image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.center_image_label.setStyleSheet(
-            "QLabel { background-color: #0f0f0f; border: 2px solid #2d2d2d; border-radius: 12px; }"
+            "QLabel { background-color: #1f1f1f; border: 2px solid #3a3a3a; border-radius: 12px; }"
         )
         layout.addWidget(self.center_image_label, stretch=1)
 
@@ -327,9 +317,9 @@ class SO101CalibrationDialog(QDialog):
     # ---------------------------------------------------------------- Schema / command helpers
     def _combo_style(self) -> str:
         return (
-            "QComboBox { background-color: #1a1a1a; color: #f5f5f5; border: 2px solid #444; border-radius: 10px; padding: 0 12px; font-size: 16px; }"
+            "QComboBox { background-color: #2a2a2a; color: #f5f5f5; border: 2px solid #5a5a5a; border-radius: 10px; padding: 0 12px; font-size: 16px; }"
             "QComboBox::drop-down { width: 32px; border: none; }"
-            "QComboBox QAbstractItemView { background-color: #1f1f1f; color: #fff; selection-background-color: #4CAF50; }"
+            "QComboBox QAbstractItemView { background-color: #2f2f2f; color: #fff; selection-background-color: #4CAF50; }"
         )
 
     def _focus_default(self):
@@ -384,13 +374,13 @@ class SO101CalibrationDialog(QDialog):
 
     # ----------------------------------------------------------------- Actions
     def _on_primary_clicked(self):
-        if self._awaiting_center and self._active_process:
-            self._append_log("[UI] Center confirmed, continuing calibration...\n")
+        if self._active_process:
+            self._append_log("[UI] Sending ENTER to current command...\n")
             self._active_process.write(b"\n")
-            self._awaiting_center = False
-            self.stack.setCurrentWidget(self.form_widget)
-            self.primary_btn.setEnabled(False)
-            self.primary_btn.setText("Running...")
+            if self._awaiting_center:
+                self._awaiting_center = False
+                self.primary_btn.setText("Next")
+                self._enable_motor_snapshot_mode()
             return
 
         if self._stage == "config":
@@ -412,6 +402,7 @@ class SO101CalibrationDialog(QDialog):
             return
 
         self._stage = "running"
+        self._disable_motor_snapshot_mode()
         self.cancel_btn.setText("Stop")
         self.robot_type_combo.setEnabled(False)
         self.arm_role_combo.setEnabled(False)
@@ -452,8 +443,9 @@ class SO101CalibrationDialog(QDialog):
         data = bytes(process.readAllStandardError() if is_stderr else process.readAllStandardOutput())
         if not data:
             return
-        text = data.decode("utf-8", errors="ignore")
-        self._append_log(text)
+        text = data.decode("utf-8", errors="ignore").replace("\r", "\n")
+        if text:
+            self._append_log(text)
         if self._process_kind == "calibrate":
             lowered = text.lower()
             if not self._awaiting_center and any(trigger in lowered for trigger in CENTER_PROMPT_TRIGGERS):
@@ -465,9 +457,10 @@ class SO101CalibrationDialog(QDialog):
         if self._awaiting_center:
             return
         self._awaiting_center = True
-        self.stack.setCurrentWidget(self.center_widget)
         self.primary_btn.setEnabled(True)
         self.primary_btn.setText("Set")
+        self._set_log_fullscreen(False)
+        self.stack.setCurrentWidget(self.center_widget)
         self._append_log("[UI] Awaiting center position confirmation...\n")
 
     def _on_process_finished(self, process: QProcess, kind: str, exit_code: int):
@@ -498,6 +491,7 @@ class SO101CalibrationDialog(QDialog):
         self.id_prev_btn.setEnabled(True)
         self.stack.setCurrentWidget(self.form_widget)
         self._awaiting_center = False
+        self._disable_motor_snapshot_mode()
         if success:
             payload = self._build_result_payload()
             self._result_payload = payload
@@ -544,16 +538,93 @@ class SO101CalibrationDialog(QDialog):
         pattern = re.compile(r"/dev/tty[\w\d._-]+")
         return sorted(set(pattern.findall(text)))
 
+    def _enable_motor_snapshot_mode(self):
+        if self._motor_snapshot_mode:
+            return
+        self._motor_snapshot_mode = True
+        self._motor_lines.clear()
+        self._set_log_fullscreen(True)
+        self._render_motor_snapshot()
+
+    def _disable_motor_snapshot_mode(self):
+        if not self._motor_snapshot_mode:
+            return
+        self._motor_snapshot_mode = False
+        self._motor_lines.clear()
+        self._set_log_fullscreen(False)
+
+    def _ingest_motor_snapshot_text(self, text: str):
+        updated = False
+        for raw in text.splitlines():
+            stripped = raw.strip()
+            if not stripped:
+                continue
+            label = self._motor_label_from_line(stripped)
+            if not label:
+                continue
+            self._motor_lines[label] = stripped
+            updated = True
+        if updated:
+            self._render_motor_snapshot()
+
+    def _render_motor_snapshot(self):
+        header = "Live Motor Positions"
+        lines = [header, "-" * len(header)]
+        if self._motor_lines:
+            for label in sorted(self._motor_lines.keys(), key=self._motor_sort_key):
+                lines.append(self._motor_lines[label])
+        else:
+            lines.append("Move each joint to record min/max positions…")
+        self.log_output.setPlainText("\n".join(lines))
+        self.log_output.moveCursor(QTextCursor.Start)
+
+    def _motor_label_from_line(self, line: str) -> Optional[str]:
+        if ":" in line:
+            return line.split(":", 1)[0].strip()
+        if "=" in line:
+            return line.split("=", 1)[0].strip()
+        parts = line.split()
+        if parts:
+            return parts[0]
+        return None
+
+    def _motor_sort_key(self, label: str):
+        match = re.search(r"(\d+)", label)
+        if match:
+            return (0, int(match.group(1)))
+        return (1, label.lower())
+
+    def _set_log_fullscreen(self, fullscreen: bool):
+        if fullscreen == self._log_fullscreen:
+            return
+        self._log_fullscreen = fullscreen
+        if fullscreen:
+            self.stack.hide()
+            self.log_output.setMinimumHeight(0)
+            self.log_output.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        else:
+            self.stack.show()
+            self.log_output.setMinimumHeight(160)
+            self.log_output.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            self.stack.setCurrentWidget(self.center_widget if self._awaiting_center else self.form_widget)
+
     def _append_log(self, text: str):
         if not text:
             return
+        if self._motor_snapshot_mode:
+            self._ingest_motor_snapshot_text(text)
+            return
+        scrollbar = self.log_output.verticalScrollBar()
+        at_bottom = scrollbar.value() == scrollbar.maximum()
         self.log_output.moveCursor(QTextCursor.End)
         self.log_output.insertPlainText(text)
-        self.log_output.verticalScrollBar().setValue(self.log_output.verticalScrollBar().maximum())
+        if at_bottom:
+            scrollbar.setValue(scrollbar.maximum())
 
     def showEvent(self, event):  # type: ignore[override]
         super().showEvent(event)
         self._match_host_window()
+        self._set_log_fullscreen(False)
 
     def _match_host_window(self):
         target_rect = None
