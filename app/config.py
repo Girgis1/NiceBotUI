@@ -73,7 +73,21 @@ def create_default_config() -> Dict[str, Any]:
                 "width": 640,
                 "height": 480,
                 "fps": 30,
-            }
+            },
+            "wrist": {
+                "type": "opencv",
+                "index_or_path": 1,
+                "width": 640,
+                "height": 480,
+                "fps": 30,
+            },
+            "aux": {
+                "type": "opencv",
+                "index_or_path": "",
+                "width": 640,
+                "height": 480,
+                "fps": 30,
+            },
         },
         "policy": {
             "path": "outputs/train/act_so100/checkpoints/last/pretrained_model",
