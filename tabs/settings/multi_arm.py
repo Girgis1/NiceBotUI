@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt, QThread
 from PySide6.QtWidgets import (
@@ -27,6 +28,7 @@ from utils.config_compat import (
     get_home_positions,
     set_home_positions,
 )
+from .calibration_dialog import SO101CalibrationDialog
 
 
 class MultiArmMixin:
@@ -312,8 +314,104 @@ class MultiArmMixin:
             self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
 
     def calibrate_arm_at_index(self, arm_index: int):
-        self.status_label.setText(f"⚠️ Calibration for Arm {arm_index + 1} - use calibration tab")
-        self.status_label.setStyleSheet("QLabel { color: #FF9800; font-size: 15px; padding: 8px; }")
+        """Launch the touch calibration dialog for the requested arm."""
+        arms = self.config.setdefault("robot", {}).setdefault("arms", [])
+        while len(arms) <= arm_index:
+            arms.append({})
+        arm_cfg = arms[arm_index]
+
+        default_robot_type = arm_cfg.get("robot_type", "so101")
+        default_arm_role = arm_cfg.get("arm_role", "follower")
+        default_port = arm_cfg.get("port") or self._get_arm_port_from_ui(arm_index)
+        default_robot_id = arm_cfg.get("id") or self._suggest_robot_id(default_robot_type, default_arm_role)
+        available_ports = self._collect_known_ports()
+
+        dialog = SO101CalibrationDialog(
+            parent=self.window() or self,
+            default_robot_type=default_robot_type,
+            default_arm_role=default_arm_role,
+            default_port=default_port,
+            default_robot_id=default_robot_id,
+            available_ports=available_ports,
+        )
+        dialog.calibration_finished.connect(
+            lambda payload, idx=arm_index: self._apply_calibration_result(idx, payload)
+        )
+        dialog.exec()
+
+    # ------------------------------------------------------------------ Calibration helpers
+    def _suggest_robot_id(self, robot_type: str, arm_role: str) -> str:
+        return f"R_{(robot_type or 'so101').lower()}_{(arm_role or 'follower').title()}"
+
+    def _collect_known_ports(self) -> List[str]:
+        ports: List[str] = []
+
+        def add_port(value: Optional[str]):
+            if not value:
+                return
+            normalized = value.strip()
+            if normalized and normalized not in ports:
+                ports.append(normalized)
+
+        for arm in self.config.get("robot", {}).get("arms", []):
+            add_port(arm.get("port"))
+
+        widgets = [
+            self.robot_arm1_config,
+            self.robot_arm2_config,
+            self.solo_arm_config,
+        ]
+        for widget in widgets:
+            if widget:
+                try:
+                    add_port(widget.get_port())
+                except Exception:
+                    continue
+        return ports
+
+    def _get_arm_port_from_ui(self, arm_index: int) -> str:
+        widget = None
+        if arm_index == 0 and self.robot_arm1_config:
+            widget = self.robot_arm1_config
+        elif arm_index == 1 and self.robot_arm2_config:
+            widget = self.robot_arm2_config
+
+        if self.solo_arm_config and self.solo_arm_selector and self.solo_arm_selector.currentIndex() == arm_index:
+            widget = self.solo_arm_config
+
+        return widget.get_port() if widget else ""
+
+    def _apply_calibration_result(self, arm_index: int, payload: Dict[str, str]):
+        try:
+            arms = self.config.setdefault("robot", {}).setdefault("arms", [])
+            while len(arms) <= arm_index:
+                arms.append({})
+            arm_cfg = arms[arm_index]
+            arm_cfg["port"] = payload["port"]
+            arm_cfg["id"] = payload["robot_id"]
+            arm_cfg["robot_type"] = payload["robot_type"]
+            arm_cfg["arm_role"] = payload["arm_role"]
+            Path(self.config_path).write_text(json.dumps(self.config, indent=2))
+            self._sync_ui_arm_fields(arm_index, payload)
+            self.status_label.setText(
+                f"✓ Calibration saved for Arm {arm_index + 1}: {payload['robot_id']} on {payload['port']}"
+            )
+            self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+            self.config_changed.emit()
+        except Exception as exc:
+            self.status_label.setText(f"❌ Failed to store calibration: {exc}")
+            self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+
+    def _sync_ui_arm_fields(self, arm_index: int, payload: Dict[str, str]):
+        if arm_index == 0 and self.robot_arm1_config:
+            self.robot_arm1_config.set_port(payload["port"])
+            self.robot_arm1_config.set_id(payload["robot_id"])
+        if arm_index == 1 and self.robot_arm2_config:
+            self.robot_arm2_config.set_port(payload["port"])
+            self.robot_arm2_config.set_id(payload["robot_id"])
+        if self.solo_arm_config and self.solo_arm_selector and self.solo_arm_selector.currentIndex() == arm_index:
+            self.solo_arm_config.set_port(payload["port"])
+            self.solo_arm_config.set_id(payload["robot_id"])
 
     def home_all_arms(self):
         enabled_arms = get_enabled_arms(self.config, "robot")

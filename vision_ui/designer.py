@@ -21,7 +21,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPolygonF
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QImage, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
@@ -1779,7 +1779,9 @@ class VisionConfigDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Configure Vision Trigger")
         self.setModal(True)
-        self.setFixedSize(1024, 600)
+        # Remove the native title bar so the dialog fits within the available display area.
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.resize(1024, 600)
 
         config_source = system_config if system_config is not None else _load_system_config()
         self.designer = VisionDesignerWidget(
@@ -1810,6 +1812,33 @@ class VisionConfigDialog(QDialog):
 
     def get_step_data(self) -> Dict:
         return self.designer.get_config()
+
+    def showEvent(self, event):
+        """Align the dialog to the hosting window or screen bounds on show."""
+        super().showEvent(event)
+        self._match_host_window()
+
+    def _match_host_window(self):
+        """Resize and position the dialog to overlay the parent window/screen."""
+        target_rect = None
+
+        parent = self.parentWidget()
+        if parent is not None:
+            host_window = parent.window() or parent
+            target_rect = host_window.geometry()
+
+        if target_rect is None:
+            screen = (self.windowHandle().screen() if self.windowHandle() else None) or QGuiApplication.primaryScreen()
+            if screen is not None:
+                target_rect = screen.availableGeometry()
+
+        if target_rect is None:
+            return
+
+        width = max(target_rect.width(), 1)
+        height = max(target_rect.height(), 1)
+        self.setFixedSize(width, height)
+        self.move(target_rect.left(), target_rect.top())
 
     def accept(self):
         self.designer.shutdown()
