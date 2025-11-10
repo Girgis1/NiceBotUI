@@ -37,6 +37,7 @@ def main():
     print(f"\nRobot Status: {device_manager.robot_status}")
     print(f"Front Camera Status: {device_manager.camera_front_status}")
     print(f"Wrist Camera Status: {device_manager.camera_wrist_status}")
+    print(f"Overhead Camera Status: {device_manager.camera_overhead_status}")
     
     if results["errors"]:
         print(f"\nErrors: {len(results['errors'])}")

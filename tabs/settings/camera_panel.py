@@ -30,6 +30,7 @@ class CameraPanelMixin:
 
     camera_front_circle: Optional[QLabel]  # Provided at runtime
     camera_wrist_circle: Optional[QLabel]
+    camera_overhead_circle: Optional[QLabel]
 
     def create_camera_tab(self) -> QWidget:
         """Create camera settings tab - optimized for 1024x600 touchscreen."""
@@ -83,6 +84,24 @@ class CameraPanelMixin:
         wrist_row.addSpacing(12)
         wrist_row.addStretch()
         layout.addLayout(wrist_row)
+
+        overhead_row = QHBoxLayout()
+        overhead_row.setSpacing(6)
+        self.camera_overhead_circle = self.create_status_circle("empty")
+        overhead_row.addWidget(self.camera_overhead_circle)
+
+        overhead_label = QLabel("Overhead:")
+        overhead_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
+        overhead_label.setFixedWidth(55)
+        overhead_row.addWidget(overhead_label)
+
+        self.cam_overhead_edit = QLineEdit("/dev/video5")
+        self.cam_overhead_edit.setFixedHeight(45)
+        self.cam_overhead_edit.setStyleSheet(self._camera_lineedit_style())
+        overhead_row.addWidget(self.cam_overhead_edit)
+        overhead_row.addSpacing(12)
+        overhead_row.addStretch()
+        layout.addLayout(overhead_row)
 
         layout.addSpacing(8)
 
@@ -201,6 +220,11 @@ class CameraPanelMixin:
             assign_group.addButton(wrist_radio, 1)
             layout.addWidget(wrist_radio)
 
+            overhead_radio = QRadioButton("Overhead Camera")
+            overhead_radio.setStyleSheet("QRadioButton { color: #e0e0e0; font-size: 14px; padding: 5px; }")
+            assign_group.addButton(overhead_radio, 2)
+            layout.addWidget(overhead_radio)
+
             def update_preview():
                 try:
                     selected_idx = camera_list.currentData()
@@ -241,7 +265,8 @@ class CameraPanelMixin:
                 selected_cam = next((cam for cam in found_cameras if cam["index"] == selected_idx), None)
                 if selected_cam:
                     camera_path = selected_cam["path"]
-                    if assign_group.checkedId() == 0:
+                    target = assign_group.checkedId()
+                    if target == 0:
                         self.cam_front_edit.setText(camera_path)
                         self.camera_front_status = "online"
                         if self.camera_front_circle:
@@ -249,7 +274,7 @@ class CameraPanelMixin:
                         if self.device_manager:
                             self.device_manager.update_camera_status("front", "online")
                         self.status_label.setText(f"✓ Assigned {camera_path} to Front Camera")
-                    else:
+                    elif target == 1:
                         self.cam_wrist_edit.setText(camera_path)
                         self.camera_wrist_status = "online"
                         if self.camera_wrist_circle:
@@ -257,6 +282,14 @@ class CameraPanelMixin:
                         if self.device_manager:
                             self.device_manager.update_camera_status("wrist", "online")
                         self.status_label.setText(f"✓ Assigned {camera_path} to Wrist Camera")
+                    else:
+                        self.cam_overhead_edit.setText(camera_path)
+                        self.camera_overhead_status = "online"
+                        if self.camera_overhead_circle:
+                            self.update_status_circle(self.camera_overhead_circle, "online")
+                        if self.device_manager:
+                            self.device_manager.update_camera_status("overhead", "online")
+                        self.status_label.setText(f"✓ Assigned {camera_path} to Overhead Camera")
                     self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
 
             preview_timer.stop()
