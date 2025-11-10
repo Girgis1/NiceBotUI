@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Dict, Iterator, Optional, Tuple
 
 try:  # Optional dependency
     import cv2  # type: ignore
@@ -345,6 +346,50 @@ class CameraStreamHub:
             for stream in self._streams.values():
                 stream.start()
             self._paused = False
+
+    def reset_streams(self, camera_name: Optional[str] = None) -> None:
+        """Stop and discard cached streams so they reopen with fresh handles."""
+
+        to_stop = []
+        with self._streams_lock:
+            if camera_name is None:
+                to_stop = list(self._streams.values())
+                self._streams.clear()
+            else:
+                stream = self._streams.pop(camera_name, None)
+                if stream:
+                    to_stop.append(stream)
+
+        for stream in to_stop:
+            stream.stop()
+
+    @classmethod
+    def reset(cls, camera_name: Optional[str] = None) -> None:
+        """Class helper to reset cached streams on the singleton hub."""
+
+        instance = cls._instance
+        if instance is not None:
+            instance.reset_streams(camera_name)
+
+    @classmethod
+    @contextmanager
+    def paused(cls) -> Iterator[bool]:
+        """Context manager that pauses the shared hub while external code probes cameras."""
+
+        instance = cls._instance
+        if instance is None:
+            yield False
+            return
+
+        already_paused = instance._paused
+        if not already_paused:
+            instance.pause_all()
+
+        try:
+            yield True
+        finally:
+            if not already_paused:
+                instance.resume_all()
 
 
 def shutdown_camera_hub() -> None:
