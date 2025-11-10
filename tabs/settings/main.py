@@ -66,9 +66,13 @@ class SettingsTab(
         self.robot_status = "empty"
         self.camera_front_status = "empty"
         self.camera_wrist_status = "empty"
+        self.camera_extra_status = "empty"
         self.robot_status_circle = None
         self.camera_front_circle = None
         self.camera_wrist_circle = None
+        self.camera_extra_circle = None
+        self.extra_camera_label = None
+        self.extra_camera_key: Optional[str] = None
 
         self.init_ui()
         self.load_settings()

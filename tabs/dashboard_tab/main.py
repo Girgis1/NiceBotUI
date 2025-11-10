@@ -82,6 +82,7 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
         self.camera_indicator1: Optional[StatusIndicator] = None
         self.camera_indicator2: Optional[StatusIndicator] = None
         self.camera_indicator3: Optional[StatusIndicator] = None
+        self.camera_indicator_map: Dict[str, StatusIndicator] = {}
         self.camera_front_circle: Optional[StatusIndicator] = None
         self.camera_wrist_circle: Optional[StatusIndicator] = None
         self.compact_throbber: Optional[CircularProgress] = None
@@ -176,8 +177,7 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
         camera_group.addWidget(self.camera_indicator3)
         normal_status_layout.addLayout(camera_group)
 
-        self.camera_front_circle = self.camera_indicator1
-        self.camera_wrist_circle = self.camera_indicator2
+        self._rebuild_camera_indicator_map()
 
         status_bar.addWidget(self.normal_status_container, stretch=0)
 
@@ -557,4 +557,54 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
         self.speed_slider.setValue(initial_speed)
         self.speed_slider.blockSignals(False)
         self.on_speed_slider_changed(initial_speed)
+
+    # ------------------------------------------------------------------
+    # Status indicator helpers
+
+    def _apply_status_to_indicator(self, indicator: StatusIndicator, status: str) -> None:
+        if status == "empty":
+            indicator.set_null()
+        elif status == "online":
+            indicator.set_connected(True)
+        elif status == "warning":
+            indicator.set_warning()
+        else:
+            indicator.set_connected(False)
+
+    def _rebuild_camera_indicator_map(self) -> None:
+        indicators = [self.camera_indicator1, self.camera_indicator2, self.camera_indicator3]
+        self.camera_indicator_map.clear()
+
+        for indicator in indicators:
+            if indicator is not None:
+                indicator.hide()
+                indicator.set_null()
+
+        for idx, camera_name in enumerate(self.camera_order[: len(indicators)]):
+            indicator = indicators[idx]
+            if indicator is None:
+                continue
+            indicator.show()
+            indicator.setToolTip(self._camera_display_name(camera_name))
+            self._apply_status_to_indicator(indicator, self._camera_status.get(camera_name, "empty"))
+            self.camera_indicator_map[camera_name] = indicator
+
+        self.camera_front_circle = self.camera_indicator_map.get("front")
+        self.camera_wrist_circle = self.camera_indicator_map.get("wrist")
+
+        for idx in range(len(self.camera_order), len(indicators)):
+            indicator = indicators[idx]
+            if indicator is not None:
+                indicator.hide()
+
+    def _ensure_camera_known(self, camera_name: str) -> None:
+        added = False
+        if camera_name not in self.camera_order:
+            self.camera_order.append(camera_name)
+            added = True
+        if camera_name not in self._camera_status:
+            self._camera_status[camera_name] = "empty"
+            added = True
+        if added or camera_name not in self.camera_indicator_map:
+            self._rebuild_camera_indicator_map()
 

@@ -38,6 +38,13 @@
       "width": 640,
       "height": 480,
       "fps": 30
+    },
+    "aux": {
+      "type": "opencv",
+      "index_or_path": "",
+      "width": 640,
+      "height": 480,
+      "fps": 30
     }
   },
   "teleop": {
