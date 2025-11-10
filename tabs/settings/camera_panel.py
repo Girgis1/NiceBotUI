@@ -30,6 +30,7 @@ class CameraPanelMixin:
 
     camera_front_circle: Optional[QLabel]  # Provided at runtime
     camera_wrist_circle: Optional[QLabel]
+    camera_aux_circle: Optional[QLabel]
 
     def create_camera_tab(self) -> QWidget:
         """Create camera settings tab - optimized for 1024x600 touchscreen."""
@@ -83,6 +84,35 @@ class CameraPanelMixin:
         wrist_row.addSpacing(12)
         wrist_row.addStretch()
         layout.addLayout(wrist_row)
+
+        aux_row = QHBoxLayout()
+        aux_row.setSpacing(6)
+        self.camera_aux_circle = self.create_status_circle("empty")
+        aux_row.addWidget(self.camera_aux_circle)
+
+        aux_label = QLabel("Aux:")
+        aux_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
+        aux_label.setFixedWidth(55)
+        aux_row.addWidget(aux_label)
+
+        self.cam_aux_edit = QLineEdit("")
+        self.cam_aux_edit.setPlaceholderText("Optional camera path or index")
+        self.cam_aux_edit.setFixedHeight(45)
+        self.cam_aux_edit.setStyleSheet(self._camera_lineedit_style())
+        aux_row.addWidget(self.cam_aux_edit)
+        aux_row.addSpacing(12)
+        aux_row.addStretch()
+        layout.addLayout(aux_row)
+
+        if not hasattr(self, "_camera_circle_map"):
+            self._camera_circle_map = {}
+        self._camera_circle_map.update(
+            {
+                "front": self.camera_front_circle,
+                "wrist": self.camera_wrist_circle,
+                "aux": self.camera_aux_circle,
+            }
+        )
 
         layout.addSpacing(8)
 
@@ -201,6 +231,11 @@ class CameraPanelMixin:
             assign_group.addButton(wrist_radio, 1)
             layout.addWidget(wrist_radio)
 
+            aux_radio = QRadioButton("Aux Camera")
+            aux_radio.setStyleSheet("QRadioButton { color: #e0e0e0; font-size: 14px; padding: 5px; }")
+            assign_group.addButton(aux_radio, 2)
+            layout.addWidget(aux_radio)
+
             def update_preview():
                 try:
                     selected_idx = camera_list.currentData()
@@ -241,7 +276,8 @@ class CameraPanelMixin:
                 selected_cam = next((cam for cam in found_cameras if cam["index"] == selected_idx), None)
                 if selected_cam:
                     camera_path = selected_cam["path"]
-                    if assign_group.checkedId() == 0:
+                    choice = assign_group.checkedId()
+                    if choice == 0:
                         self.cam_front_edit.setText(camera_path)
                         self.camera_front_status = "online"
                         if self.camera_front_circle:
@@ -249,7 +285,7 @@ class CameraPanelMixin:
                         if self.device_manager:
                             self.device_manager.update_camera_status("front", "online")
                         self.status_label.setText(f"✓ Assigned {camera_path} to Front Camera")
-                    else:
+                    elif choice == 1:
                         self.cam_wrist_edit.setText(camera_path)
                         self.camera_wrist_status = "online"
                         if self.camera_wrist_circle:
@@ -257,6 +293,14 @@ class CameraPanelMixin:
                         if self.device_manager:
                             self.device_manager.update_camera_status("wrist", "online")
                         self.status_label.setText(f"✓ Assigned {camera_path} to Wrist Camera")
+                    else:
+                        self.cam_aux_edit.setText(camera_path)
+                        self.camera_aux_status = "online"
+                        if self.camera_aux_circle:
+                            self.update_status_circle(self.camera_aux_circle, "online")
+                        if self.device_manager:
+                            self.device_manager.update_camera_status("aux", "online")
+                        self.status_label.setText(f"✓ Assigned {camera_path} to Aux Camera")
                     self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
 
             preview_timer.stop()

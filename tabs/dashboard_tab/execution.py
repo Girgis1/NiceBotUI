@@ -684,27 +684,12 @@ class DashboardExecutionMixin:
 
     def on_camera_status_changed(self, camera_name: str, status: str):
         """Handle camera status change from the device manager."""
-        if camera_name == "front" and self.camera_front_circle:
-            if status == "empty":
-                self.camera_front_circle.set_null()
-            elif status == "online":
-                self.camera_front_circle.set_connected(True)
-            else:
-                self.camera_front_circle.set_connected(False)
-        elif camera_name == "wrist" and self.camera_wrist_circle:
-            if status == "empty":
-                self.camera_wrist_circle.set_null()
-            elif status == "online":
-                self.camera_wrist_circle.set_connected(True)
-            else:
-                self.camera_wrist_circle.set_connected(False)
-        elif self.camera_indicator3 and camera_name not in {"front", "wrist"}:
-            if status == "empty":
-                self.camera_indicator3.set_null()
-            elif status == "online":
-                self.camera_indicator3.set_connected(True)
-            else:
-                self.camera_indicator3.set_connected(False)
+        indicator = None
+        if hasattr(self, "_ensure_camera_indicator"):
+            indicator = self._ensure_camera_indicator(camera_name)
+
+        if indicator and hasattr(self, "_apply_indicator_status"):
+            self._apply_indicator_status(indicator, status)
 
         self._camera_status[camera_name] = status
         self._update_status_summaries()

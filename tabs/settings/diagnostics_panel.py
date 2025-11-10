@@ -231,14 +231,17 @@ class DiagnosticsPanelMixin:
             self.update_status_circle(self.robot_status_circle, status)
 
     def on_camera_status_changed(self, camera_name: str, status: str):
-        if camera_name == "front":
-            self.camera_front_status = status
-            if self.camera_front_circle:
-                self.update_status_circle(self.camera_front_circle, status)
-        elif camera_name == "wrist":
-            self.camera_wrist_status = status
-            if self.camera_wrist_circle:
-                self.update_status_circle(self.camera_wrist_circle, status)
+        setattr(self, f"camera_{camera_name}_status", status)
+
+        circle = None
+        if hasattr(self, "_camera_circle_map"):
+            circle = self._camera_circle_map.get(camera_name)
+
+        if circle is None:
+            circle = getattr(self, f"camera_{camera_name}_circle", None)
+
+        if circle:
+            self.update_status_circle(circle, status)
 
     def on_diagnostics_status(self, status: str):
         self.status_label.setText(status)
