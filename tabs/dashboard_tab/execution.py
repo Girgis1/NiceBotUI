@@ -684,27 +684,23 @@ class DashboardExecutionMixin:
 
     def on_camera_status_changed(self, camera_name: str, status: str):
         """Handle camera status change from the device manager."""
-        if camera_name == "front" and self.camera_front_circle:
-            if status == "empty":
-                self.camera_front_circle.set_null()
-            elif status == "online":
-                self.camera_front_circle.set_connected(True)
-            else:
-                self.camera_front_circle.set_connected(False)
-        elif camera_name == "wrist" and self.camera_wrist_circle:
-            if status == "empty":
-                self.camera_wrist_circle.set_null()
-            elif status == "online":
-                self.camera_wrist_circle.set_connected(True)
-            else:
-                self.camera_wrist_circle.set_connected(False)
-        elif self.camera_indicator3 and camera_name not in {"front", "wrist"}:
-            if status == "empty":
-                self.camera_indicator3.set_null()
-            elif status == "online":
-                self.camera_indicator3.set_connected(True)
-            else:
-                self.camera_indicator3.set_connected(False)
+        configured_cameras = self.config.get("cameras", {}) or {}
+        if camera_name not in configured_cameras and camera_name in self.camera_order:
+            if camera_name in self._camera_status:
+                del self._camera_status[camera_name]
+            self.camera_order = [name for name in self.camera_order if name != camera_name]
+            self._rebuild_camera_indicator_map()
+            if self.active_camera_name == camera_name:
+                self.active_camera_name = None
+                self._refresh_active_camera_label()
+            self._update_status_summaries()
+            return
+
+        self._ensure_camera_known(camera_name)
+
+        indicator = self.camera_indicator_map.get(camera_name)
+        if indicator is not None:
+            self._apply_status_to_indicator(indicator, status)
 
         self._camera_status[camera_name] = status
         self._update_status_summaries()

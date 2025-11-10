@@ -30,6 +30,8 @@ class CameraPanelMixin:
 
     camera_front_circle: Optional[QLabel]  # Provided at runtime
     camera_wrist_circle: Optional[QLabel]
+    camera_extra_circle: Optional[QLabel]
+    extra_camera_label: Optional[QLabel]
 
     def create_camera_tab(self) -> QWidget:
         """Create camera settings tab - optimized for 1024x600 touchscreen."""
@@ -84,6 +86,25 @@ class CameraPanelMixin:
         wrist_row.addStretch()
         layout.addLayout(wrist_row)
 
+        extra_row = QHBoxLayout()
+        extra_row.setSpacing(6)
+        self.camera_extra_circle = self.create_status_circle("empty")
+        extra_row.addWidget(self.camera_extra_circle)
+
+        self.extra_camera_label = QLabel("Aux:")
+        self.extra_camera_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
+        self.extra_camera_label.setFixedWidth(55)
+        extra_row.addWidget(self.extra_camera_label)
+
+        self.cam_extra_edit = QLineEdit("")
+        self.cam_extra_edit.setFixedHeight(45)
+        self.cam_extra_edit.setStyleSheet(self._camera_lineedit_style())
+        self.cam_extra_edit.setPlaceholderText("Optional camera path")
+        extra_row.addWidget(self.cam_extra_edit)
+        extra_row.addSpacing(12)
+        extra_row.addStretch()
+        layout.addLayout(extra_row)
+
         layout.addSpacing(8)
 
         settings_section = QLabel("⚙️ Camera Properties")
@@ -114,6 +135,11 @@ class CameraPanelMixin:
             }
             """
         )
+
+    def _format_camera_label(self, name: Optional[str]) -> str:
+        if not name:
+            return "Aux"
+        return name.replace("_", " ").title()
 
     def find_cameras(self):
         """Scan for available cameras and allow the user to assign them."""
@@ -201,6 +227,12 @@ class CameraPanelMixin:
             assign_group.addButton(wrist_radio, 1)
             layout.addWidget(wrist_radio)
 
+            extra_label = self._format_camera_label(getattr(self, "extra_camera_key", "aux"))
+            extra_radio = QRadioButton(f"{extra_label} Camera")
+            extra_radio.setStyleSheet("QRadioButton { color: #e0e0e0; font-size: 14px; padding: 5px; }")
+            assign_group.addButton(extra_radio, 2)
+            layout.addWidget(extra_radio)
+
             def update_preview():
                 try:
                     selected_idx = camera_list.currentData()
@@ -241,7 +273,8 @@ class CameraPanelMixin:
                 selected_cam = next((cam for cam in found_cameras if cam["index"] == selected_idx), None)
                 if selected_cam:
                     camera_path = selected_cam["path"]
-                    if assign_group.checkedId() == 0:
+                    target = assign_group.checkedId()
+                    if target == 0:
                         self.cam_front_edit.setText(camera_path)
                         self.camera_front_status = "online"
                         if self.camera_front_circle:
@@ -249,7 +282,7 @@ class CameraPanelMixin:
                         if self.device_manager:
                             self.device_manager.update_camera_status("front", "online")
                         self.status_label.setText(f"✓ Assigned {camera_path} to Front Camera")
-                    else:
+                    elif target == 1:
                         self.cam_wrist_edit.setText(camera_path)
                         self.camera_wrist_status = "online"
                         if self.camera_wrist_circle:
@@ -257,6 +290,16 @@ class CameraPanelMixin:
                         if self.device_manager:
                             self.device_manager.update_camera_status("wrist", "online")
                         self.status_label.setText(f"✓ Assigned {camera_path} to Wrist Camera")
+                    else:
+                        self.cam_extra_edit.setText(camera_path)
+                        self.camera_extra_status = "online"
+                        if self.camera_extra_circle:
+                            self.update_status_circle(self.camera_extra_circle, "online")
+                        extra_key = getattr(self, "extra_camera_key", "aux") or "aux"
+                        if self.device_manager:
+                            self.device_manager.update_camera_status(extra_key, "online")
+                        label = self._format_camera_label(extra_key)
+                        self.status_label.setText(f"✓ Assigned {camera_path} to {label} Camera")
                     self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
 
             preview_timer.stop()

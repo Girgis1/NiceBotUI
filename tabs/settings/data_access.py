@@ -102,6 +102,21 @@ class SettingsDataAccessMixin:
         self.cam_height_spin.setValue(front_cam.get("height", 480))
         self.cam_fps_spin.setValue(front_cam.get("fps", 30))
 
+        extra_names = [name for name in cameras.keys() if name not in {"front", "wrist"}]
+        if extra_names:
+            self.extra_camera_key = extra_names[0]
+        elif not self.extra_camera_key:
+            self.extra_camera_key = "aux"
+
+        if getattr(self, "extra_camera_label", None):
+            self.extra_camera_label.setText(f"{self._format_camera_label(self.extra_camera_key)}:")
+
+        if getattr(self, "cam_extra_edit", None):
+            extra_cam = cameras.get(self.extra_camera_key, {}) if self.extra_camera_key else {}
+            self.cam_extra_edit.setText(str(extra_cam.get("index_or_path", "")))
+            if not extra_cam:
+                self.cam_extra_edit.setPlaceholderText("Optional")
+
         # Policy settings
         self.policy_base_edit.setText(str(config.get("policy", {}).get("base_path", "outputs/train")))
         self.policy_device_edit.setText(str(config.get("policy", {}).get("device", "cuda")))
@@ -161,21 +176,34 @@ class SettingsDataAccessMixin:
         robot_cfg["position_verification_enabled"] = self.position_verification_check.isChecked()
 
         # Cameras
-        cameras = config.setdefault("cameras", {"front": {}, "wrist": {}})
-        cameras.setdefault("front", {})
-        cameras.setdefault("wrist", {})
-        cameras["front"].update({
+        cameras = config.setdefault("cameras", {})
+        front_cfg = cameras.setdefault("front", {})
+        wrist_cfg = cameras.setdefault("wrist", {})
+        front_cfg.update({
             "index_or_path": self.cam_front_edit.text(),
             "width": self.cam_width_spin.value(),
             "height": self.cam_height_spin.value(),
             "fps": self.cam_fps_spin.value(),
         })
-        cameras["wrist"].update({
+        wrist_cfg.update({
             "index_or_path": self.cam_wrist_edit.text(),
             "width": self.cam_width_spin.value(),
             "height": self.cam_height_spin.value(),
             "fps": self.cam_fps_spin.value(),
         })
+
+        extra_key = self.extra_camera_key or "aux"
+        extra_path = self.cam_extra_edit.text().strip() if hasattr(self, "cam_extra_edit") else ""
+        if extra_path:
+            extra_cfg = cameras.setdefault(extra_key, {})
+            extra_cfg.update({
+                "index_or_path": extra_path,
+                "width": self.cam_width_spin.value(),
+                "height": self.cam_height_spin.value(),
+                "fps": self.cam_fps_spin.value(),
+            })
+        elif extra_key and extra_key not in {"front", "wrist"}:
+            cameras.pop(extra_key, None)
 
         # Policy
         policy_cfg = config.setdefault("policy", {})

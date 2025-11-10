@@ -29,12 +29,50 @@ class DeviceManager(QObject):
         
         # Device status tracking
         self.robot_status = "empty"
-        self.camera_front_status = "empty"
-        self.camera_wrist_status = "empty"
+        self.camera_statuses: Dict[str, str] = {}
+        self._sync_camera_status_map(initial=True)
         
         # Discovered devices
         self.discovered_robot_port = None
         self.discovered_cameras = {}
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+
+    def _sync_camera_status_map(self, initial: bool = False) -> None:
+        """Ensure we track a status entry for each configured camera."""
+
+        cameras_cfg = self.config.get("cameras", {}) or {}
+        for name in cameras_cfg.keys():
+            if name not in self.camera_statuses:
+                self.camera_statuses[name] = "empty"
+                if not initial:
+                    self.camera_status_changed.emit(name, "empty")
+
+        # Drop stale entries for removed cameras
+        removed = []
+        for name in list(self.camera_statuses.keys()):
+            if name not in cameras_cfg:
+                removed.append(name)
+                del self.camera_statuses[name]
+
+        for name in removed:
+            self.camera_status_changed.emit(name, "empty")
+
+    def _set_camera_status(self, camera_name: str, status: str) -> None:
+        """Update cached status and emit the change."""
+
+        self.camera_statuses[camera_name] = status
+        self.camera_status_changed.emit(camera_name, status)
+
+    def _mark_cameras_missing(self) -> None:
+        """Mark configured cameras as missing/offline when not detected."""
+
+        cameras_cfg = self.config.get("cameras", {}) or {}
+        for name, cfg in cameras_cfg.items():
+            identifier = str(cfg.get("index_or_path", "")).strip()
+            fallback = "empty" if not identifier else "offline"
+            self._set_camera_status(name, fallback)
     
     def discover_all_devices(self) -> Dict[str, any]:
         """Run full device discovery on startup
@@ -72,6 +110,7 @@ class DeviceManager(QObject):
             self.robot_status_changed.emit("empty")
         
         # Discover cameras
+        self._sync_camera_status_map()
         camera_assignments = {}
         try:
             cameras_info = self._discover_cameras()
@@ -80,17 +119,11 @@ class DeviceManager(QObject):
                 # Try to match cameras to config
                 camera_assignments = self._match_cameras_to_config(cameras_info)
             else:
-                self.camera_front_status = "empty"
-                self.camera_wrist_status = "empty"
-                self.camera_status_changed.emit("front", "empty")
-                self.camera_status_changed.emit("wrist", "empty")
+                self._mark_cameras_missing()
         except Exception as e:
             error_msg = f"Camera discovery error: {e}"
             results["errors"].append(error_msg)
-            self.camera_front_status = "empty"
-            self.camera_wrist_status = "empty"
-            self.camera_status_changed.emit("front", "empty")
-            self.camera_status_changed.emit("wrist", "empty")
+            self._mark_cameras_missing()
         
         # Print compact summary (both terminal and GUI)
         print("\n=== Detecting Ports ===", flush=True)
@@ -105,9 +138,17 @@ class DeviceManager(QObject):
         
         print(f"----- Cameras: {len(camera_assignments)} -----", flush=True)
         self.discovery_log.emit(f"----- Cameras: {len(camera_assignments)} -----")
-        
-        for cam_name, cam_path in camera_assignments.items():
-            msg = f"{cam_name.title()}: {cam_path}"
+
+        cameras_cfg = self.config.get("cameras", {}) or {}
+        for cam_name in cameras_cfg.keys():
+            if cam_name in camera_assignments:
+                msg = f"{cam_name.title()}: {camera_assignments[cam_name]}"
+            else:
+                configured_path = cameras_cfg.get(cam_name, {}).get("index_or_path", "")
+                if configured_path:
+                    msg = f"{cam_name.title()}: {configured_path} (not detected)"
+                else:
+                    msg = f"{cam_name.title()}: not configured"
             print(msg, flush=True)
             self.discovery_log.emit(msg)
         
@@ -146,13 +187,12 @@ class DeviceManager(QObject):
 
         # Camera statuses
         cameras_cfg = self.config.get("cameras", {}) or {}
+        self._sync_camera_status_map()
         for camera_name, camera_cfg in cameras_cfg.items():
             status = self._probe_camera_status(camera_cfg)
-            attr_name = f"camera_{camera_name}_status"
-            previous = getattr(self, attr_name, "empty")
+            previous = self.camera_statuses.get(camera_name, "empty")
             if status != previous:
-                setattr(self, attr_name, status)
-                self.camera_status_changed.emit(camera_name, status)
+                self._set_camera_status(camera_name, status)
                 status_changed = True
 
         return status_changed
@@ -305,46 +345,28 @@ class DeviceManager(QObject):
             return []
     
     def _match_cameras_to_config(self, cameras: List[Dict]) -> Dict[str, str]:
-        """Try to match discovered cameras to config settings
-        
-        Args:
-            cameras: List of discovered camera info
-            
-        Returns:
-            Dict of camera assignments {name: path}
-        """
-        # Get configured camera paths
-        front_config = self.config.get("cameras", {}).get("front", {}).get("index_or_path", "")
-        wrist_config = self.config.get("cameras", {}).get("wrist", {}).get("index_or_path", "")
-        
-        assignments = {}
-        front_found = False
-        wrist_found = False
-        
-        for cam in cameras:
-            # Check if this camera matches front config
-            if cam["path"] == front_config or str(cam["index"]) in front_config:
-                front_found = True
-                self.camera_front_status = "online"
-                self.camera_status_changed.emit("front", "online")
-                assignments["front"] = cam["path"]
-            
-            # Check if this camera matches wrist config
-            if cam["path"] == wrist_config or str(cam["index"]) in wrist_config:
-                wrist_found = True
-                self.camera_wrist_status = "online"
-                self.camera_status_changed.emit("wrist", "online")
-                assignments["wrist"] = cam["path"]
-        
-        # If no matches, just mark as empty (not configured)
-        if not front_found:
-            self.camera_front_status = "empty"
-            self.camera_status_changed.emit("front", "empty")
-        
-        if not wrist_found:
-            self.camera_wrist_status = "empty"
-            self.camera_status_changed.emit("wrist", "empty")
-        
+        """Try to match discovered cameras to configured entries."""
+
+        assignments: Dict[str, str] = {}
+        cameras_cfg = self.config.get("cameras", {}) or {}
+
+        for cam_name, cam_cfg in cameras_cfg.items():
+            expected = str(cam_cfg.get("index_or_path", "")).strip()
+            matched_entry = None
+
+            if expected:
+                for cam in cameras:
+                    if cam["path"] == expected or str(cam["index"]) == expected:
+                        matched_entry = cam
+                        break
+
+            if matched_entry:
+                assignments[cam_name] = matched_entry["path"]
+                self._set_camera_status(cam_name, "online")
+            else:
+                fallback = "empty" if not expected else "offline"
+                self._set_camera_status(cam_name, fallback)
+
         return assignments
     
     def update_robot_status(self, status: str):
@@ -357,31 +379,20 @@ class DeviceManager(QObject):
         self.robot_status_changed.emit(status)
     
     def update_camera_status(self, camera_name: str, status: str):
-        """Update camera status and emit signal
-        
+        """Update camera status and emit signal.
+
         Args:
-            camera_name: "front" or "wrist"
-            status: "empty", "online", or "offline"
+            camera_name: Name of the camera entry to update.
+            status: "empty", "online", or "offline".
         """
-        if camera_name == "front":
-            self.camera_front_status = status
-        elif camera_name == "wrist":
-            self.camera_wrist_status = status
-        
-        self.camera_status_changed.emit(camera_name, status)
+
+        self._set_camera_status(camera_name, status)
     
     def get_robot_status(self) -> str:
         """Get current robot status"""
         return self.robot_status
     
     def get_camera_status(self, camera_name: str) -> str:
-        """Get current camera status
-        
-        Args:
-            camera_name: "front" or "wrist"
-        """
-        if camera_name == "front":
-            return self.camera_front_status
-        elif camera_name == "wrist":
-            return self.camera_wrist_status
-        return "empty"
+        """Get current camera status for the given entry."""
+
+        return self.camera_statuses.get(camera_name, "empty")
