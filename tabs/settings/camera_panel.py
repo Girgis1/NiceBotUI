@@ -224,9 +224,9 @@ class CameraPanelMixin:
 
             def update_preview():
                 try:
-                    selected_idx = camera_list.currentData()
+                    selected_id = camera_list.currentData()
                     for cam in found_cameras:
-                        if cam["index"] == selected_idx:
+                        if cam["id"] == selected_id:
                             ret, frame = cam["capture"].read()
                             if ret:
                                 frame = cv2.resize(frame, (480, 360))
