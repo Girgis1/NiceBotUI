@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Dict, Iterator, Optional, Tuple
 
 try:  # Optional dependency
     import cv2  # type: ignore
@@ -275,6 +276,13 @@ class CameraStreamHub:
                 cls._instance = cls(config)
         return cls._instance
 
+    @classmethod
+    def peek(cls) -> Optional["CameraStreamHub"]:
+        """Return the singleton without instantiating a new hub."""
+
+        with cls._instance_lock:
+            return cls._instance
+
     # ------------------------------------------------------------------
     # Stream access
 
@@ -328,23 +336,79 @@ class CameraStreamHub:
             self._streams.clear()
         self._paused = False
 
-    def pause_all(self) -> None:
-        """Temporarily stop all camera threads (e.g., when another process needs exclusive access)."""
+    def pause_all(self) -> bool:
+        """Temporarily stop all camera threads.
+
+        Returns:
+            bool: True if this call transitioned the hub into a paused state.
+        """
         with self._streams_lock:
             if self._paused:
-                return
+                return False
             for stream in self._streams.values():
                 stream.stop()
             self._paused = True
+            return True
 
-    def resume_all(self) -> None:
-        """Restart camera threads after a pause."""
+    def resume_all(self) -> bool:
+        """Restart camera threads after a pause.
+
+        Returns:
+            bool: True if this call resumed an actively paused hub.
+        """
         with self._streams_lock:
             if not self._paused:
-                return
+                return False
             for stream in self._streams.values():
                 stream.start()
             self._paused = False
+            return True
+
+    def reset_streams(self, camera_name: Optional[str] = None) -> None:
+        """Drop cached streams so that new handles are opened on next use."""
+
+        to_stop = []
+        with self._streams_lock:
+            if camera_name is None:
+                to_stop = list(self._streams.values())
+                self._streams.clear()
+            else:
+                stream = self._streams.pop(camera_name, None)
+                if stream:
+                    to_stop.append(stream)
+
+        for stream in to_stop:
+            stream.stop()
+
+    @classmethod
+    def reset(cls, camera_name: Optional[str] = None) -> None:
+        """Convenience helper to reset streams on the active hub."""
+
+        instance = cls.peek()
+        if instance is not None:
+            instance.reset_streams(camera_name)
+
+    @classmethod
+    @contextmanager
+    def paused(cls, release_delay: float = 0.1, resume_delay: float = 0.02) -> Iterator[bool]:
+        """Context manager that pauses the hub while an exclusive operation runs."""
+
+        instance = cls.peek()
+        if instance is None:
+            yield False
+            return
+
+        transitioned = instance.pause_all()
+        if transitioned and release_delay > 0:
+            time.sleep(release_delay)
+
+        try:
+            yield transitioned
+        finally:
+            if transitioned:
+                if resume_delay > 0:
+                    time.sleep(resume_delay)
+                instance.resume_all()
 
 
 def shutdown_camera_hub() -> None:

@@ -11,6 +11,7 @@ import json
 import sys
 import time
 import uuid
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -44,6 +45,11 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+try:  # Optional dependency used to coordinate shared camera ownership
+    from utils.camera_hub import CameraStreamHub
+except Exception:  # pragma: no cover - avoid circular failures in headless builds
+    CameraStreamHub = None
 
 
 # ---------------------------------------------------------------------------
@@ -178,82 +184,107 @@ class CameraStream:
         self.active_source: Optional[CameraSource] = None
         self._virtual_tick = 0
         self.system_cameras = system_cameras or {}
+        self._hub_pause_ctx = None
+        self._hub_pause_active = False
+
+    def _pause_hub_for_preview(self) -> None:
+        if not CameraStreamHub or self._hub_pause_ctx:
+            return
+        ctx = CameraStreamHub.paused()
+        token = ctx.__enter__()
+        if token:
+            self._hub_pause_ctx = ctx
+            self._hub_pause_active = True
+        else:
+            ctx.__exit__(None, None, None)
+
+    def _resume_hub_if_needed(self) -> None:
+        if not self._hub_pause_ctx:
+            self._hub_pause_active = False
+            return
+        try:
+            self._hub_pause_ctx.__exit__(None, None, None)
+        finally:
+            self._hub_pause_ctx = None
+            self._hub_pause_active = False
 
     def list_sources(self, max_devices: int = 5) -> List[CameraSource]:
         sources: List[CameraSource] = []
 
-        # First, prefer cameras that were configured in the shared settings file.
-        for key, cam_cfg in self.system_cameras.items():
-            label = cam_cfg.get("label") or cam_cfg.get("name") or key.replace("_", " ").title()
-            index_or_path = cam_cfg.get("index_or_path", cam_cfg.get("index", 0))
-            index: Optional[int] = None
-            path: Optional[str] = None
-            capture: Optional[cv2.VideoCapture] = None
-            available = False
-
-            try:
-                if isinstance(index_or_path, int):
-                    index = index_or_path
-                    capture = cv2.VideoCapture(index)
-                else:
-                    path = str(index_or_path)
-                    capture = cv2.VideoCapture(path)
-                available = bool(capture and capture.isOpened())
-            except Exception:
+        pause_ctx = CameraStreamHub.paused() if CameraStreamHub else nullcontext()
+        with pause_ctx:
+            # First, prefer cameras that were configured in the shared settings file.
+            for key, cam_cfg in self.system_cameras.items():
+                label = cam_cfg.get("label") or cam_cfg.get("name") or key.replace("_", " ").title()
+                index_or_path = cam_cfg.get("index_or_path", cam_cfg.get("index", 0))
+                index: Optional[int] = None
+                path: Optional[str] = None
+                capture: Optional[cv2.VideoCapture] = None
                 available = False
-            finally:
-                if capture:
-                    capture.release()
 
-            if not available:
-                offline_label = f"{label} (offline)"
-            else:
-                offline_label = label
+                try:
+                    if isinstance(index_or_path, int):
+                        index = index_or_path
+                        capture = cv2.VideoCapture(index)
+                    else:
+                        path = str(index_or_path)
+                        capture = cv2.VideoCapture(path)
+                    available = bool(capture and capture.isOpened())
+                except Exception:
+                    available = False
+                finally:
+                    if capture:
+                        capture.release()
 
-            sources.append(
-                CameraSource(
-                    source_id=f"system:{key}",
-                    label=offline_label,
-                    kind="system",
-                    index=index,
-                    available=available,
-                    config_key=key,
-                    path=path,
+                if not available:
+                    offline_label = f"{label} (offline)"
+                else:
+                    offline_label = label
+
+                sources.append(
+                    CameraSource(
+                        source_id=f"system:{key}",
+                        label=offline_label,
+                        kind="system",
+                        index=index,
+                        available=available,
+                        config_key=key,
+                        path=path,
+                    )
                 )
-            )
 
-        # Also include a small set of direct device indices for ad-hoc testing.
-        system_name = platform.system()
-        for idx in range(max_devices):
-            source_id = f"camera:{idx}"
-            if any(src.source_id == source_id for src in sources):
-                continue
+            # Also include a small set of direct device indices for ad-hoc testing.
+            system_name = platform.system()
+            for idx in range(max_devices):
+                source_id = f"camera:{idx}"
+                if any(src.source_id == source_id for src in sources):
+                    continue
 
-            label = f"Camera {idx}"
-            available = False
-            capture = None
-
-            try:
-                if system_name == "Windows":
-                    capture = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
-                    if not capture or not capture.isOpened():
-                        if capture:
-                            capture.release()
-                        capture = cv2.VideoCapture(idx)
-                else:
-                    capture = cv2.VideoCapture(idx)
-
-                available = bool(capture and capture.isOpened())
-            except Exception:
+                label = f"Camera {idx}"
                 available = False
-            finally:
-                if capture:
-                    capture.release()
+                capture = None
 
-            if not available:
-                label = f"{label} (offline)"
+                try:
+                    if system_name == "Windows":
+                        capture = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+                        if not capture or not capture.isOpened():
+                            if capture:
+                                capture.release()
+                            capture = cv2.VideoCapture(idx)
+                    else:
+                        capture = cv2.VideoCapture(idx)
 
-            sources.append(CameraSource(source_id, label, "camera", index=idx, available=available))
+                    available = bool(capture and capture.isOpened())
+                except Exception:
+                    available = False
+                finally:
+                    if capture:
+                        capture.release()
+
+                if not available:
+                    label = f"{label} (offline)"
+
+                sources.append(CameraSource(source_id, label, "camera", index=idx, available=available))
 
         # Add demo virtual feed
         sources.append(CameraSource("virtual:demo", "Demo Feed", "virtual", index=-1, available=True))
@@ -266,10 +297,13 @@ class CameraStream:
 
         self.active_source = source
         self._virtual_tick = 0
+        self._resume_hub_if_needed()
 
         if source.kind in ("camera", "system"):
+            self._pause_hub_for_preview()
             if not source.available:
                 self.cap = None
+                self._resume_hub_if_needed()
                 self.active_source = CameraSource("virtual:demo", "Demo Feed", "virtual", index=-1, available=True)
                 return
 
@@ -277,10 +311,14 @@ class CameraStream:
             cap = cv2.VideoCapture(capture_target)
             if not cap or not cap.isOpened():
                 self.cap = None
+                self._resume_hub_if_needed()
                 print("[VISION][WARN] Camera %s unavailable. Falling back to demo feed." % (capture_target,))
                 self.active_source = CameraSource("virtual:demo", "Demo Feed", "virtual", index=-1, available=True)
             else:
                 self.cap = cap
+            return
+
+        self._resume_hub_if_needed()
 
     def read(self) -> Optional[np.ndarray]:
         if not self.active_source:
@@ -302,6 +340,7 @@ class CameraStream:
             self.cap.release()
         self.cap = None
         self.active_source = None
+        self._resume_hub_if_needed()
 
     # ------------------------------------------------------------------
     # Virtual feed

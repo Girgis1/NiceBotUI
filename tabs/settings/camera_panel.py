@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
 from typing import Optional
@@ -26,6 +27,11 @@ try:  # Optional dependency used for live previews
     import cv2  # type: ignore
 except ImportError:  # pragma: no cover - optional dependency
     cv2 = None
+
+try:  # Optional dependency used to coordinate shared camera access
+    from utils.camera_hub import CameraStreamHub
+except Exception:  # pragma: no cover - avoid hard dependency in limited builds
+    CameraStreamHub = None
 
 
 class CameraPanelMixin:
@@ -160,8 +166,9 @@ class CameraPanelMixin:
             self.status_label.setText("⏳ Scanning for cameras...")
             self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
 
-            backend_flag = getattr(cv2, "CAP_V4L2", None)
-            found_cameras = self._discover_cameras_for_dialog()
+            pause_ctx = CameraStreamHub.paused() if CameraStreamHub else nullcontext()
+            with pause_ctx:
+                found_cameras = self._discover_cameras_for_dialog()
 
             if not found_cameras:
                 self.status_label.setText("❌ No cameras found")
@@ -271,6 +278,8 @@ class CameraPanelMixin:
                             self.update_status_circle(self.camera_front_circle, "online")
                         if self.device_manager:
                             self.device_manager.update_camera_status("front", "online")
+                        if CameraStreamHub:
+                            CameraStreamHub.reset("front")
                         self.status_label.setText(f"✓ Assigned {camera_path} to Front Camera")
                     elif target == 1:
                         self.cam_wrist_edit.setText(camera_path)
@@ -280,6 +289,8 @@ class CameraPanelMixin:
                             self.update_status_circle(self.camera_wrist_circle, "online")
                         if self.device_manager:
                             self.device_manager.update_camera_status("wrist", "online")
+                        if CameraStreamHub:
+                            CameraStreamHub.reset("wrist")
                         self.status_label.setText(f"✓ Assigned {camera_path} to Wrist L Camera")
                     else:
                         self.cam_wrist_right_edit.setText(camera_path)
@@ -289,6 +300,8 @@ class CameraPanelMixin:
                             self.update_status_circle(self.camera_wrist_right_circle, "online")
                         if self.device_manager:
                             self.device_manager.update_camera_status("wrist_right", "online")
+                        if CameraStreamHub:
+                            CameraStreamHub.reset("wrist_right")
                         self.status_label.setText(f"✓ Assigned {camera_path} to Wrist R Camera")
                     self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
 
@@ -315,6 +328,12 @@ class CameraPanelMixin:
 
         if getattr(self, "device_manager", None):
             self.device_manager.config = config
+
+        if CameraStreamHub:
+            try:
+                CameraStreamHub.reset(camera_name)
+            except Exception:
+                pass
 
     def _candidate_camera_sources(self):
         candidates = []
