@@ -23,6 +23,7 @@ class DiagnosticsPanelMixin:
     robot_status_circle: Optional[QLabel]
     camera_front_circle: Optional[QLabel]
     camera_wrist_circle: Optional[QLabel]
+    camera_aux_circle: Optional[QLabel]
 
     def create_status_circle(self, status: str) -> QLabel:
         circle = QLabel("●")
@@ -231,14 +232,10 @@ class DiagnosticsPanelMixin:
             self.update_status_circle(self.robot_status_circle, status)
 
     def on_camera_status_changed(self, camera_name: str, status: str):
-        if camera_name == "front":
-            self.camera_front_status = status
-            if self.camera_front_circle:
-                self.update_status_circle(self.camera_front_circle, status)
-        elif camera_name == "wrist":
-            self.camera_wrist_status = status
-            if self.camera_wrist_circle:
-                self.update_status_circle(self.camera_wrist_circle, status)
+        setattr(self, f"camera_{camera_name}_status", status)
+        circle = getattr(self, "camera_status_circles", {}).get(camera_name)
+        if circle:
+            self.update_status_circle(circle, status)
 
     def on_diagnostics_status(self, status: str):
         self.status_label.setText(status)

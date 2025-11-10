@@ -82,6 +82,7 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
         self.camera_indicator1: Optional[StatusIndicator] = None
         self.camera_indicator2: Optional[StatusIndicator] = None
         self.camera_indicator3: Optional[StatusIndicator] = None
+        self.camera_indicators: List[StatusIndicator] = []
         self.camera_front_circle: Optional[StatusIndicator] = None
         self.camera_wrist_circle: Optional[StatusIndicator] = None
         self.compact_throbber: Optional[CircularProgress] = None
@@ -174,6 +175,11 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
         self.camera_indicator3 = StatusIndicator()
         self.camera_indicator3.set_null()
         camera_group.addWidget(self.camera_indicator3)
+        self.camera_indicators = [
+            self.camera_indicator1,
+            self.camera_indicator2,
+            self.camera_indicator3,
+        ]
         normal_status_layout.addLayout(camera_group)
 
         self.camera_front_circle = self.camera_indicator1
@@ -557,4 +563,28 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
         self.speed_slider.setValue(initial_speed)
         self.speed_slider.blockSignals(False)
         self.on_speed_slider_changed(initial_speed)
+
+    def _register_camera_name(self, camera_name: str) -> int:
+        """Ensure the camera name exists in the ordering list and return its index."""
+        if camera_name not in self.camera_order:
+            self.camera_order.append(camera_name)
+        self._camera_status.setdefault(camera_name, "empty")
+        return self.camera_order.index(camera_name)
+
+    def _camera_indicator_for_index(self, index: int) -> Optional[StatusIndicator]:
+        if not self.camera_indicators:
+            return None
+        if 0 <= index < len(self.camera_indicators):
+            return self.camera_indicators[index]
+        return self.camera_indicators[-1]
+
+    def _apply_camera_status(self, indicator: Optional[StatusIndicator], status: str) -> None:
+        if indicator is None:
+            return
+        if status == "empty":
+            indicator.set_null()
+        elif status == "online":
+            indicator.set_connected(True)
+        else:
+            indicator.set_connected(False)
 
