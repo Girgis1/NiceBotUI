@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Dict, Iterator, Optional, Tuple
 
 try:  # Optional dependency
     import cv2  # type: ignore
@@ -275,6 +276,13 @@ class CameraStreamHub:
                 cls._instance = cls(config)
         return cls._instance
 
+    @classmethod
+    def peek(cls) -> Optional["CameraStreamHub"]:
+        """Return the active hub instance without creating a new one."""
+
+        with cls._instance_lock:
+            return cls._instance
+
     # ------------------------------------------------------------------
     # Stream access
 
@@ -328,23 +336,35 @@ class CameraStreamHub:
             self._streams.clear()
         self._paused = False
 
-    def pause_all(self) -> None:
-        """Temporarily stop all camera threads (e.g., when another process needs exclusive access)."""
+    def pause_all(self) -> bool:
+        """Temporarily stop all camera threads.
+
+        Returns ``True`` when this call transitioned the hub into the paused
+        state.  Callers can use the boolean to decide whether they should resume
+        the hub later.
+        """
+
         with self._streams_lock:
             if self._paused:
-                return
+                return False
             for stream in self._streams.values():
                 stream.stop()
             self._paused = True
+            return True
 
-    def resume_all(self) -> None:
-        """Restart camera threads after a pause."""
+    def resume_all(self) -> bool:
+        """Restart camera threads after a pause.
+
+        Returns ``True`` when the hub transitioned back to the active state.
+        """
+
         with self._streams_lock:
             if not self._paused:
-                return
+                return False
             for stream in self._streams.values():
                 stream.start()
             self._paused = False
+            return True
 
 
 def shutdown_camera_hub() -> None:
@@ -352,3 +372,33 @@ def shutdown_camera_hub() -> None:
     if CameraStreamHub._instance is not None:
         CameraStreamHub._instance.shutdown()
         CameraStreamHub._instance = None
+
+
+@contextmanager
+def temporarily_release_camera_hub(
+    release_delay: float = 0.15,
+    resume_delay: float = 0.05,
+) -> Iterator[None]:
+    """Pause the shared camera hub while external code probes devices.
+
+    Many parts of the UI need to grab exclusive ``cv2.VideoCapture`` handles
+    when scanning for cameras or showing standalone previews.  The hub normally
+    owns those handles which means discovery logic reports cameras as
+    "offline".  Wrapping the critical sections in this context manager cleanly
+    pauses the hub, waits a short moment for the OS to release resources, and
+    resumes streaming afterwards.
+    """
+
+    hub = CameraStreamHub.peek()
+    resumed = False
+    try:
+        if hub is not None:
+            resumed = hub.pause_all()
+            if resumed and release_delay > 0.0:
+                time.sleep(release_delay)
+        yield
+    finally:
+        if hub is not None and resumed:
+            if resume_delay > 0.0:
+                time.sleep(resume_delay)
+            hub.resume_all()

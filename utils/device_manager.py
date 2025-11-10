@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional, Dict, List
 from PySide6.QtCore import QObject, Signal
 
+from utils.camera_hub import temporarily_release_camera_hub
 from utils.camera_support import prepare_camera_source
 
 
@@ -348,12 +349,13 @@ class DeviceManager(QObject):
         # Camera statuses
         cameras_cfg = self.config.get("cameras", {}) or {}
         self._sync_camera_status_map()
-        for camera_name, camera_cfg in cameras_cfg.items():
-            status = self._probe_camera_status(camera_cfg)
-            previous = self.camera_statuses.get(camera_name, "empty")
-            if status != previous:
-                self._set_camera_status(camera_name, status)
-                status_changed = True
+        with temporarily_release_camera_hub():
+            for camera_name, camera_cfg in cameras_cfg.items():
+                status = self._probe_camera_status(camera_cfg)
+                previous = self.camera_statuses.get(camera_name, "empty")
+                if status != previous:
+                    self._set_camera_status(camera_name, status)
+                    status_changed = True
 
         return status_changed
 
@@ -488,34 +490,35 @@ class DeviceManager(QObject):
             
             backend_flag = getattr(cv2, "CAP_V4L2", None)
             found_cameras = []
-            
+
             # Scan /dev/video* devices (0-9). Skip indices without device nodes to avoid noisy OpenCV warnings.
             is_linux = sys.platform.startswith("linux")
-            for i in range(10):
-                if is_linux:
-                    video_path = Path(f"/dev/video{i}")
-                    if not video_path.exists():
-                        continue
-                try:
-                    cap = cv2.VideoCapture(i, backend_flag) if backend_flag is not None else cv2.VideoCapture(i)
-                    if cap.isOpened():
-                        # Try to read a frame to confirm it's working
-                        ret, frame = cap.read()
-                        if ret:
-                            height, width = frame.shape[:2]
-                            found_cameras.append({
-                                "index": i,
-                                "path": f"/dev/video{i}",
-                                "resolution": f"{width}x{height}",
-                                "width": width,
-                                "height": height
-                            })
-                        cap.release()
-                    else:
-                        cap.release()
-                except Exception:
-                    pass
-            
+            with temporarily_release_camera_hub():
+                for i in range(10):
+                    if is_linux:
+                        video_path = Path(f"/dev/video{i}")
+                        if not video_path.exists():
+                            continue
+                    try:
+                        cap = cv2.VideoCapture(i, backend_flag) if backend_flag is not None else cv2.VideoCapture(i)
+                        if cap.isOpened():
+                            # Try to read a frame to confirm it's working
+                            ret, frame = cap.read()
+                            if ret:
+                                height, width = frame.shape[:2]
+                                found_cameras.append({
+                                    "index": i,
+                                    "path": f"/dev/video{i}",
+                                    "resolution": f"{width}x{height}",
+                                    "width": width,
+                                    "height": height
+                                })
+                            cap.release()
+                        else:
+                            cap.release()
+                    except Exception:
+                        pass
+
             return found_cameras
             
         except Exception as e:
