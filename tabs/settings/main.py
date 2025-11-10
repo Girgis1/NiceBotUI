@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict
 
 from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtWidgets import (
@@ -66,9 +66,12 @@ class SettingsTab(
         self.robot_status = "empty"
         self.camera_front_status = "empty"
         self.camera_wrist_status = "empty"
+        self.camera_aux_status = "empty"
         self.robot_status_circle = None
         self.camera_front_circle = None
         self.camera_wrist_circle = None
+        self.camera_aux_circle = None
+        self.camera_status_circles: Dict[str, Optional[QLabel]] = {}
 
         self.init_ui()
         self.load_settings()
