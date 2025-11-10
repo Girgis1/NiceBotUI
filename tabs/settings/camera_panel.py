@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Optional
 
 from PySide6.QtCore import Qt, QTimer
@@ -30,6 +31,7 @@ class CameraPanelMixin:
 
     camera_front_circle: Optional[QLabel]  # Provided at runtime
     camera_wrist_circle: Optional[QLabel]
+    camera_wrist_right_circle: Optional[QLabel]
 
     def create_camera_tab(self) -> QWidget:
         """Create camera settings tab - optimized for 1024x600 touchscreen."""
@@ -56,13 +58,9 @@ class CameraPanelMixin:
         self.cam_front_edit.setFixedHeight(45)
         self.cam_front_edit.setStyleSheet(self._camera_lineedit_style())
         front_row.addWidget(self.cam_front_edit)
-
-        self.find_cameras_btn = QPushButton("🔍 Find Cameras")
-        self.find_cameras_btn.setFixedHeight(45)
-        self.find_cameras_btn.setFixedWidth(140)
-        self.find_cameras_btn.setStyleSheet(self.get_button_style("#FF9800", "#F57C00"))
-        self.find_cameras_btn.clicked.connect(self.find_cameras)
-        front_row.addWidget(self.find_cameras_btn)
+        self.cam_front_edit.editingFinished.connect(
+            partial(self._commit_camera_field, "front", self.cam_front_edit)
+        )
         front_row.addStretch()
         layout.addLayout(front_row)
 
@@ -71,7 +69,7 @@ class CameraPanelMixin:
         self.camera_wrist_circle = self.create_status_circle("empty")
         wrist_row.addWidget(self.camera_wrist_circle)
 
-        wrist_label = QLabel("Wrist:")
+        wrist_label = QLabel("Wrist L:")
         wrist_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
         wrist_label.setFixedWidth(55)
         wrist_row.addWidget(wrist_label)
@@ -80,9 +78,43 @@ class CameraPanelMixin:
         self.cam_wrist_edit.setFixedHeight(45)
         self.cam_wrist_edit.setStyleSheet(self._camera_lineedit_style())
         wrist_row.addWidget(self.cam_wrist_edit)
+        self.cam_wrist_edit.editingFinished.connect(
+            partial(self._commit_camera_field, "wrist", self.cam_wrist_edit)
+        )
         wrist_row.addSpacing(12)
         wrist_row.addStretch()
         layout.addLayout(wrist_row)
+
+        wrist_r_row = QHBoxLayout()
+        wrist_r_row.setSpacing(6)
+        self.camera_wrist_right_circle = self.create_status_circle("empty")
+        wrist_r_row.addWidget(self.camera_wrist_right_circle)
+
+        wrist_r_label = QLabel("Wrist R:")
+        wrist_r_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
+        wrist_r_label.setFixedWidth(55)
+        wrist_r_row.addWidget(wrist_r_label)
+
+        self.cam_wrist_right_edit = QLineEdit("/dev/video5")
+        self.cam_wrist_right_edit.setFixedHeight(45)
+        self.cam_wrist_right_edit.setStyleSheet(self._camera_lineedit_style())
+        wrist_r_row.addWidget(self.cam_wrist_right_edit)
+        self.cam_wrist_right_edit.editingFinished.connect(
+            partial(self._commit_camera_field, "wrist_right", self.cam_wrist_right_edit)
+        )
+        wrist_r_row.addSpacing(12)
+        wrist_r_row.addStretch()
+        layout.addLayout(wrist_r_row)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch()
+        self.find_cameras_btn = QPushButton("🔍 Find Cameras")
+        self.find_cameras_btn.setFixedHeight(45)
+        self.find_cameras_btn.setFixedWidth(160)
+        self.find_cameras_btn.setStyleSheet(self.get_button_style("#FF9800", "#F57C00"))
+        self.find_cameras_btn.clicked.connect(self.find_cameras)
+        button_row.addWidget(self.find_cameras_btn)
+        layout.addLayout(button_row)
 
         layout.addSpacing(8)
 
@@ -126,10 +158,11 @@ class CameraPanelMixin:
             self.status_label.setText("⏳ Scanning for cameras...")
             self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
 
+            backend_flag = getattr(cv2, "CAP_V4L2", None)
             found_cameras = []
             for i in range(10):
                 try:
-                    cap = cv2.VideoCapture(i)
+                    cap = cv2.VideoCapture(i, backend_flag) if backend_flag is not None else cv2.VideoCapture(i)
                     if cap.isOpened():
                         ret, frame = cap.read()
                         if ret:
@@ -196,10 +229,15 @@ class CameraPanelMixin:
             assign_group.addButton(front_radio, 0)
             layout.addWidget(front_radio)
 
-            wrist_radio = QRadioButton("Wrist Camera")
+            wrist_radio = QRadioButton("Wrist L Camera")
             wrist_radio.setStyleSheet("QRadioButton { color: #e0e0e0; font-size: 14px; padding: 5px; }")
             assign_group.addButton(wrist_radio, 1)
             layout.addWidget(wrist_radio)
+
+            wrist_r_radio = QRadioButton("Wrist R Camera")
+            wrist_r_radio.setStyleSheet("QRadioButton { color: #e0e0e0; font-size: 14px; padding: 5px; }")
+            assign_group.addButton(wrist_r_radio, 2)
+            layout.addWidget(wrist_r_radio)
 
             def update_preview():
                 try:
@@ -241,22 +279,34 @@ class CameraPanelMixin:
                 selected_cam = next((cam for cam in found_cameras if cam["index"] == selected_idx), None)
                 if selected_cam:
                     camera_path = selected_cam["path"]
-                    if assign_group.checkedId() == 0:
+                    target = assign_group.checkedId()
+                    if target == 0:
                         self.cam_front_edit.setText(camera_path)
+                        self._apply_camera_assignment_to_config("front", camera_path)
                         self.camera_front_status = "online"
                         if self.camera_front_circle:
                             self.update_status_circle(self.camera_front_circle, "online")
                         if self.device_manager:
                             self.device_manager.update_camera_status("front", "online")
                         self.status_label.setText(f"✓ Assigned {camera_path} to Front Camera")
-                    else:
+                    elif target == 1:
                         self.cam_wrist_edit.setText(camera_path)
+                        self._apply_camera_assignment_to_config("wrist", camera_path)
                         self.camera_wrist_status = "online"
                         if self.camera_wrist_circle:
                             self.update_status_circle(self.camera_wrist_circle, "online")
                         if self.device_manager:
                             self.device_manager.update_camera_status("wrist", "online")
-                        self.status_label.setText(f"✓ Assigned {camera_path} to Wrist Camera")
+                        self.status_label.setText(f"✓ Assigned {camera_path} to Wrist L Camera")
+                    else:
+                        self.cam_wrist_right_edit.setText(camera_path)
+                        self._apply_camera_assignment_to_config("wrist_right", camera_path)
+                        self.camera_wrist_right_status = "online"
+                        if self.camera_wrist_right_circle:
+                            self.update_status_circle(self.camera_wrist_right_circle, "online")
+                        if self.device_manager:
+                            self.device_manager.update_camera_status("wrist_right", "online")
+                        self.status_label.setText(f"✓ Assigned {camera_path} to Wrist R Camera")
                     self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
 
             preview_timer.stop()
@@ -265,3 +315,20 @@ class CameraPanelMixin:
         except Exception as exc:
             self.status_label.setText(f"❌ Error: {exc}")
             self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+
+    def _commit_camera_field(self, camera_name: str, widget: QLineEdit) -> None:
+        self._apply_camera_assignment_to_config(camera_name, widget.text().strip())
+
+    def _apply_camera_assignment_to_config(self, camera_name: str, index_or_path: str) -> None:
+        if not hasattr(self, "_ensure_schema"):
+            return
+        config = self._ensure_schema()
+        cameras = config.setdefault("cameras", {})
+        camera_cfg = cameras.setdefault(camera_name, {})
+        camera_cfg["index_or_path"] = index_or_path
+        camera_cfg["width"] = self.cam_width_spin.value()
+        camera_cfg["height"] = self.cam_height_spin.value()
+        camera_cfg["fps"] = self.cam_fps_spin.value()
+
+        if getattr(self, "device_manager", None):
+            self.device_manager.config = config

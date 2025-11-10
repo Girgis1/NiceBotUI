@@ -17,11 +17,22 @@ from PySide6.QtGui import QImage, QPixmap
 from .constants import ROOT
 from .widgets import CameraDetailDialog
 
+CAMERA_DISPLAY_OVERRIDES = {
+    "wrist": "Wrist L",
+    "wrist_l": "Wrist L",
+    "wrist_left": "Wrist L",
+    "wrist_right": "Wrist R",
+    "wrist_r": "Wrist R",
+}
+
 
 class DashboardCameraMixin:
     """Mixin containing camera preview utilities for :class:`DashboardTab`."""
 
     def _camera_display_name(self, camera_name: str) -> str:
+        key = (camera_name or "").lower()
+        if key in CAMERA_DISPLAY_OVERRIDES:
+            return CAMERA_DISPLAY_OVERRIDES[key]
         return camera_name.replace("_", " ").title()
 
     def _refresh_active_camera_label(self) -> None:

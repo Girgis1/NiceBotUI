@@ -180,13 +180,19 @@ class DashboardStateMixin:
         self.run_combo.blockSignals(False)
         self.camera_order = list(self.config.get("cameras", {}).keys())
         self.vision_zones = self._load_vision_zones()
-        self._robot_total = 1 if self.config.get("robot") else 0
+        if hasattr(self, "_rebuild_robot_arm_order"):
+            self._rebuild_robot_arm_order()
+        else:
+            self._robot_total = 1 if self.config.get("robot") else 0
 
         for name in list(self._camera_status.keys()):
             if name not in self.camera_order:
                 self._camera_status.pop(name)
         for name in self.camera_order:
             self._camera_status.setdefault(name, "empty")
+
+        if hasattr(self, "_rebuild_camera_indicator_map"):
+            self._rebuild_camera_indicator_map()
 
         self.camera_toggle_btn.setEnabled(bool(self.camera_order))
         self._refresh_active_camera_label()

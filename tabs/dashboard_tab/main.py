@@ -73,15 +73,23 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
         self.camera_order: List[str] = list(self.config.get("cameras", {}).keys())
         self.vision_zones = self._load_vision_zones()
         self._robot_status = "empty"
-        self._robot_total = 1 if self.config.get("robot") else 0
         self._camera_status: Dict[str, str] = {
             name: "empty" for name in self.camera_order
         }
         self.robot_indicator1: Optional[StatusIndicator] = None
         self.robot_indicator2: Optional[StatusIndicator] = None
+        self._robot_indicator_map: Dict[str, StatusIndicator] = {}
+        self.robot_arm_order: List[str] = self._build_robot_arm_order()
+        self._robot_status_map: Dict[str, str] = {name: "empty" for name in self.robot_arm_order}
+        self._robot_total = len(self.robot_arm_order)
+        if not self.robot_arm_order and self.config.get("robot"):
+            self.robot_arm_order = ["robot"]
+            self._robot_status_map["robot"] = "empty"
+            self._robot_total = 1
         self.camera_indicator1: Optional[StatusIndicator] = None
         self.camera_indicator2: Optional[StatusIndicator] = None
         self.camera_indicator3: Optional[StatusIndicator] = None
+        self.camera_indicator_map: Dict[str, StatusIndicator] = {}
         self.camera_front_circle: Optional[StatusIndicator] = None
         self.camera_wrist_circle: Optional[StatusIndicator] = None
         self.compact_throbber: Optional[CircularProgress] = None
@@ -100,12 +108,15 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
         self.camera_preview_timer.timeout.connect(self.update_camera_previews)
         
         self.init_ui()
+        self._assign_robot_indicator_targets()
         self._update_status_summaries()
         self.validate_config()
         
         # Connect device manager signals if available
         if self.device_manager:
             self.device_manager.robot_status_changed.connect(self.on_robot_status_changed)
+            if hasattr(self.device_manager, "robot_arm_status_changed"):
+                self.device_manager.robot_arm_status_changed.connect(self.on_robot_arm_status_changed)
             self.device_manager.camera_status_changed.connect(self.on_camera_status_changed)
             self.device_manager.discovery_log.connect(self.on_discovery_log)
         
@@ -159,7 +170,6 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
         normal_status_layout.addLayout(robot_group)
 
         self.robot_status_circle = self.robot_indicator1
-
         camera_group = QHBoxLayout()
         camera_group.setSpacing(6)
         self.camera_lbl = QLabel("Cameras")
@@ -176,8 +186,7 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
         camera_group.addWidget(self.camera_indicator3)
         normal_status_layout.addLayout(camera_group)
 
-        self.camera_front_circle = self.camera_indicator1
-        self.camera_wrist_circle = self.camera_indicator2
+        self._rebuild_camera_indicator_map()
 
         status_bar.addWidget(self.normal_status_container, stretch=0)
 
@@ -558,3 +567,100 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
         self.speed_slider.blockSignals(False)
         self.on_speed_slider_changed(initial_speed)
 
+    # ------------------------------------------------------------------
+    # Status indicator helpers
+
+    def _apply_status_to_indicator(self, indicator: StatusIndicator, status: str) -> None:
+        if status == "empty":
+            indicator.set_null()
+        elif status == "online":
+            indicator.set_connected(True)
+        elif status == "warning":
+            indicator.set_warning()
+        else:
+            indicator.set_connected(False)
+
+    def _rebuild_camera_indicator_map(self) -> None:
+        indicators = [self.camera_indicator1, self.camera_indicator2, self.camera_indicator3]
+        self.camera_indicator_map.clear()
+
+        for indicator in indicators:
+            if indicator:
+                indicator.hide()
+                indicator.set_null()
+
+        for idx, camera_name in enumerate(self.camera_order[: len(indicators)]):
+            indicator = indicators[idx]
+            if indicator is None:
+                continue
+            indicator.show()
+            indicator.setToolTip(self._camera_display_name(camera_name))
+            indicator.setAccessibleName(f"camera_indicator_{camera_name}")
+            self._apply_status_to_indicator(indicator, self._camera_status.get(camera_name, "empty"))
+            self.camera_indicator_map[camera_name] = indicator
+
+        self.camera_front_circle = self.camera_indicator_map.get("front")
+        self.camera_wrist_circle = self.camera_indicator_map.get("wrist")
+
+        for idx in range(len(self.camera_order), len(indicators)):
+            indicator = indicators[idx]
+            if indicator:
+                indicator.set_null()
+
+    def _ensure_camera_known(self, camera_name: str) -> None:
+        added = False
+        if camera_name not in self.camera_order:
+            self.camera_order.append(camera_name)
+            added = True
+        if camera_name not in self._camera_status:
+            self._camera_status[camera_name] = "empty"
+            added = True
+        if added or camera_name not in self.camera_indicator_map:
+            self._rebuild_camera_indicator_map()
+
+    # ------------------------------------------------------------------
+    # Robot indicator helpers
+
+    def _build_robot_arm_order(self) -> List[str]:
+        robot_cfg = self.config.get("robot", {}) or {}
+        arms = robot_cfg.get("arms", []) or []
+        names: List[str] = []
+        for idx, arm in enumerate(arms):
+            names.append(arm.get("id") or arm.get("name") or f"arm_{idx + 1}")
+        return names
+
+    def _rebuild_robot_arm_order(self) -> None:
+        names = self._build_robot_arm_order()
+        if not names and self.config.get("robot"):
+            names = ["robot"]
+        previous_statuses = getattr(self, "_robot_status_map", {})
+        self.robot_arm_order = names
+        self._robot_total = len(names)
+        self._robot_status_map = {name: previous_statuses.get(name, "empty") for name in names}
+        if hasattr(self, "_assign_robot_indicator_targets"):
+            self._assign_robot_indicator_targets()
+        self._update_status_summaries()
+
+    def _assign_robot_indicator_targets(self) -> None:
+        indicators = [self.robot_indicator1, self.robot_indicator2]
+        self._robot_indicator_map.clear()
+
+        for indicator in indicators:
+            if indicator:
+                indicator.set_null()
+
+        for idx, name in enumerate(self.robot_arm_order[: len(indicators)]):
+            indicator = indicators[idx]
+            if indicator is None:
+                continue
+            indicator.show()
+            indicator.setToolTip(name.title())
+            indicator.setAccessibleName(f"robot_indicator_{name}")
+            status = self._robot_status_map.get(name, "empty")
+            self._apply_status_to_indicator(indicator, status)
+            self._robot_indicator_map[name] = indicator
+
+        for idx in range(len(self.robot_arm_order), len(indicators)):
+            indicator = indicators[idx]
+            if indicator:
+                indicator.set_null()

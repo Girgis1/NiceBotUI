@@ -69,11 +69,25 @@ def create_default_config() -> Dict[str, Any]:
         "cameras": {
             "front": {
                 "type": "opencv",
-                "index_or_path": 0,
+                "index_or_path": "/dev/video1",
                 "width": 640,
                 "height": 480,
                 "fps": 30,
-            }
+            },
+            "wrist": {
+                "type": "opencv",
+                "index_or_path": "/dev/video3",
+                "width": 640,
+                "height": 480,
+                "fps": 30,
+            },
+            "wrist_right": {
+                "type": "opencv",
+                "index_or_path": "/dev/video5",
+                "width": 640,
+                "height": 480,
+                "fps": 30,
+            },
         },
         "policy": {
             "path": "outputs/train/act_so100/checkpoints/last/pretrained_model",

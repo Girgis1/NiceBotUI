@@ -102,6 +102,10 @@ class SettingsDataAccessMixin:
         self.cam_height_spin.setValue(front_cam.get("height", 480))
         self.cam_fps_spin.setValue(front_cam.get("fps", 30))
 
+        wrist_right = cameras.get("wrist_right", {})
+        if hasattr(self, "cam_wrist_right_edit"):
+            self.cam_wrist_right_edit.setText(str(wrist_right.get("index_or_path", "/dev/video5")))
+
         # Policy settings
         self.policy_base_edit.setText(str(config.get("policy", {}).get("base_path", "outputs/train")))
         self.policy_device_edit.setText(str(config.get("policy", {}).get("device", "cuda")))
@@ -161,17 +165,24 @@ class SettingsDataAccessMixin:
         robot_cfg["position_verification_enabled"] = self.position_verification_check.isChecked()
 
         # Cameras
-        cameras = config.setdefault("cameras", {"front": {}, "wrist": {}})
-        cameras.setdefault("front", {})
-        cameras.setdefault("wrist", {})
-        cameras["front"].update({
+        cameras = config.setdefault("cameras", {})
+        front_cfg = cameras.setdefault("front", {})
+        wrist_cfg = cameras.setdefault("wrist", {})
+        wrist_right_cfg = cameras.setdefault("wrist_right", {})
+        front_cfg.update({
             "index_or_path": self.cam_front_edit.text(),
             "width": self.cam_width_spin.value(),
             "height": self.cam_height_spin.value(),
             "fps": self.cam_fps_spin.value(),
         })
-        cameras["wrist"].update({
+        wrist_cfg.update({
             "index_or_path": self.cam_wrist_edit.text(),
+            "width": self.cam_width_spin.value(),
+            "height": self.cam_height_spin.value(),
+            "fps": self.cam_fps_spin.value(),
+        })
+        wrist_right_cfg.update({
+            "index_or_path": self.cam_wrist_right_edit.text() if hasattr(self, "cam_wrist_right_edit") else "",
             "width": self.cam_width_spin.value(),
             "height": self.cam_height_spin.value(),
             "fps": self.cam_fps_spin.value(),
@@ -257,6 +268,12 @@ class SettingsDataAccessMixin:
 
         self.cam_front_edit.setText("/dev/video1")
         self.cam_wrist_edit.setText("/dev/video3")
+        if hasattr(self, "cam_wrist_right_edit"):
+            self.cam_wrist_right_edit.setText("/dev/video5")
+        if hasattr(self, "_apply_camera_assignment_to_config"):
+            self._apply_camera_assignment_to_config("front", "/dev/video1")
+            self._apply_camera_assignment_to_config("wrist", "/dev/video3")
+            self._apply_camera_assignment_to_config("wrist_right", "/dev/video5")
         self.cam_width_spin.setValue(640)
         self.cam_height_spin.setValue(480)
         self.cam_fps_spin.setValue(30)

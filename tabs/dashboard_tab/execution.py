@@ -669,42 +669,41 @@ class DashboardExecutionMixin:
             self.time_label.setText(f"Time: {minutes:02d}:{seconds:02d}")
 
     def on_robot_status_changed(self, status: str):
-        """Handle robot status change from the device manager."""
-        if self.robot_indicator1:
-            if status == "empty":
-                self.robot_indicator1.set_null()
-                if self.robot_indicator2:
-                    self.robot_indicator2.set_null()
-            elif status == "online":
-                self.robot_indicator1.set_connected(True)
-            else:
-                self.robot_indicator1.set_connected(False)
+        """Handle aggregate robot status change from the device manager."""
         self._robot_status = status
+        if not getattr(self, "_robot_status_map", None):
+            if self.robot_indicator1:
+                self._apply_status_to_indicator(self.robot_indicator1, status)
+            if self.robot_indicator2:
+                if status == "empty":
+                    self.robot_indicator2.set_null()
+                else:
+                    self.robot_indicator2.set_connected(status == "online")
+        self._update_status_summaries()
+
+    def on_robot_arm_status_changed(self, arm_name: str, status: str):
+        """Handle per-arm robot status changes."""
+        if not hasattr(self, "_robot_status_map"):
+            self._robot_status_map = {}
+        if arm_name not in getattr(self, "robot_arm_order", []):
+            self.robot_arm_order.append(arm_name)
+            self._robot_total = len(self.robot_arm_order)
+            self._robot_status_map.setdefault(arm_name, "empty")
+            if hasattr(self, "_assign_robot_indicator_targets"):
+                self._assign_robot_indicator_targets()
+        self._robot_status_map[arm_name] = status
+        indicator = getattr(self, "_robot_indicator_map", {}).get(arm_name)
+        if indicator:
+            self._apply_status_to_indicator(indicator, status)
         self._update_status_summaries()
 
     def on_camera_status_changed(self, camera_name: str, status: str):
         """Handle camera status change from the device manager."""
-        if camera_name == "front" and self.camera_front_circle:
-            if status == "empty":
-                self.camera_front_circle.set_null()
-            elif status == "online":
-                self.camera_front_circle.set_connected(True)
-            else:
-                self.camera_front_circle.set_connected(False)
-        elif camera_name == "wrist" and self.camera_wrist_circle:
-            if status == "empty":
-                self.camera_wrist_circle.set_null()
-            elif status == "online":
-                self.camera_wrist_circle.set_connected(True)
-            else:
-                self.camera_wrist_circle.set_connected(False)
-        elif self.camera_indicator3 and camera_name not in {"front", "wrist"}:
-            if status == "empty":
-                self.camera_indicator3.set_null()
-            elif status == "online":
-                self.camera_indicator3.set_connected(True)
-            else:
-                self.camera_indicator3.set_connected(False)
+        self._ensure_camera_known(camera_name)
+
+        indicator = self.camera_indicator_map.get(camera_name)
+        if indicator is not None:
+            self._apply_status_to_indicator(indicator, status)
 
         self._camera_status[camera_name] = status
         self._update_status_summaries()
@@ -717,8 +716,13 @@ class DashboardExecutionMixin:
         if not hasattr(self, "robot_summary_label") or not hasattr(self, "camera_summary_label"):
             return
 
-        robot_online = 1 if self._robot_status == "online" else 0
-        self.robot_summary_label.setText(f"R:{robot_online}/{self._robot_total}")
+        if getattr(self, "_robot_status_map", None):
+            robot_online = sum(1 for state in self._robot_status_map.values() if state == "online")
+            robot_total = self._robot_total or len(self._robot_status_map)
+        else:
+            robot_online = 1 if self._robot_status == "online" else 0
+            robot_total = self._robot_total
+        self.robot_summary_label.setText(f"R:{robot_online}/{robot_total}")
 
         camera_total = len(self._camera_status)
         camera_online = sum(1 for state in self._camera_status.values() if state == "online")

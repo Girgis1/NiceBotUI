@@ -35,8 +35,14 @@ def main():
     print("DISCOVERY RESULTS SUMMARY")
     print("="*70)
     print(f"\nRobot Status: {device_manager.robot_status}")
-    print(f"Front Camera Status: {device_manager.camera_front_status}")
-    print(f"Wrist Camera Status: {device_manager.camera_wrist_status}")
+    if getattr(device_manager, "robot_arm_statuses", None):
+        for name, status in device_manager.robot_arm_statuses.items():
+            print(f"{name.title()} Arm Status: {status}")
+    if getattr(device_manager, "camera_statuses", None):
+        for name, status in device_manager.camera_statuses.items():
+            print(f"{name.title()} Camera Status: {status}")
+    else:
+        print("No cameras configured in the current profile.")
     
     if results["errors"]:
         print(f"\nErrors: {len(results['errors'])}")
@@ -49,4 +55,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
