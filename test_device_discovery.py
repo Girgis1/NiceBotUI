@@ -35,8 +35,12 @@ def main():
     print("DISCOVERY RESULTS SUMMARY")
     print("="*70)
     print(f"\nRobot Status: {device_manager.robot_status}")
-    print(f"Front Camera Status: {device_manager.camera_front_status}")
-    print(f"Wrist Camera Status: {device_manager.camera_wrist_status}")
+    print(f"Front Camera Status: {device_manager.camera_statuses.get('front', device_manager.camera_front_status)}")
+    print(f"Wrist Camera Status: {device_manager.camera_statuses.get('wrist', device_manager.camera_wrist_status)}")
+    for name, status in device_manager.camera_statuses.items():
+        if name in {"front", "wrist"}:
+            continue
+        print(f"{name.title()} Camera Status: {status}")
     
     if results["errors"]:
         print(f"\nErrors: {len(results['errors'])}")

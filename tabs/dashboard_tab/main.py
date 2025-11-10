@@ -84,6 +84,8 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
         self.camera_indicator3: Optional[StatusIndicator] = None
         self.camera_front_circle: Optional[StatusIndicator] = None
         self.camera_wrist_circle: Optional[StatusIndicator] = None
+        self._camera_indicator_map: Dict[str, StatusIndicator] = {}
+        self._camera_indicator_widgets: List[StatusIndicator] = []
         self.compact_throbber: Optional[CircularProgress] = None
         self.camera_hub: Optional[CameraStreamHub] = None
         if cv2 is not None and np is not None:
@@ -98,8 +100,9 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
 
         self.camera_preview_timer = QTimer(self)
         self.camera_preview_timer.timeout.connect(self.update_camera_previews)
-        
+
         self.init_ui()
+        self._initialize_camera_indicator_slots()
         self._update_status_summaries()
         self.validate_config()
         
@@ -557,4 +560,59 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
         self.speed_slider.setValue(initial_speed)
         self.speed_slider.blockSignals(False)
         self.on_speed_slider_changed(initial_speed)
+
+    def _initialize_camera_indicator_slots(self) -> None:
+        """Prepare status indicator widgets for camera assignments."""
+
+        self._camera_indicator_widgets = [
+            widget
+            for widget in (self.camera_indicator1, self.camera_indicator2, self.camera_indicator3)
+            if widget is not None
+        ]
+        self._camera_indicator_map.clear()
+
+        for widget in self._camera_indicator_widgets:
+            widget.setToolTip("")
+            widget.setAccessibleName("camera_indicator")
+            widget.set_null()
+
+        for name in self.camera_order:
+            if not self._ensure_camera_indicator(name):
+                break
+
+        self.camera_front_circle = self._camera_indicator_map.get("front")
+        self.camera_wrist_circle = self._camera_indicator_map.get("wrist")
+
+    def _ensure_camera_indicator(self, camera_name: str) -> Optional[StatusIndicator]:
+        """Return the indicator allocated to a camera, creating an assignment if needed."""
+
+        indicator = self._camera_indicator_map.get(camera_name)
+        if indicator:
+            return indicator
+
+        for widget in self._camera_indicator_widgets:
+            if widget not in self._camera_indicator_map.values():
+                widget.setToolTip(self._camera_display_name(camera_name))
+                widget.setAccessibleName(f"camera_indicator_{camera_name}")
+                widget.set_null()
+                self._camera_indicator_map[camera_name] = widget
+                if camera_name == "front":
+                    self.camera_front_circle = widget
+                elif camera_name == "wrist":
+                    self.camera_wrist_circle = widget
+                return widget
+
+        return None
+
+    def _apply_indicator_status(self, indicator: StatusIndicator, status: str) -> None:
+        """Apply a status string to a status indicator widget."""
+
+        if status == "empty":
+            indicator.set_null()
+        elif status == "online":
+            indicator.set_connected(True)
+        elif status == "offline":
+            indicator.set_connected(False)
+        else:
+            indicator.set_warning()
 

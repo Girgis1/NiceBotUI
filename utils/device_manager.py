@@ -9,7 +9,7 @@ Handles:
 """
 
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Set
 from PySide6.QtCore import QObject, Signal
 
 from utils.camera_support import prepare_camera_source
@@ -31,6 +31,10 @@ class DeviceManager(QObject):
         self.robot_status = "empty"
         self.camera_front_status = "empty"
         self.camera_wrist_status = "empty"
+        self.camera_statuses: Dict[str, str] = {}
+        for name in (self.config.get("cameras", {}) or {}):
+            self.camera_statuses[name] = "empty"
+            setattr(self, f"camera_{name}_status", "empty")
         
         # Discovered devices
         self.discovered_robot_port = None
@@ -80,17 +84,13 @@ class DeviceManager(QObject):
                 # Try to match cameras to config
                 camera_assignments = self._match_cameras_to_config(cameras_info)
             else:
-                self.camera_front_status = "empty"
-                self.camera_wrist_status = "empty"
-                self.camera_status_changed.emit("front", "empty")
-                self.camera_status_changed.emit("wrist", "empty")
+                for camera_name in (self.config.get("cameras", {}) or {}):
+                    self._set_camera_status(camera_name, "empty")
         except Exception as e:
             error_msg = f"Camera discovery error: {e}"
             results["errors"].append(error_msg)
-            self.camera_front_status = "empty"
-            self.camera_wrist_status = "empty"
-            self.camera_status_changed.emit("front", "empty")
-            self.camera_status_changed.emit("wrist", "empty")
+            for camera_name in (self.config.get("cameras", {}) or {}):
+                self._set_camera_status(camera_name, "empty")
         
         # Print compact summary (both terminal and GUI)
         print("\n=== Detecting Ports ===", flush=True)
@@ -148,11 +148,7 @@ class DeviceManager(QObject):
         cameras_cfg = self.config.get("cameras", {}) or {}
         for camera_name, camera_cfg in cameras_cfg.items():
             status = self._probe_camera_status(camera_cfg)
-            attr_name = f"camera_{camera_name}_status"
-            previous = getattr(self, attr_name, "empty")
-            if status != previous:
-                setattr(self, attr_name, status)
-                self.camera_status_changed.emit(camera_name, status)
+            if self._set_camera_status(camera_name, status):
                 status_changed = True
 
         return status_changed
@@ -306,46 +302,63 @@ class DeviceManager(QObject):
     
     def _match_cameras_to_config(self, cameras: List[Dict]) -> Dict[str, str]:
         """Try to match discovered cameras to config settings
-        
+
         Args:
             cameras: List of discovered camera info
-            
+
         Returns:
             Dict of camera assignments {name: path}
         """
-        # Get configured camera paths
-        front_config = self.config.get("cameras", {}).get("front", {}).get("index_or_path", "")
-        wrist_config = self.config.get("cameras", {}).get("wrist", {}).get("index_or_path", "")
-        
-        assignments = {}
-        front_found = False
-        wrist_found = False
-        
+        camera_cfgs = self.config.get("cameras", {}) or {}
+        assignments: Dict[str, str] = {}
+        matched: Set[str] = set()
+
         for cam in cameras:
-            # Check if this camera matches front config
-            if cam["path"] == front_config or str(cam["index"]) in front_config:
-                front_found = True
-                self.camera_front_status = "online"
-                self.camera_status_changed.emit("front", "online")
-                assignments["front"] = cam["path"]
-            
-            # Check if this camera matches wrist config
-            if cam["path"] == wrist_config or str(cam["index"]) in wrist_config:
-                wrist_found = True
-                self.camera_wrist_status = "online"
-                self.camera_status_changed.emit("wrist", "online")
-                assignments["wrist"] = cam["path"]
-        
-        # If no matches, just mark as empty (not configured)
-        if not front_found:
-            self.camera_front_status = "empty"
-            self.camera_status_changed.emit("front", "empty")
-        
-        if not wrist_found:
-            self.camera_wrist_status = "empty"
-            self.camera_status_changed.emit("wrist", "empty")
-        
+            path = str(cam.get("path", ""))
+            index = cam.get("index")
+            index_str = str(index) if index is not None else ""
+
+            for name, cfg in camera_cfgs.items():
+                if name in matched:
+                    continue
+
+                configured_value = str(cfg.get("index_or_path", "")).strip()
+                if not configured_value:
+                    continue
+
+                if self._camera_matches_config(configured_value, path, index_str):
+                    assignments[name] = path or configured_value
+                    self._set_camera_status(name, "online")
+                    matched.add(name)
+                    break
+
+        for name in camera_cfgs.keys():
+            if name not in matched:
+                self._set_camera_status(name, "empty")
+
         return assignments
+
+    def _camera_matches_config(self, configured: str, discovered_path: str, discovered_index: str) -> bool:
+        """Return True if a discovered camera appears to match a configured source."""
+
+        value = (configured or "").strip()
+        if not value:
+            return False
+
+        normalized_value = value.lower()
+        normalized_path = (discovered_path or "").strip().lower()
+        normalized_index = (discovered_index or "").strip()
+
+        if normalized_path and normalized_value == normalized_path:
+            return True
+
+        if normalized_index and (normalized_value == normalized_index or normalized_index in normalized_value):
+            return True
+
+        if normalized_path and normalized_path in normalized_value:
+            return True
+
+        return False
     
     def update_robot_status(self, status: str):
         """Update robot status and emit signal
@@ -357,31 +370,29 @@ class DeviceManager(QObject):
         self.robot_status_changed.emit(status)
     
     def update_camera_status(self, camera_name: str, status: str):
-        """Update camera status and emit signal
-        
-        Args:
-            camera_name: "front" or "wrist"
-            status: "empty", "online", or "offline"
-        """
-        if camera_name == "front":
-            self.camera_front_status = status
-        elif camera_name == "wrist":
-            self.camera_wrist_status = status
-        
-        self.camera_status_changed.emit(camera_name, status)
+        """Update camera status and emit signal."""
+        self._set_camera_status(camera_name, status)
     
     def get_robot_status(self) -> str:
         """Get current robot status"""
         return self.robot_status
     
     def get_camera_status(self, camera_name: str) -> str:
-        """Get current camera status
-        
-        Args:
-            camera_name: "front" or "wrist"
-        """
+        """Get current camera status."""
+        return self.camera_statuses.get(camera_name, "empty")
+
+    def _set_camera_status(self, camera_name: str, status: str) -> bool:
+        """Persist a camera status update, emitting if it changed."""
+
+        previous = self.camera_statuses.get(camera_name, "empty")
+        self.camera_statuses[camera_name] = status
+        setattr(self, f"camera_{camera_name}_status", status)
         if camera_name == "front":
-            return self.camera_front_status
+            self.camera_front_status = status
         elif camera_name == "wrist":
-            return self.camera_wrist_status
-        return "empty"
+            self.camera_wrist_status = status
+
+        if previous != status:
+            self.camera_status_changed.emit(camera_name, status)
+            return True
+        return False

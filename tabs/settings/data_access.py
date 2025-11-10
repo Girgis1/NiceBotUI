@@ -96,8 +96,11 @@ class SettingsDataAccessMixin:
         cameras = config.get("cameras", {})
         front_cam = cameras.get("front", {})
         wrist_cam = cameras.get("wrist", {})
+        aux_cam = cameras.get("aux", {})
         self.cam_front_edit.setText(str(front_cam.get("index_or_path", "/dev/video1")))
         self.cam_wrist_edit.setText(str(wrist_cam.get("index_or_path", "/dev/video3")))
+        if hasattr(self, "cam_aux_edit"):
+            self.cam_aux_edit.setText(str(aux_cam.get("index_or_path", "")))
         self.cam_width_spin.setValue(front_cam.get("width", 640))
         self.cam_height_spin.setValue(front_cam.get("height", 480))
         self.cam_fps_spin.setValue(front_cam.get("fps", 30))
@@ -161,21 +164,34 @@ class SettingsDataAccessMixin:
         robot_cfg["position_verification_enabled"] = self.position_verification_check.isChecked()
 
         # Cameras
-        cameras = config.setdefault("cameras", {"front": {}, "wrist": {}})
-        cameras.setdefault("front", {})
-        cameras.setdefault("wrist", {})
-        cameras["front"].update({
+        cameras = config.setdefault("cameras", {})
+        front_cfg = cameras.setdefault("front", {})
+        wrist_cfg = cameras.setdefault("wrist", {})
+
+        front_cfg.update({
             "index_or_path": self.cam_front_edit.text(),
             "width": self.cam_width_spin.value(),
             "height": self.cam_height_spin.value(),
             "fps": self.cam_fps_spin.value(),
         })
-        cameras["wrist"].update({
+        wrist_cfg.update({
             "index_or_path": self.cam_wrist_edit.text(),
             "width": self.cam_width_spin.value(),
             "height": self.cam_height_spin.value(),
             "fps": self.cam_fps_spin.value(),
         })
+
+        aux_path = self.cam_aux_edit.text().strip() if hasattr(self, "cam_aux_edit") else ""
+        if aux_path:
+            aux_cfg = cameras.setdefault("aux", {})
+            aux_cfg.update({
+                "index_or_path": aux_path,
+                "width": self.cam_width_spin.value(),
+                "height": self.cam_height_spin.value(),
+                "fps": self.cam_fps_spin.value(),
+            })
+        else:
+            cameras.pop("aux", None)
 
         # Policy
         policy_cfg = config.setdefault("policy", {})
@@ -257,6 +273,8 @@ class SettingsDataAccessMixin:
 
         self.cam_front_edit.setText("/dev/video1")
         self.cam_wrist_edit.setText("/dev/video3")
+        if hasattr(self, "cam_aux_edit"):
+            self.cam_aux_edit.clear()
         self.cam_width_spin.setValue(640)
         self.cam_height_spin.setValue(480)
         self.cam_fps_spin.setValue(30)
