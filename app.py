@@ -288,6 +288,52 @@ class MainWindow(QMainWindow):
             self.showNormal()
             self.resize(1024, 600)
     
+    def eventFilter(self, obj, event):
+        """Handle button press/release events for hold detection"""
+        from PySide6.QtCore import QEvent
+        
+        if obj == self.dashboard_btn:
+            if event.type() == QEvent.MouseButtonPress:
+                self.dashboard_hold_timer.start()
+            elif event.type() in (QEvent.MouseButtonRelease, QEvent.Leave):
+                self.dashboard_hold_timer.stop()
+        
+        elif obj == self.settings_btn:
+            if event.type() == QEvent.MouseButtonPress:
+                self.settings_hold_timer.start()
+            elif event.type() in (QEvent.MouseButtonRelease, QEvent.Leave):
+                self.settings_hold_timer.stop()
+        
+        return super().eventFilter(obj, event)
+    
+    def _on_dashboard_long_press(self):
+        """Secret: Hold Dashboard button for 3.5 seconds to restart app"""
+        print("[SECRET] Dashboard long press detected - restarting app...")
+        try:
+            # Save config before restart
+            self.save_config()
+            # Close cleanly
+            shutdown_camera_hub()
+            # Restart the app
+            import subprocess
+            subprocess.Popen([sys.executable] + sys.argv)
+            # Exit current instance
+            QApplication.quit()
+        except Exception as e:
+            print(f"[ERROR] Failed to restart app: {e}")
+    
+    def _on_settings_long_press(self):
+        """Secret: Hold Settings button for 3.5 seconds to close app"""
+        print("[SECRET] Settings long press detected - closing app...")
+        try:
+            # Save config before closing
+            self.save_config()
+            shutdown_camera_hub()
+            # Close the application
+            QApplication.quit()
+        except Exception as e:
+            print(f"[ERROR] Failed to close app: {e}")
+    
     def closeEvent(self, event):
         """Handle window close event"""
         try:
