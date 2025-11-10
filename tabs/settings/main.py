@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from tabs.diagnostics_tab import DiagnosticsTab
+from app.config import CONFIG_PATH
 
 from .camera_panel import CameraPanelMixin
 from .data_access import SettingsDataAccessMixin
@@ -44,7 +45,7 @@ class SettingsTab(
     def __init__(self, config: dict, parent: Optional[QWidget] = None, device_manager=None):
         super().__init__(parent)
         self.config = config
-        self.config_path = Path(__file__).resolve().parent.parent / "config.json"
+        self.config_path = CONFIG_PATH
         self.device_manager = device_manager
         self._home_thread: Optional[QThread] = None
         self._home_worker = None

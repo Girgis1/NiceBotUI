@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QStackedWidget, QPushButton, QButtonGroup, QMessageBox
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QShortcut, QKeySequence
 
 from tabs.dashboard_tab import DashboardTab
@@ -170,6 +170,21 @@ class MainWindow(QMainWindow):
         self.settings_btn.clicked.connect(lambda: self.switch_tab(3))
         self.tab_buttons.addButton(self.settings_btn, 3)
         sidebar_layout.addWidget(self.settings_btn)
+        
+        # Secret hold-to-action timers
+        self.dashboard_hold_timer = QTimer()
+        self.dashboard_hold_timer.setSingleShot(True)
+        self.dashboard_hold_timer.setInterval(3500)  # 3.5 seconds
+        self.dashboard_hold_timer.timeout.connect(self._on_dashboard_long_press)
+        
+        self.settings_hold_timer = QTimer()
+        self.settings_hold_timer.setSingleShot(True)
+        self.settings_hold_timer.setInterval(3500)  # 3.5 seconds
+        self.settings_hold_timer.timeout.connect(self._on_settings_long_press)
+        
+        # Install event filters for hold detection
+        self.dashboard_btn.installEventFilter(self)
+        self.settings_btn.installEventFilter(self)
         
         # Content area with stacked widget (takes remaining width)
         self.content_stack = QStackedWidget()

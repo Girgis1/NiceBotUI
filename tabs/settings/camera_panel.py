@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from functools import partial
+from pathlib import Path
 from typing import Optional
+import sys
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap
@@ -159,26 +161,7 @@ class CameraPanelMixin:
             self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
 
             backend_flag = getattr(cv2, "CAP_V4L2", None)
-            found_cameras = []
-            for i in range(10):
-                try:
-                    cap = cv2.VideoCapture(i, backend_flag) if backend_flag is not None else cv2.VideoCapture(i)
-                    if cap.isOpened():
-                        ret, frame = cap.read()
-                        if ret:
-                            height, width = frame.shape[:2]
-                            found_cameras.append({
-                                "index": i,
-                                "path": f"/dev/video{i}",
-                                "resolution": f"{width}x{height}",
-                                "capture": cap,
-                            })
-                        else:
-                            cap.release()
-                    else:
-                        cap.release()
-                except Exception:
-                    pass
+            found_cameras = self._discover_cameras_for_dialog()
 
             if not found_cameras:
                 self.status_label.setText("❌ No cameras found")
@@ -210,7 +193,7 @@ class CameraPanelMixin:
                 """
             )
             for cam in found_cameras:
-                camera_list.addItem(f"{cam['path']} - {cam['resolution']}", cam["index"])
+                camera_list.addItem(f"{cam['path']} - {cam['resolution']}", cam["id"])
             layout.addWidget(camera_list)
 
             preview_label = QLabel("Camera Preview")
@@ -275,8 +258,8 @@ class CameraPanelMixin:
             layout.addLayout(btn_layout)
 
             if dialog.exec() == QDialog.Accepted:
-                selected_idx = camera_list.currentData()
-                selected_cam = next((cam for cam in found_cameras if cam["index"] == selected_idx), None)
+                selected_id = camera_list.currentData()
+                selected_cam = next((cam for cam in found_cameras if cam["id"] == selected_id), None)
                 if selected_cam:
                     camera_path = selected_cam["path"]
                     target = assign_group.checkedId()
@@ -332,3 +315,58 @@ class CameraPanelMixin:
 
         if getattr(self, "device_manager", None):
             self.device_manager.config = config
+
+    def _candidate_camera_sources(self):
+        candidates = []
+        if self.device_manager and hasattr(self.device_manager, "scan_available_cameras"):
+            try:
+                for info in self.device_manager.scan_available_cameras():
+                    index = info.get("index")
+                    path = info.get("path") or (f"/dev/video{index}" if index is not None else "")
+                    candidates.append((index, path))
+            except Exception:
+                candidates = []
+        if not candidates:
+            is_linux = sys.platform.startswith("linux")
+            for i in range(10):
+                path = f"/dev/video{i}"
+                if is_linux and not Path(path).exists():
+                    continue
+                candidates.append((i, path))
+        return candidates
+
+    def _discover_cameras_for_dialog(self):
+        if cv2 is None:
+            return []
+
+        backend_flag = getattr(cv2, "CAP_V4L2", None)
+        found = []
+        seen_ids = set()
+        for index, path in self._candidate_camera_sources():
+            cam_id = index if index is not None else path
+            if cam_id in seen_ids:
+                continue
+            seen_ids.add(cam_id)
+            source = index if index is not None else path
+            if source in (None, ""):
+                continue
+            try:
+                cap = cv2.VideoCapture(source, backend_flag) if backend_flag is not None else cv2.VideoCapture(source)
+                if cap.isOpened():
+                    ret, frame = cap.read()
+                    if ret:
+                        height, width = frame.shape[:2]
+                        found.append(
+                            {
+                                "id": cam_id,
+                                "index": index,
+                                "path": path or str(source),
+                                "resolution": f"{width}x{height}",
+                                "capture": cap,
+                            }
+                        )
+                        continue
+                cap.release()
+            except Exception:
+                pass
+        return found

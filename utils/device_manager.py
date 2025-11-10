@@ -521,6 +521,11 @@ class DeviceManager(QObject):
         except Exception as e:
             print(f"[DEVICE_MANAGER] Camera scan error: {e}")
             return []
+
+    def scan_available_cameras(self) -> List[Dict]:
+        """Public helper used by settings UI to inspect camera hardware."""
+
+        return self._discover_cameras()
     
     def _match_cameras_to_config(self, cameras: List[Dict]) -> Dict[str, str]:
         """Try to match discovered cameras to config settings."""
