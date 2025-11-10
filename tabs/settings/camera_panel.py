@@ -27,6 +27,8 @@ try:  # Optional dependency used for live previews
 except ImportError:  # pragma: no cover - optional dependency
     cv2 = None
 
+from utils.camera_hub import temporarily_release_camera_hub
+
 
 class CameraPanelMixin:
     """Encapsulates camera UI wiring and discovery helpers."""
@@ -160,141 +162,150 @@ class CameraPanelMixin:
             self.status_label.setText("⏳ Scanning for cameras...")
             self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
 
-            backend_flag = getattr(cv2, "CAP_V4L2", None)
-            found_cameras = self._discover_cameras_for_dialog()
+            with temporarily_release_camera_hub():
+                found_cameras = []
+                preview_timer: Optional[QTimer] = None
+                found_cameras = self._discover_cameras_for_dialog()
 
-            if not found_cameras:
-                self.status_label.setText("❌ No cameras found")
-                self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
-                return
+                if not found_cameras:
+                    self.status_label.setText("❌ No cameras found")
+                    self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+                    return
 
-            dialog = QDialog(self)
-            dialog.setWindowTitle("Found Cameras")
-            dialog.setMinimumWidth(600)
-            dialog.setMinimumHeight(500)
-            dialog.setStyleSheet("QDialog { background-color: #2a2a2a; }")
+                dialog = QDialog(self)
+                dialog.setWindowTitle("Found Cameras")
+                dialog.setMinimumWidth(600)
+                dialog.setMinimumHeight(500)
+                dialog.setStyleSheet("QDialog { background-color: #2a2a2a; }")
 
-            layout = QVBoxLayout(dialog)
-            title = QLabel(f"✓ Found {len(found_cameras)} camera(s):")
-            title.setStyleSheet("color: #4CAF50; font-size: 16px; font-weight: bold; padding: 10px;")
-            layout.addWidget(title)
+                layout = QVBoxLayout(dialog)
+                title = QLabel(f"✓ Found {len(found_cameras)} camera(s):")
+                title.setStyleSheet("color: #4CAF50; font-size: 16px; font-weight: bold; padding: 10px;")
+                layout.addWidget(title)
 
-            camera_list = QComboBox()
-            camera_list.setStyleSheet(
-                """
-                QComboBox {
-                    background-color: #505050;
-                    color: #ffffff;
-                    border: 2px solid #707070;
-                    border-radius: 8px;
-                    padding: 10px;
-                    font-size: 15px;
-                }
-                """
-            )
-            for cam in found_cameras:
-                camera_list.addItem(f"{cam['path']} - {cam['resolution']}", cam["id"])
-            layout.addWidget(camera_list)
+                camera_list = QComboBox()
+                camera_list.setStyleSheet(
+                    """
+                    QComboBox {
+                        background-color: #505050;
+                        color: #ffffff;
+                        border: 2px solid #707070;
+                        border-radius: 8px;
+                        padding: 10px;
+                        font-size: 15px;
+                    }
+                    """
+                )
+                for cam in found_cameras:
+                    camera_list.addItem(f"{cam['path']} - {cam['resolution']}", cam["id"])
+                layout.addWidget(camera_list)
 
-            preview_label = QLabel("Camera Preview")
-            preview_label.setStyleSheet("background-color: #000000; min-height: 300px;")
-            preview_label.setAlignment(Qt.AlignCenter)
-            layout.addWidget(preview_label)
+                preview_label = QLabel("Camera Preview")
+                preview_label.setStyleSheet("background-color: #000000; min-height: 300px;")
+                preview_label.setAlignment(Qt.AlignCenter)
+                layout.addWidget(preview_label)
 
-            assign_section = QLabel("Assign to:")
-            assign_section.setStyleSheet("color: #e0e0e0; font-size: 14px; padding: 10px;")
-            layout.addWidget(assign_section)
+                assign_section = QLabel("Assign to:")
+                assign_section.setStyleSheet("color: #e0e0e0; font-size: 14px; padding: 10px;")
+                layout.addWidget(assign_section)
 
-            assign_group = QButtonGroup(dialog)
-            front_radio = QRadioButton("Front Camera")
-            front_radio.setStyleSheet("QRadioButton { color: #e0e0e0; font-size: 14px; padding: 5px; }")
-            front_radio.setChecked(True)
-            assign_group.addButton(front_radio, 0)
-            layout.addWidget(front_radio)
+                assign_group = QButtonGroup(dialog)
+                front_radio = QRadioButton("Front Camera")
+                front_radio.setStyleSheet("QRadioButton { color: #e0e0e0; font-size: 14px; padding: 5px; }")
+                front_radio.setChecked(True)
+                assign_group.addButton(front_radio, 0)
+                layout.addWidget(front_radio)
 
-            wrist_radio = QRadioButton("Wrist L Camera")
-            wrist_radio.setStyleSheet("QRadioButton { color: #e0e0e0; font-size: 14px; padding: 5px; }")
-            assign_group.addButton(wrist_radio, 1)
-            layout.addWidget(wrist_radio)
+                wrist_radio = QRadioButton("Wrist L Camera")
+                wrist_radio.setStyleSheet("QRadioButton { color: #e0e0e0; font-size: 14px; padding: 5px; }")
+                assign_group.addButton(wrist_radio, 1)
+                layout.addWidget(wrist_radio)
 
-            wrist_r_radio = QRadioButton("Wrist R Camera")
-            wrist_r_radio.setStyleSheet("QRadioButton { color: #e0e0e0; font-size: 14px; padding: 5px; }")
-            assign_group.addButton(wrist_r_radio, 2)
-            layout.addWidget(wrist_r_radio)
+                wrist_r_radio = QRadioButton("Wrist R Camera")
+                wrist_r_radio.setStyleSheet("QRadioButton { color: #e0e0e0; font-size: 14px; padding: 5px; }")
+                assign_group.addButton(wrist_r_radio, 2)
+                layout.addWidget(wrist_r_radio)
 
-            def update_preview():
+                def update_preview():
+                    try:
+                        selected_id = camera_list.currentData()
+                        for cam in found_cameras:
+                            if cam["id"] == selected_id:
+                                ret, frame = cam["capture"].read()
+                                if ret:
+                                    frame = cv2.resize(frame, (480, 360))
+                                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                                    h, w, ch = rgb_frame.shape
+                                    bytes_per_line = ch * w
+                                    qt_image = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
+                                    preview_label.setPixmap(QPixmap.fromImage(qt_image))
+                                break
+                    except Exception:
+                        pass
+
+                preview_timer = QTimer(dialog)
+                preview_timer.timeout.connect(update_preview)
+                preview_timer.start(120)
+
+                btn_layout = QHBoxLayout()
+                btn_layout.addStretch()
+
+                cancel_btn = QPushButton("Cancel")
+                cancel_btn.setStyleSheet(self.get_button_style("#909090", "#707070"))
+                cancel_btn.clicked.connect(dialog.reject)
+                btn_layout.addWidget(cancel_btn)
+
+                select_btn = QPushButton("Assign Camera")
+                select_btn.setStyleSheet(self.get_button_style("#4CAF50", "#388E3C"))
+                select_btn.clicked.connect(dialog.accept)
+                btn_layout.addWidget(select_btn)
+                layout.addLayout(btn_layout)
+
                 try:
-                    selected_id = camera_list.currentData()
+                    if dialog.exec() == QDialog.Accepted:
+                        selected_id = camera_list.currentData()
+                        selected_cam = next((cam for cam in found_cameras if cam["id"] == selected_id), None)
+                        if selected_cam:
+                            camera_path = selected_cam["path"]
+                            target = assign_group.checkedId()
+                            if target == 0:
+                                self.cam_front_edit.setText(camera_path)
+                                self._apply_camera_assignment_to_config("front", camera_path)
+                                self.camera_front_status = "online"
+                                if self.camera_front_circle:
+                                    self.update_status_circle(self.camera_front_circle, "online")
+                                if self.device_manager:
+                                    self.device_manager.update_camera_status("front", "online")
+                                self.status_label.setText(f"✓ Assigned {camera_path} to Front Camera")
+                            elif target == 1:
+                                self.cam_wrist_edit.setText(camera_path)
+                                self._apply_camera_assignment_to_config("wrist", camera_path)
+                                self.camera_wrist_status = "online"
+                                if self.camera_wrist_circle:
+                                    self.update_status_circle(self.camera_wrist_circle, "online")
+                                if self.device_manager:
+                                    self.device_manager.update_camera_status("wrist", "online")
+                                self.status_label.setText(f"✓ Assigned {camera_path} to Wrist L Camera")
+                            else:
+                                self.cam_wrist_right_edit.setText(camera_path)
+                                self._apply_camera_assignment_to_config("wrist_right", camera_path)
+                                self.camera_wrist_right_status = "online"
+                                if self.camera_wrist_right_circle:
+                                    self.update_status_circle(self.camera_wrist_right_circle, "online")
+                                if self.device_manager:
+                                    self.device_manager.update_camera_status("wrist_right", "online")
+                                self.status_label.setText(f"✓ Assigned {camera_path} to Wrist R Camera")
+                            self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+                finally:
+                    if preview_timer is not None:
+                        preview_timer.stop()
                     for cam in found_cameras:
-                        if cam["id"] == selected_id:
-                            ret, frame = cam["capture"].read()
-                            if ret:
-                                frame = cv2.resize(frame, (480, 360))
-                                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                                h, w, ch = rgb_frame.shape
-                                bytes_per_line = ch * w
-                                qt_image = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
-                                preview_label.setPixmap(QPixmap.fromImage(qt_image))
-                            break
-                except Exception:
-                    pass
-
-            preview_timer = QTimer(dialog)
-            preview_timer.timeout.connect(update_preview)
-            preview_timer.start(100)
-
-            btn_layout = QHBoxLayout()
-            btn_layout.addStretch()
-
-            cancel_btn = QPushButton("Cancel")
-            cancel_btn.setStyleSheet(self.get_button_style("#909090", "#707070"))
-            cancel_btn.clicked.connect(dialog.reject)
-            btn_layout.addWidget(cancel_btn)
-
-            select_btn = QPushButton("Assign Camera")
-            select_btn.setStyleSheet(self.get_button_style("#4CAF50", "#388E3C"))
-            select_btn.clicked.connect(dialog.accept)
-            btn_layout.addWidget(select_btn)
-            layout.addLayout(btn_layout)
-
-            if dialog.exec() == QDialog.Accepted:
-                selected_id = camera_list.currentData()
-                selected_cam = next((cam for cam in found_cameras if cam["id"] == selected_id), None)
-                if selected_cam:
-                    camera_path = selected_cam["path"]
-                    target = assign_group.checkedId()
-                    if target == 0:
-                        self.cam_front_edit.setText(camera_path)
-                        self._apply_camera_assignment_to_config("front", camera_path)
-                        self.camera_front_status = "online"
-                        if self.camera_front_circle:
-                            self.update_status_circle(self.camera_front_circle, "online")
-                        if self.device_manager:
-                            self.device_manager.update_camera_status("front", "online")
-                        self.status_label.setText(f"✓ Assigned {camera_path} to Front Camera")
-                    elif target == 1:
-                        self.cam_wrist_edit.setText(camera_path)
-                        self._apply_camera_assignment_to_config("wrist", camera_path)
-                        self.camera_wrist_status = "online"
-                        if self.camera_wrist_circle:
-                            self.update_status_circle(self.camera_wrist_circle, "online")
-                        if self.device_manager:
-                            self.device_manager.update_camera_status("wrist", "online")
-                        self.status_label.setText(f"✓ Assigned {camera_path} to Wrist L Camera")
-                    else:
-                        self.cam_wrist_right_edit.setText(camera_path)
-                        self._apply_camera_assignment_to_config("wrist_right", camera_path)
-                        self.camera_wrist_right_status = "online"
-                        if self.camera_wrist_right_circle:
-                            self.update_status_circle(self.camera_wrist_right_circle, "online")
-                        if self.device_manager:
-                            self.device_manager.update_camera_status("wrist_right", "online")
-                        self.status_label.setText(f"✓ Assigned {camera_path} to Wrist R Camera")
-                    self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
-
-            preview_timer.stop()
-            for cam in found_cameras:
-                cam["capture"].release()
+                        capture = cam.get("capture")
+                        try:
+                            if capture:
+                                capture.release()
+                        except Exception:
+                            pass
         except Exception as exc:
             self.status_label.setText(f"❌ Error: {exc}")
             self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
