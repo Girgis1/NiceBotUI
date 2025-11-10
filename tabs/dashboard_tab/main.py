@@ -84,6 +84,8 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
         self.camera_indicator3: Optional[StatusIndicator] = None
         self.camera_front_circle: Optional[StatusIndicator] = None
         self.camera_wrist_circle: Optional[StatusIndicator] = None
+        self.camera_overhead_circle: Optional[StatusIndicator] = None
+        self._camera_indicator_map: Dict[str, StatusIndicator] = {}
         self.compact_throbber: Optional[CircularProgress] = None
         self.camera_hub: Optional[CameraStreamHub] = None
         if cv2 is not None and np is not None:
@@ -126,7 +128,34 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
         self.connection_check_timer = QTimer()
         self.connection_check_timer.timeout.connect(self.check_connections_background)
         self.connection_check_timer.start(10000)
-    
+
+    def _assign_camera_indicator_targets(self) -> None:
+        indicators = [self.camera_indicator1, self.camera_indicator2, self.camera_indicator3]
+        self._camera_indicator_map.clear()
+
+        for indicator in indicators:
+            if indicator:
+                indicator.set_null()
+
+        for idx, name in enumerate(self.camera_order):
+            if idx >= len(indicators):
+                break
+            indicator = indicators[idx]
+            if not indicator:
+                continue
+            self._camera_indicator_map[name] = indicator
+            status = self._camera_status.get(name, "empty")
+            if status == "online":
+                indicator.set_connected(True)
+            elif status == "offline":
+                indicator.set_connected(False)
+            else:
+                indicator.set_null()
+
+        self.camera_front_circle = self._camera_indicator_map.get("front")
+        self.camera_wrist_circle = self._camera_indicator_map.get("wrist")
+        self.camera_overhead_circle = self._camera_indicator_map.get("overhead")
+
     def init_ui(self):
         """Initialize UI - same as original app.py"""
         layout = QVBoxLayout(self)
@@ -176,8 +205,7 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
         camera_group.addWidget(self.camera_indicator3)
         normal_status_layout.addLayout(camera_group)
 
-        self.camera_front_circle = self.camera_indicator1
-        self.camera_wrist_circle = self.camera_indicator2
+        self._assign_camera_indicator_targets()
 
         status_bar.addWidget(self.normal_status_container, stretch=0)
 

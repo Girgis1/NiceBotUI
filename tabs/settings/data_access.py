@@ -96,8 +96,10 @@ class SettingsDataAccessMixin:
         cameras = config.get("cameras", {})
         front_cam = cameras.get("front", {})
         wrist_cam = cameras.get("wrist", {})
+        overhead_cam = cameras.get("overhead", {})
         self.cam_front_edit.setText(str(front_cam.get("index_or_path", "/dev/video1")))
         self.cam_wrist_edit.setText(str(wrist_cam.get("index_or_path", "/dev/video3")))
+        self.cam_overhead_edit.setText(str(overhead_cam.get("index_or_path", "/dev/video5")))
         self.cam_width_spin.setValue(front_cam.get("width", 640))
         self.cam_height_spin.setValue(front_cam.get("height", 480))
         self.cam_fps_spin.setValue(front_cam.get("fps", 30))
@@ -161,9 +163,10 @@ class SettingsDataAccessMixin:
         robot_cfg["position_verification_enabled"] = self.position_verification_check.isChecked()
 
         # Cameras
-        cameras = config.setdefault("cameras", {"front": {}, "wrist": {}})
+        cameras = config.setdefault("cameras", {"front": {}, "wrist": {}, "overhead": {}})
         cameras.setdefault("front", {})
         cameras.setdefault("wrist", {})
+        cameras.setdefault("overhead", {})
         cameras["front"].update({
             "index_or_path": self.cam_front_edit.text(),
             "width": self.cam_width_spin.value(),
@@ -172,6 +175,12 @@ class SettingsDataAccessMixin:
         })
         cameras["wrist"].update({
             "index_or_path": self.cam_wrist_edit.text(),
+            "width": self.cam_width_spin.value(),
+            "height": self.cam_height_spin.value(),
+            "fps": self.cam_fps_spin.value(),
+        })
+        cameras["overhead"].update({
+            "index_or_path": self.cam_overhead_edit.text(),
             "width": self.cam_width_spin.value(),
             "height": self.cam_height_spin.value(),
             "fps": self.cam_fps_spin.value(),
@@ -257,6 +266,7 @@ class SettingsDataAccessMixin:
 
         self.cam_front_edit.setText("/dev/video1")
         self.cam_wrist_edit.setText("/dev/video3")
+        self.cam_overhead_edit.setText("/dev/video5")
         self.cam_width_spin.setValue(640)
         self.cam_height_spin.setValue(480)
         self.cam_fps_spin.setValue(30)

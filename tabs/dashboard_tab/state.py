@@ -188,6 +188,8 @@ class DashboardStateMixin:
         for name in self.camera_order:
             self._camera_status.setdefault(name, "empty")
 
+        self._assign_camera_indicator_targets()
+
         self.camera_toggle_btn.setEnabled(bool(self.camera_order))
         self._refresh_active_camera_label()
         if self.camera_view_active:
