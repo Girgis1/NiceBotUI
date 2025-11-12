@@ -289,6 +289,11 @@ class DeviceManager(QObject):
                 self.discovery_log.emit(port_msg)
         
         cameras_cfg = self.config.get("cameras", {}) or {}
+        friendly_names = {
+            "front": "Front Camera",
+            "wrist": "Wrist L Camera",
+            "wrist_right": "Wrist R Camera",
+        }
         print(f"----- Cameras: {len(camera_assignments)} -----", flush=True)
         self.discovery_log.emit(f"----- Cameras: {len(camera_assignments)} -----")
 
@@ -298,14 +303,15 @@ class DeviceManager(QObject):
             self.discovery_log.emit(msg)
         else:
             for cam_name in cameras_cfg.keys():
+                label = friendly_names.get(cam_name, cam_name.replace("_", " ").title())
                 if cam_name in camera_assignments:
-                    msg = f"{cam_name.title()}: {camera_assignments[cam_name]}"
+                    msg = f"{label}: {camera_assignments[cam_name]}"
                 else:
                     configured_path = cameras_cfg.get(cam_name, {}).get("index_or_path", "")
                     if configured_path:
-                        msg = f"{cam_name.title()}: {configured_path} (not detected)"
+                        msg = f"{label}: {configured_path} (not detected)"
                     else:
-                        msg = f"{cam_name.title()}: not configured"
+                        msg = f"{label}: not configured"
                 print(msg, flush=True)
                 self.discovery_log.emit(msg)
         
@@ -493,9 +499,44 @@ class DeviceManager(QObject):
         try:
             import cv2
             import sys
-            
+
             backend_flag = getattr(cv2, "CAP_V4L2", None)
-            found_cameras = []
+            backend_order = []
+            if backend_flag is not None:
+                backend_order.append(("v4l2", backend_flag))
+            backend_order.append(("default", None))
+
+            found_cameras: List[Dict] = []
+
+            def _open_capture(index: int, backend_value):
+                try:
+                    if backend_value is None:
+                        return cv2.VideoCapture(index)
+                    return cv2.VideoCapture(index, backend_value)
+                except Exception:
+                    return None
+
+            def _read_resolution(capture) -> Optional[tuple[int, int]]:
+                if capture is None or not capture.isOpened():
+                    return None
+                for _ in range(3):
+                    ret, frame = capture.read()
+                    if ret and frame is not None and frame.size:
+                        height, width = frame.shape[:2]
+                        return width, height
+                width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                if width > 0 and height > 0:
+                    return width, height
+                return None
+
+            def _release_capture(capture) -> None:
+                if capture is None:
+                    return
+                try:
+                    capture.release()
+                except Exception:
+                    pass
 
             # Scan /dev/video* devices (0-9). Skip indices without device nodes to avoid noisy OpenCV warnings.
             is_linux = sys.platform.startswith("linux")
@@ -506,32 +547,31 @@ class DeviceManager(QObject):
                         video_path = Path(f"/dev/video{i}")
                         if not video_path.exists():
                             continue
-                    cap = None
-                    try:
-                        cap = cv2.VideoCapture(i, backend_flag) if backend_flag is not None else cv2.VideoCapture(i)
-                        if cap.isOpened():
-                            # Try to read a frame to confirm it's working
-                            ret, frame = cap.read()
-                            if ret:
-                                height, width = frame.shape[:2]
-                                found_cameras.append({
-                                    "index": i,
-                                    "path": f"/dev/video{i}",
-                                    "resolution": f"{width}x{height}",
-                                    "width": width,
-                                    "height": height
-                                })
-                    except Exception:
-                        pass
-                    finally:
-                        if cap is not None:
-                            try:
-                                cap.release()
-                            except Exception:
-                                pass
+
+                    for backend_name, backend_value in backend_order:
+                        cap = _open_capture(i, backend_value)
+                        try:
+                            if not cap or not cap.isOpened():
+                                continue
+                            resolution = _read_resolution(cap)
+                            if resolution:
+                                width, height = resolution
+                                found_cameras.append(
+                                    {
+                                        "index": i,
+                                        "path": f"/dev/video{i}",
+                                        "resolution": f"{width}x{height}",
+                                        "width": width,
+                                        "height": height,
+                                        "backend": backend_name,
+                                    }
+                                )
+                                break
+                        finally:
+                            _release_capture(cap)
 
             return found_cameras
-            
+
         except Exception as e:
             print(f"[DEVICE_MANAGER] Camera scan error: {e}")
             return []

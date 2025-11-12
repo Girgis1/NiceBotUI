@@ -88,6 +88,7 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
         self.camera_indicator_map: Dict[str, StatusIndicator] = {}
         self.camera_front_circle: Optional[StatusIndicator] = None
         self.camera_wrist_circle: Optional[StatusIndicator] = None
+        self.camera_wrist_right_circle: Optional[StatusIndicator] = None
         self.compact_throbber: Optional[CircularProgress] = None
         self.camera_hub: Optional[CameraStreamHub] = None
         if cv2 is not None and np is not None:
@@ -597,6 +598,7 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
 
         self.camera_front_circle = self.camera_indicator_map.get("front")
         self.camera_wrist_circle = self.camera_indicator_map.get("wrist")
+        self.camera_wrist_right_circle = self.camera_indicator_map.get("wrist_right")
 
         for idx in range(len(self.camera_order), len(indicators)):
             indicator = indicators[idx]

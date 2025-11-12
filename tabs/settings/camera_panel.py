@@ -7,6 +7,7 @@ from functools import partial
 from pathlib import Path
 from typing import Optional
 import sys
+import time
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap
@@ -175,6 +176,9 @@ class CameraPanelMixin:
                 self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
                 return
 
+            for cam in found_cameras:
+                cam["capture"] = None
+
             dialog = QDialog(self)
             dialog.setWindowTitle("Found Cameras")
             dialog.setMinimumWidth(600)
@@ -229,26 +233,50 @@ class CameraPanelMixin:
             assign_group.addButton(wrist_r_radio, 2)
             layout.addWidget(wrist_r_radio)
 
-            def update_preview():
+            def ensure_capture(cam_entry):
+                capture = cam_entry.get("capture")
+                if capture and capture.isOpened():
+                    return capture
+                source = cam_entry["path"] if cam_entry["index"] is None else cam_entry["index"]
+                backend_name, capture = self._open_camera_capture(source, cam_entry.get("backend"))
+                if capture:
+                    cam_entry["capture"] = capture
+                    cam_entry["backend"] = backend_name
+                return capture
+
+            def update_preview(force: bool = False):
                 try:
                     selected_id = camera_list.currentData()
                     for cam in found_cameras:
-                        if cam["id"] == selected_id:
-                            ret, frame = cam["capture"].read()
-                            if ret:
-                                frame = cv2.resize(frame, (480, 360))
-                                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                                h, w, ch = rgb_frame.shape
-                                bytes_per_line = ch * w
-                                qt_image = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
-                                preview_label.setPixmap(QPixmap.fromImage(qt_image))
+                        if cam["id"] != selected_id:
+                            continue
+                        capture = ensure_capture(cam)
+                        if not capture:
+                            if force:
+                                preview_label.setText("⚠️ Unable to read frame")
                             break
+                        ret, frame = self._read_frame_with_retry(capture, attempts=6, delay=0.1)
+                        if not ret or frame is None or not frame.size:
+                            capture.release()
+                            cam["capture"] = None
+                            if force:
+                                preview_label.setText("⚠️ Unable to read frame")
+                            break
+                        frame = cv2.resize(frame, (480, 360))
+                        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        h, w, ch = rgb_frame.shape
+                        bytes_per_line = ch * w
+                        qt_image = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
+                        preview_label.setPixmap(QPixmap.fromImage(qt_image))
+                        break
                 except Exception:
                     pass
 
             preview_timer = QTimer(dialog)
             preview_timer.timeout.connect(update_preview)
             preview_timer.start(100)
+            camera_list.currentIndexChanged.connect(lambda _: update_preview(force=True))
+            update_preview(force=True)
 
             btn_layout = QHBoxLayout()
             btn_layout.addStretch()
@@ -307,7 +335,9 @@ class CameraPanelMixin:
 
             preview_timer.stop()
             for cam in found_cameras:
-                cam["capture"].release()
+                capture = cam.get("capture")
+                if capture:
+                    capture.release()
         except Exception as exc:
             self.status_label.setText(f"❌ Error: {exc}")
             self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
@@ -358,7 +388,6 @@ class CameraPanelMixin:
         if cv2 is None:
             return []
 
-        backend_flag = getattr(cv2, "CAP_V4L2", None)
         found = []
         seen_ids = set()
         for index, path in self._candidate_camera_sources():
@@ -369,23 +398,69 @@ class CameraPanelMixin:
             source = index if index is not None else path
             if source in (None, ""):
                 continue
+            backend_name, cap = self._open_camera_capture(source)
+            if not cap:
+                continue
             try:
-                cap = cv2.VideoCapture(source, backend_flag) if backend_flag is not None else cv2.VideoCapture(source)
-                if cap.isOpened():
-                    ret, frame = cap.read()
-                    if ret:
-                        height, width = frame.shape[:2]
-                        found.append(
-                            {
-                                "id": cam_id,
-                                "index": index,
-                                "path": path or str(source),
-                                "resolution": f"{width}x{height}",
-                                "capture": cap,
-                            }
-                        )
-                        continue
+                success, frame = self._read_frame_with_retry(cap)
+                if not success:
+                    continue
+                height, width = frame.shape[:2]
+                found.append(
+                    {
+                        "id": cam_id,
+                        "index": index,
+                        "path": path or str(source),
+                        "resolution": f"{width}x{height}",
+                        "backend": backend_name,
+                    }
+                )
+            finally:
                 cap.release()
-            except Exception:
-                pass
         return found
+    def _open_camera_capture(self, source, preferred_backend: Optional[str] = None):
+        if cv2 is None:
+            return None, None
+
+        backend_flag = getattr(cv2, "CAP_V4L2", None)
+        backend_sequence = []
+
+        def add_backend(name: Optional[str]):
+            if not name:
+                return
+            if name == "v4l2" and backend_flag is None:
+                return
+            if name not in backend_sequence:
+                backend_sequence.append(name)
+
+        add_backend(preferred_backend)
+        add_backend("v4l2")
+        add_backend("default")
+
+        for backend in backend_sequence:
+            cap = None
+            try:
+                if backend == "v4l2" and backend_flag is not None:
+                    cap = cv2.VideoCapture(source, backend_flag)
+                else:
+                    cap = cv2.VideoCapture(source)
+                if not cap or not cap.isOpened():
+                    if cap:
+                        cap.release()
+                    continue
+                time.sleep(0.1)
+                return backend, cap
+            except Exception:
+                if cap:
+                    cap.release()
+        return None, None
+
+    def _read_frame_with_retry(self, capture, attempts: int = 3, delay: float = 0.05):
+        if cv2 is None or capture is None:
+            return False, None
+        for _ in range(attempts):
+            ret, frame = capture.read()
+            if ret and frame is not None and frame.size:
+                return True, frame
+            time.sleep(delay)
+        return False, None
