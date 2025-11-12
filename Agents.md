@@ -18,6 +18,27 @@ This document provides instructions for AI coding agents on how to work with the
 
 **Note:** Both local and Jetson use "NiceBotUI" as the folder name for consistency.
 
+### Bimanual Robot Configuration
+
+The system supports **bimanual teleoperation** with SO100/SO101 arms. The complete working configuration, including port mappings, calibration setup, and troubleshooting is documented in:
+
+📄 **[bimanual_working.md](bimanual_working.md)** - Full bimanual setup guide
+
+**Quick Reference:**
+- Follower Left (SO101): `/dev/ttyACM0`
+- Follower Right (SO101): `/dev/ttyACM2`
+- Leader Left (SO100): `/dev/ttyACM1`
+- Leader Right (SO101): `/dev/ttyACM3`
+
+**To start bimanual teleoperation on Jetson:**
+```bash
+ssh jetson
+cd ~/NiceBotUI
+./run_bimanual_teleop.sh
+```
+
+**Important:** USB permissions must be set after reboot: `sudo chmod 666 /dev/ttyACM*`
+
 ## Available Tools & Scripts
 
 ### 1. Sync Scripts

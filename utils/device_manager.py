@@ -8,12 +8,17 @@ Handles:
 - Startup device discovery
 """
 
+from contextlib import nullcontext
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Dict, List, Optional
 from PySide6.QtCore import QObject, Signal
 
-from utils.camera_hub import temporarily_release_camera_hub
 from utils.camera_support import prepare_camera_source
+
+try:  # Optional dependency for coordinating shared camera access
+    from utils.camera_hub import CameraStreamHub
+except Exception:  # pragma: no cover - avoid hard dependency during bootstrapping
+    CameraStreamHub = None
 
 
 class DeviceManager(QObject):
@@ -349,7 +354,8 @@ class DeviceManager(QObject):
         # Camera statuses
         cameras_cfg = self.config.get("cameras", {}) or {}
         self._sync_camera_status_map()
-        with temporarily_release_camera_hub():
+        pause_ctx = CameraStreamHub.paused() if CameraStreamHub else nullcontext()
+        with pause_ctx:
             for camera_name, camera_cfg in cameras_cfg.items():
                 status = self._probe_camera_status(camera_cfg)
                 previous = self.camera_statuses.get(camera_name, "empty")
@@ -493,12 +499,14 @@ class DeviceManager(QObject):
 
             # Scan /dev/video* devices (0-9). Skip indices without device nodes to avoid noisy OpenCV warnings.
             is_linux = sys.platform.startswith("linux")
-            with temporarily_release_camera_hub():
+            pause_ctx = CameraStreamHub.paused() if CameraStreamHub else nullcontext()
+            with pause_ctx:
                 for i in range(10):
                     if is_linux:
                         video_path = Path(f"/dev/video{i}")
                         if not video_path.exists():
                             continue
+                    cap = None
                     try:
                         cap = cv2.VideoCapture(i, backend_flag) if backend_flag is not None else cv2.VideoCapture(i)
                         if cap.isOpened():
@@ -513,11 +521,14 @@ class DeviceManager(QObject):
                                     "width": width,
                                     "height": height
                                 })
-                            cap.release()
-                        else:
-                            cap.release()
                     except Exception:
                         pass
+                    finally:
+                        if cap is not None:
+                            try:
+                                cap.release()
+                            except Exception:
+                                pass
 
             return found_cameras
             

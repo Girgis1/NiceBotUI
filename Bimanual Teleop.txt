@@ -1,0 +1,141 @@
+cd ~/NiceBotUI
+source .venv/bin/activate
+
+sudo chmod 666 /dev/ttyACM0
+sudo chmod 666 /dev/ttyACM1
+
+lerobot-find-port
+
+lerobot-find-cameras opencv # or realsense for Intel Realsense cameras
+
+lerobot-calibrate \
+    --robot.type=so101_follower \
+    --robot.port=/dev/ttyACM0 \
+    --robot.id=right_follower
+    
+lerobot-calibrate \
+    --robot.type=so101_follower \
+    --robot.port=/dev/ttyACM0 \
+    --robot.id=left_follower
+    
+lerobot-calibrate \
+    --teleop.type=so101_leader \
+    --teleop.port=/dev/ttyACM1 \
+    --teleop.id=right_leader
+    
+lerobot-calibrate \
+    --teleop.type=so100_leader \
+    --teleop.port=/dev/ttyACM1 \
+    --teleop.id=left_leader 
+
+
+python -m lerobot.teleoperate \
+  --robot.type=bi_so101_follower \
+  --robot.left_arm_port=/dev/ACM0 \
+  --robot.right_arm_port=/dev/ACM1 \
+  --robot.id=bimanual_follower \
+  --robot.cameras='{
+    Top: {"type": "opencv", "index_or_path": 0, "width": 640, "height": 480, "fps": 30},
+    Left: {"type": "opencv", "index_or_path": 1, "width": 640, "height": 480, "fps": 30},
+    Right: {"type": "opencv", "index_or_path": 2, "width": 640, "height": 480, "fps": 30},
+  }' \
+  --teleop.type=bi_so100_leader \
+  --teleop.left_arm_port=/dev/ACM2 \
+  --teleop.right_arm_port=/dev/ACM3 \
+  --teleop.id=bimanual_leader \
+  --display_data=true
+  
+  
+  python -m lerobot.teleoperate \
+  --robot.type=bi_so101_follower \
+  --robot.left_arm_port=/dev/ttyACM0 \
+  --robot.right_arm_port=/dev/ttyACM1 \
+  --robot.left_arm_id=left_follower \
+  --robot.right_arm_id=right_follower \
+  --teleop.type=bi_so101_leader \
+  --teleop.left_arm_port=/dev/ttyACM2 \
+  --teleop.right_arm_port=/dev/ttyACM3 \
+  --teleop.left_arm_id=left_leader \
+  --teleop.right_arm_id=right_leader \
+  --display_data=true
+  
+  ssh jetson
+cd ~/NiceBotUI
+source .venv/bin/activate
+source ~/jetson_helpers.sh
+run_logged python run_bi_so101_teleop.py \
+    --robot.type=bi_so101_follower \
+    --robot.left_arm_port=/dev/ttyACM0 \
+    --robot.right_arm_port=/dev/ttyACM1 \
+    --robot.left_arm_id=left_follower \
+    --robot.right_arm_id=right_follower \
+    --robot.auto_calibrate=false \
+    --teleop.type=bi_so101_leader \
+    --teleop.left_arm_port=/dev/ttyACM2 \
+    --teleop.right_arm_port=/dev/ttyACM3 \
+    --teleop.left_arm_id=leader_white \
+    --teleop.right_arm_id=right_leader \
+    --teleop.left_arm_type=so101_leader \
+    --teleop.right_arm_type=so101_leader \
+    --teleop.auto_calibrate=false \
+    --display_data=false
+  
+  
+  
+  Uneditied copy_______
+  
+  python -m lerobot.teleoperate \
+  --robot.type=bi_so100_follower \
+  --robot.left_arm_port=/dev/tty.usbmodem5A680122821 \
+  --robot.right_arm_port=/dev/tty.usbmodem5A680121381 \
+  --robot.id=bimanual_follower \
+  --robot.cameras='{
+    Top: {"type": "opencv", "index_or_path": 0, "width": 800, "height": 600, "fps": 30},
+    Left: {"type": "opencv", "index_or_path": 1, "width": 800, "height": 600, "fps": 30},
+    Right: {"type": "opencv", "index_or_path": 2, "width": 800, "height": 600, "fps": 30},
+  }' \
+  --teleop.type=bi_so100_leader \
+  --teleop.left_arm_port=/dev/tty.usbmodem5A680110941 \
+  --teleop.right_arm_port=/dev/tty.usbmodem5A680135321 \
+  --teleop.id=bimanual_leader \
+  --display_data=true
+
+_____________________________________________________________________________
+
+ssh jetson
+cd ~/NiceBotUI
+source .venv/bin/activate
+./run_bimanual_teleop.sh
+
+
+
+
+cd ~/NiceBotUI
+source .venv/bin/activate
+
+# Give USB permissions
+sudo chmod 666 /dev/ttyACM0 /dev/ttyACM1 /dev/ttyACM2 /dev/ttyACM3
+
+# Calibrate left follower (robot left arm)
+lerobot-calibrate \
+  --robot.type=so101_follower \
+  --robot.port=/dev/ttyACM1 \
+  --robot.id=left_follower
+
+# Calibrate right follower (robot right arm)
+lerobot-calibrate \
+  --robot.type=so101_follower \
+  --robot.port=/dev/ttyACM0 \
+  --robot.id=right_follower
+
+# Calibrate left leader (teleop left arm)
+lerobot-calibrate \
+  --teleop.type=so101_leader \
+  --teleop.port=/dev/ttyACM2 \
+  --teleop.id=left_leader
+
+# Calibrate right leader (teleop right arm)  
+lerobot-calibrate \
+  --teleop.type=so101_leader \
+  --teleop.port=/dev/ttyACM3 \
+  --teleop.id=right_leader

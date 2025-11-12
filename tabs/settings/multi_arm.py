@@ -26,8 +26,9 @@ from utils.mode_widgets import ModeSelector, SingleArmConfig
 from utils.config_compat import (
     get_enabled_arms,
     get_home_positions,
-    set_home_positions,
 )
+from utils.home_service import save_home_positions
+from utils.port_tester import PortTestRequest, PortTestWorker
 from .calibration_dialog import SO101CalibrationDialog
 
 
@@ -85,11 +86,11 @@ class MultiArmMixin:
         )
         rest_row.addWidget(self.rest_velocity_spin)
 
-        self.find_ports_btn = QPushButton("🔍 Find Ports")
-        self.find_ports_btn.setFixedHeight(45)
-        self.find_ports_btn.setStyleSheet(self.get_button_style("#FF9800", "#F57C00"))
-        self.find_ports_btn.clicked.connect(self.find_robot_ports)
-        rest_row.addWidget(self.find_ports_btn)
+        self.test_ports_btn = QPushButton("🧪 Test Ports")
+        self.test_ports_btn.setFixedHeight(45)
+        self.test_ports_btn.setStyleSheet(self.get_button_style("#FF9800", "#F57C00"))
+        self.test_ports_btn.clicked.connect(self.test_all_robot_ports)
+        rest_row.addWidget(self.test_ports_btn)
         rest_row.addStretch()
 
         layout.addLayout(rest_row)
@@ -128,6 +129,9 @@ class MultiArmMixin:
         self.solo_arm_config.calibrate_clicked.connect(
             lambda: self.calibrate_arm_at_index(self.solo_arm_selector.currentIndex())
         )
+        self.solo_arm_config.test_clicked.connect(
+            lambda: self.test_robot_arm(self.solo_arm_selector.currentIndex(), source_widget=self.solo_arm_config)
+        )
         solo_layout.addWidget(self.solo_arm_config)
         layout.addWidget(self.solo_container)
 
@@ -140,12 +144,18 @@ class MultiArmMixin:
         self.robot_arm1_config.home_clicked.connect(lambda: self.home_arm(0))
         self.robot_arm1_config.set_home_clicked.connect(lambda: self.set_home_arm(0))
         self.robot_arm1_config.calibrate_clicked.connect(lambda: self.calibrate_arm_at_index(0))
+        self.robot_arm1_config.test_clicked.connect(
+            lambda: self.test_robot_arm(0, source_widget=self.robot_arm1_config)
+        )
         arms_row.addWidget(self.robot_arm1_config)
 
         self.robot_arm2_config = SingleArmConfig("Right Arm (Arm 2)")
         self.robot_arm2_config.home_clicked.connect(lambda: self.home_arm(1))
         self.robot_arm2_config.set_home_clicked.connect(lambda: self.set_home_arm(1))
         self.robot_arm2_config.calibrate_clicked.connect(lambda: self.calibrate_arm_at_index(1))
+        self.robot_arm2_config.test_clicked.connect(
+            lambda: self.test_robot_arm(1, source_widget=self.robot_arm2_config)
+        )
         arms_row.addWidget(self.robot_arm2_config)
         bimanual_layout.addLayout(arms_row)
         layout.addWidget(self.bimanual_container)
@@ -178,6 +188,9 @@ class MultiArmMixin:
         teleop_solo_layout.addLayout(teleop_arm_select_row)
 
         self.teleop_solo_arm_config = SingleArmConfig("Leader Arm 1", show_home_controls=False)
+        self.teleop_solo_arm_config.test_clicked.connect(
+            lambda: self.test_teleop_arm(self.teleop_solo_arm_selector.currentIndex(), self.teleop_solo_arm_config)
+        )
         teleop_solo_layout.addWidget(self.teleop_solo_arm_config)
         layout.addWidget(self.teleop_solo_container)
 
@@ -187,8 +200,14 @@ class MultiArmMixin:
 
         teleop_arms_row = QHBoxLayout()
         self.teleop_arm1_config = SingleArmConfig("Left Leader (Arm 1)", show_home_controls=False)
+        self.teleop_arm1_config.test_clicked.connect(
+            lambda: self.test_teleop_arm(0, self.teleop_arm1_config)
+        )
         teleop_arms_row.addWidget(self.teleop_arm1_config)
         self.teleop_arm2_config = SingleArmConfig("Right Leader (Arm 2)", show_home_controls=False)
+        self.teleop_arm2_config.test_clicked.connect(
+            lambda: self.test_teleop_arm(1, self.teleop_arm2_config)
+        )
         teleop_arms_row.addWidget(self.teleop_arm2_config)
         teleop_bimanual_layout.addLayout(teleop_arms_row)
         layout.addWidget(self.teleop_bimanual_container)
@@ -289,23 +308,14 @@ class MultiArmMixin:
                 self.status_label.setText(f"❌ Failed to read positions from Arm {arm_index + 1}")
                 return
 
-            set_home_positions(self.config, positions, arm_index)
+            self.config = save_home_positions(
+                positions,
+                arm_index,
+                home_velocity=self.rest_velocity_spin.value() if self.rest_velocity_spin else None,
+                config_path=self.config_path,
+            )
 
-            if "arms" in self.config.get("robot", {}) and arm_index < len(self.config["robot"]["arms"]):
-                self.config["robot"]["arms"][arm_index]["home_velocity"] = self.rest_velocity_spin.value()
-
-            if arm_index == 0:
-                if self.robot_arm1_config:
-                    self.robot_arm1_config.set_home_positions(positions)
-                if self.solo_arm_config and self.solo_arm_selector.currentIndex() == 0:
-                    self.solo_arm_config.set_home_positions(positions)
-            elif arm_index == 1:
-                if self.robot_arm2_config:
-                    self.robot_arm2_config.set_home_positions(positions)
-                if self.solo_arm_config and self.solo_arm_selector.currentIndex() == 1:
-                    self.solo_arm_config.set_home_positions(positions)
-
-            Path(self.config_path).write_text(json.dumps(self.config, indent=2))
+            self._update_home_widgets(arm_index, positions)
             self.status_label.setText(f"✓ Home position saved for Arm {arm_index + 1}: {positions}")
             self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
             self.config_changed.emit()
@@ -442,11 +452,13 @@ class MultiArmMixin:
                 self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
                 return
 
-            set_home_positions(self.config, positions, arm_index=0)
-            if "arms" in self.config.get("robot", {}):
-                self.config["robot"]["arms"][0]["home_velocity"] = self.rest_velocity_spin.value()
-
-            Path(self.config_path).write_text(json.dumps(self.config, indent=2))
+            self.config = save_home_positions(
+                positions,
+                arm_index=0,
+                home_velocity=self.rest_velocity_spin.value() if self.rest_velocity_spin else None,
+                config_path=self.config_path,
+            )
+            self._update_home_widgets(0, positions)
             self.status_label.setText(f"✓ Home saved for Arm 1: {positions}")
             self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
             self.config_changed.emit()
@@ -582,6 +594,200 @@ class MultiArmMixin:
         self._home_thread = None
         self._home_worker = None
         self._pending_home_velocity = None
+
+    # ------------------------------------------------------------------ Port testing
+    def test_robot_arm(self, arm_index: int, source_widget: SingleArmConfig | None = None):
+        request = self._build_port_test_request(
+            arm_index,
+            section="robot",
+            source_widget=source_widget or self._get_robot_arm_widget(arm_index),
+            label_prefix="Follower",
+        )
+        if not request:
+            self.status_label.setText(f"❌ No port configured for Arm {arm_index + 1}")
+            self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+            return
+        self._start_port_test([request])
+
+    def test_teleop_arm(self, arm_index: int, source_widget: SingleArmConfig | None = None):
+        request = self._build_port_test_request(
+            arm_index,
+            section="teleop",
+            source_widget=source_widget or self._get_teleop_arm_widget(arm_index),
+            label_prefix="Leader",
+        )
+        if not request:
+            self.status_label.setText(f"❌ No port configured for Leader {arm_index + 1}")
+            self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+            return
+        self._start_port_test([request])
+
+    def test_all_robot_ports(self):
+        arms = self.config.get("robot", {}).get("arms", [])
+        ports = self._list_serial_ports()
+        if not ports:
+            return
+
+        requests: list[PortTestRequest] = []
+        seen_ports: set[str] = set()
+        for port in ports:
+            if port in seen_ports:
+                continue
+            label = self._describe_port_assignment(port)
+            if label:
+                label = f"{label} – {port}"
+            else:
+                label = f"Port {port}"
+            requests.append(PortTestRequest(port=port, label=label))
+            seen_ports.add(port)
+
+        if not requests:
+            self.status_label.setText("❌ No robot ports detected")
+            self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+            return
+
+        summary = f"⏳ Testing {len(requests)} robot port(s)..."
+        self.status_label.setText(summary)
+        self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
+        self._start_port_test(requests)
+
+    def _start_port_test(self, requests: list[PortTestRequest]):
+        if not requests:
+            return
+
+        worker_running = getattr(self, "_port_test_worker", None)
+        if worker_running and worker_running.isRunning():
+            self.status_label.setText("⏳ Already testing ports...")
+            self.status_label.setStyleSheet("QLabel { color: #FFB74D; font-size: 15px; padding: 8px; }")
+            return
+
+        self._port_test_worker = PortTestWorker(requests)
+        self._port_test_worker.progress.connect(self._on_port_test_progress)
+        self._port_test_worker.completed.connect(self._on_port_test_completed)
+        self._port_test_worker.finished.connect(self._on_port_test_finished)
+        self._port_test_worker.start()
+
+    def _on_port_test_progress(self, message: str):
+        self.status_label.setText(message)
+        self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
+
+    def _on_port_test_completed(self, success: bool, message: str):
+        color = "#4CAF50" if success else "#FFB74D"
+        self.status_label.setText(message)
+        self.status_label.setStyleSheet(f"QLabel {{ color: {color}; font-size: 15px; padding: 8px; }}")
+
+    def _on_port_test_finished(self):
+        if self._port_test_worker:
+            self._port_test_worker.deleteLater()
+        self._port_test_worker = None
+
+    def _build_port_test_request(
+        self,
+        arm_index: int,
+        section: str,
+        source_widget: SingleArmConfig | None,
+        label_prefix: str,
+    ) -> PortTestRequest | None:
+        section_cfg = self.config.get(section, {})
+        arms = section_cfg.get("arms", [])
+        arm_cfg = arms[arm_index] if arm_index < len(arms) else {}
+
+        port = arm_cfg.get("port", "")
+        if (not port) and source_widget:
+            try:
+                port = source_widget.get_port()
+            except Exception:
+                port = ""
+
+        if not port:
+            return None
+
+        arm_id = arm_cfg.get("id", "")
+        if (not arm_id) and source_widget:
+            try:
+                arm_id = source_widget.get_id()
+            except Exception:
+                arm_id = ""
+
+        label = f"{label_prefix} Arm {arm_index + 1}"
+        if arm_id:
+            label += f" ({arm_id})"
+        label += f" – {port}"
+        return PortTestRequest(port=port, label=label)
+
+    def _get_robot_arm_widget(self, arm_index: int) -> SingleArmConfig | None:
+        widgets: list[SingleArmConfig | None] = []
+        if self.solo_arm_config and self.solo_arm_selector and self.solo_arm_selector.currentIndex() == arm_index:
+            widgets.append(self.solo_arm_config)
+        if arm_index == 0 and self.robot_arm1_config:
+            widgets.append(self.robot_arm1_config)
+        if arm_index == 1 and self.robot_arm2_config:
+            widgets.append(self.robot_arm2_config)
+        return next((widget for widget in widgets if widget is not None), None)
+
+    def _get_teleop_arm_widget(self, arm_index: int) -> SingleArmConfig | None:
+        widgets: list[SingleArmConfig | None] = []
+        if (
+            self.teleop_solo_arm_config
+            and self.teleop_solo_arm_selector
+            and self.teleop_solo_arm_selector.currentIndex() == arm_index
+        ):
+            widgets.append(self.teleop_solo_arm_config)
+        if arm_index == 0 and self.teleop_arm1_config:
+            widgets.append(self.teleop_arm1_config)
+        if arm_index == 1 and self.teleop_arm2_config:
+            widgets.append(self.teleop_arm2_config)
+        return next((widget for widget in widgets if widget is not None), None)
+
+    def _update_home_widgets(self, arm_index: int, positions: list[int]) -> None:
+        if arm_index == 0 and self.robot_arm1_config:
+            self.robot_arm1_config.set_home_positions(positions)
+        if arm_index == 1 and self.robot_arm2_config:
+            self.robot_arm2_config.set_home_positions(positions)
+
+        if self.solo_arm_config and self.solo_arm_selector:
+            # Update solo view if it is currently looking at the same arm
+            if self.solo_arm_selector.currentIndex() == arm_index:
+                self.solo_arm_config.set_home_positions(positions)
+
+    def _list_serial_ports(self) -> List[str]:
+        try:
+            import serial.tools.list_ports
+        except ImportError:
+            self.status_label.setText("❌ pyserial is required for port testing")
+            self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+            return []
+
+        devices = []
+        for info in serial.tools.list_ports.comports():
+            device = info.device
+            if "ttyACM" in device or "ttyUSB" in device:
+                devices.append(device)
+        devices = sorted(set(devices))
+        if not devices:
+            self.status_label.setText("❌ No serial ports detected")
+            self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+        return devices
+
+    def _describe_port_assignment(self, port: str) -> str:
+        robot_arms = self.config.get("robot", {}).get("arms", [])
+        for idx, arm in enumerate(robot_arms):
+            if arm.get("port") == port:
+                desc = f"Follower Arm {idx + 1}"
+                arm_id = arm.get("id")
+                if arm_id:
+                    desc += f" ({arm_id})"
+                return desc
+
+        teleop_arms = self.config.get("teleop", {}).get("arms", [])
+        for idx, arm in enumerate(teleop_arms):
+            if arm.get("port") == port:
+                desc = f"Leader Arm {idx + 1}"
+                arm_id = arm.get("id")
+                if arm_id:
+                    desc += f" ({arm_id})"
+                return desc
+        return ""
 
     def find_robot_ports(self):
         try:

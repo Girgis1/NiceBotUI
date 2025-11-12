@@ -50,6 +50,7 @@ class SettingsTab(
         self._home_thread: Optional[QThread] = None
         self._home_worker = None
         self._pending_home_velocity: Optional[int] = None
+        self._port_test_worker = None
 
         # Mode selector + arm widgets (populated in mixins)
         self.robot_mode_selector = None

@@ -67,6 +67,8 @@ class DashboardHomeMixin:
                 }
             )
 
+        self._home_thread = None
+        self._home_worker = None
         self._home_next_arm()
 
     def _home_next_arm(self) -> None:
@@ -125,7 +127,6 @@ class DashboardHomeMixin:
             self._append_log_entry("success", message, code="home_arm_success")
         else:
             self._append_log_entry("error", message, code="home_arm_error")
-        self._home_next_arm()
 
     def _on_home_progress(self, message: str) -> None:
         self.action_label.setText(message)

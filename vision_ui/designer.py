@@ -11,6 +11,7 @@ import json
 import sys
 import time
 import uuid
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -45,8 +46,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-
-from utils.camera_hub import CameraStreamHub, temporarily_release_camera_hub
+try:  # Optional dependency used to coordinate shared camera ownership
+    from utils.camera_hub import CameraStreamHub
+except Exception:  # pragma: no cover - avoid circular failures in headless builds
+    CameraStreamHub = None
 
 
 # ---------------------------------------------------------------------------
@@ -181,35 +184,35 @@ class CameraStream:
         self.active_source: Optional[CameraSource] = None
         self._virtual_tick = 0
         self.system_cameras = system_cameras or {}
-        self._hub_pause_owned = False
+        self._hub_pause_ctx = None
+        self._hub_pause_active = False
 
-    def _claim_hub_pause(self) -> None:
-        """Pause the shared camera hub so we can grab exclusive handles."""
-
-        if self._hub_pause_owned:
+    def _pause_hub_for_preview(self) -> None:
+        if not CameraStreamHub or self._hub_pause_ctx:
             return
+        ctx = CameraStreamHub.paused()
+        token = ctx.__enter__()
+        if token:
+            self._hub_pause_ctx = ctx
+            self._hub_pause_active = True
+        else:
+            ctx.__exit__(None, None, None)
 
-        hub = CameraStreamHub.peek()
-        if hub is None:
+    def _resume_hub_if_needed(self) -> None:
+        if not self._hub_pause_ctx:
+            self._hub_pause_active = False
             return
-
-        if hub.pause_all():
-            self._hub_pause_owned = True
-            time.sleep(0.1)
-
-    def _release_hub_pause(self) -> None:
-        if not self._hub_pause_owned:
-            return
-
-        hub = CameraStreamHub.peek()
-        if hub is not None:
-            hub.resume_all()
-        self._hub_pause_owned = False
+        try:
+            self._hub_pause_ctx.__exit__(None, None, None)
+        finally:
+            self._hub_pause_ctx = None
+            self._hub_pause_active = False
 
     def list_sources(self, max_devices: int = 5) -> List[CameraSource]:
         sources: List[CameraSource] = []
 
-        with temporarily_release_camera_hub():
+        pause_ctx = CameraStreamHub.paused() if CameraStreamHub else nullcontext()
+        with pause_ctx:
             # First, prefer cameras that were configured in the shared settings file.
             for key, cam_cfg in self.system_cameras.items():
                 label = cam_cfg.get("label") or cam_cfg.get("name") or key.replace("_", " ").title()
@@ -294,28 +297,28 @@ class CameraStream:
 
         self.active_source = source
         self._virtual_tick = 0
+        self._resume_hub_if_needed()
 
         if source.kind in ("camera", "system"):
+            self._pause_hub_for_preview()
             if not source.available:
                 self.cap = None
-                self._release_hub_pause()
+                self._resume_hub_if_needed()
                 self.active_source = CameraSource("virtual:demo", "Demo Feed", "virtual", index=-1, available=True)
                 return
 
             capture_target = source.path if source.path is not None else source.index
-            self._claim_hub_pause()
             cap = cv2.VideoCapture(capture_target)
             if not cap or not cap.isOpened():
                 self.cap = None
+                self._resume_hub_if_needed()
                 print("[VISION][WARN] Camera %s unavailable. Falling back to demo feed." % (capture_target,))
-                self._release_hub_pause()
                 self.active_source = CameraSource("virtual:demo", "Demo Feed", "virtual", index=-1, available=True)
             else:
                 self.cap = cap
             return
 
-        # Virtual feeds do not require exclusive access to the hub.
-        self._release_hub_pause()
+        self._resume_hub_if_needed()
 
     def read(self) -> Optional[np.ndarray]:
         if not self.active_source:
@@ -337,7 +340,7 @@ class CameraStream:
             self.cap.release()
         self.cap = None
         self.active_source = None
-        self._release_hub_pause()
+        self._resume_hub_if_needed()
 
     # ------------------------------------------------------------------
     # Virtual feed

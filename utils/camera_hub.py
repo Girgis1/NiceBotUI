@@ -278,7 +278,7 @@ class CameraStreamHub:
 
     @classmethod
     def peek(cls) -> Optional["CameraStreamHub"]:
-        """Return the active hub instance without creating a new one."""
+        """Return the singleton without instantiating a new hub."""
 
         with cls._instance_lock:
             return cls._instance
@@ -339,11 +339,9 @@ class CameraStreamHub:
     def pause_all(self) -> bool:
         """Temporarily stop all camera threads.
 
-        Returns ``True`` when this call transitioned the hub into the paused
-        state.  Callers can use the boolean to decide whether they should resume
-        the hub later.
+        Returns:
+            bool: True if this call transitioned the hub into a paused state.
         """
-
         with self._streams_lock:
             if self._paused:
                 return False
@@ -355,9 +353,9 @@ class CameraStreamHub:
     def resume_all(self) -> bool:
         """Restart camera threads after a pause.
 
-        Returns ``True`` when the hub transitioned back to the active state.
+        Returns:
+            bool: True if this call resumed an actively paused hub.
         """
-
         with self._streams_lock:
             if not self._paused:
                 return False
@@ -366,39 +364,55 @@ class CameraStreamHub:
             self._paused = False
             return True
 
+    def reset_streams(self, camera_name: Optional[str] = None) -> None:
+        """Drop cached streams so that new handles are opened on next use."""
+
+        to_stop = []
+        with self._streams_lock:
+            if camera_name is None:
+                to_stop = list(self._streams.values())
+                self._streams.clear()
+            else:
+                stream = self._streams.pop(camera_name, None)
+                if stream:
+                    to_stop.append(stream)
+
+        for stream in to_stop:
+            stream.stop()
+
+    @classmethod
+    def reset(cls, camera_name: Optional[str] = None) -> None:
+        """Convenience helper to reset streams on the active hub."""
+
+        instance = cls.peek()
+        if instance is not None:
+            instance.reset_streams(camera_name)
+
+    @classmethod
+    @contextmanager
+    def paused(cls, release_delay: float = 0.1, resume_delay: float = 0.02) -> Iterator[bool]:
+        """Context manager that pauses the hub while an exclusive operation runs."""
+
+        instance = cls.peek()
+        if instance is None:
+            yield False
+            return
+
+        transitioned = instance.pause_all()
+        if transitioned and release_delay > 0:
+            time.sleep(release_delay)
+
+        try:
+            yield transitioned
+        finally:
+            if transitioned:
+                if resume_delay > 0:
+                    time.sleep(resume_delay)
+                instance.resume_all()
+
 
 def shutdown_camera_hub() -> None:
     """Helper to stop the singleton when the app exits."""
     if CameraStreamHub._instance is not None:
         CameraStreamHub._instance.shutdown()
         CameraStreamHub._instance = None
-
-
-@contextmanager
-def temporarily_release_camera_hub(
-    release_delay: float = 0.15,
-    resume_delay: float = 0.05,
-) -> Iterator[None]:
-    """Pause the shared camera hub while external code probes devices.
-
-    Many parts of the UI need to grab exclusive ``cv2.VideoCapture`` handles
-    when scanning for cameras or showing standalone previews.  The hub normally
-    owns those handles which means discovery logic reports cameras as
-    "offline".  Wrapping the critical sections in this context manager cleanly
-    pauses the hub, waits a short moment for the OS to release resources, and
-    resumes streaming afterwards.
-    """
-
-    hub = CameraStreamHub.peek()
-    resumed = False
-    try:
-        if hub is not None:
-            resumed = hub.pause_all()
-            if resumed and release_delay > 0.0:
-                time.sleep(release_delay)
-        yield
-    finally:
-        if hub is not None and resumed:
-            if resume_delay > 0.0:
-                time.sleep(resume_delay)
-            hub.resume_all()
