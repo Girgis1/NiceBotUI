@@ -29,6 +29,7 @@ from utils.motor_controller import MotorController
 from utils.actions_manager import ActionsManager
 from utils.sequences_manager import SequencesManager
 from utils.camera_hub import CameraStreamHub
+from utils.config_compat import get_first_enabled_arm
 from utils.execution import (
     ExecutionContext,
     execute_composite_recording,
@@ -1126,10 +1127,6 @@ class ExecutionWorker(QThread):
             # ALWAYS run 1 episode at a time (looping is handled by _execute_model_local)
             cmd = [
                 "lerobot-record",
-                f"--robot.type={robot_config.get('type', 'so100_follower')}",
-                f"--robot.port={robot_config.get('port', '/dev/ttyACM0')}",
-                f"--robot.cameras={camera_str}",
-                f"--robot.id={robot_config.get('id', 'follower_arm')}",
                 "--display_data=false",
                 f"--dataset.repo_id={dataset_name}",
                 f"--dataset.single_task=Eval {task}",
@@ -1139,24 +1136,115 @@ class ExecutionWorker(QThread):
                 "--resume=false",
                 f"--policy.path={checkpoint_path}"
             ]
-            
-            # Check if we have permissions to access the robot port
-            robot_port = robot_config.get('port', '/dev/ttyACM0')
-            if not Path(robot_port).exists():
-                self.log_message.emit('error', f"Robot port not found: {robot_port}")
-                self.log_message.emit('error', "Make sure the robot is connected")
-                return False
-            
-            try:
-                # Test if we can access the port
-                test_result = subprocess.run(['test', '-r', robot_port, '-a', '-w', robot_port], 
-                                            capture_output=True, timeout=1)
-                if test_result.returncode != 0:
-                    self.log_message.emit('warning', f"No permission to access {robot_port}")
-                    self.log_message.emit('warning', f"Run: sudo chmod 666 {robot_port}")
-                    # Continue anyway - lerobot might handle this
-            except:
-                pass  # If test fails, continue anyway
+
+            robot_ports_to_check: list[str] = []
+            teleop_ports_to_check: list[str] = []
+
+            # Robot arguments (solo vs bimanual)
+            robot_mode = robot_config.get("mode", "solo")
+            if robot_mode == "bimanual":
+                arms = [arm for arm in robot_config.get("arms", []) if arm.get("enabled", True)]
+                if len(arms) < 2:
+                    self.log_message.emit('error', "Bimanual mode requires two enabled robot arms")
+                    return False
+                left_arm, right_arm = arms[0], arms[1]
+                left_port = left_arm.get("port")
+                right_port = right_arm.get("port")
+                if not left_port or not right_port:
+                    self.log_message.emit('error', "Both robot arms must have ports configured for bimanual mode")
+                    return False
+                robot_ports_to_check.extend([left_port, right_port])
+                robot_type = self._infer_bimanual_robot_type(
+                    left_arm.get("type", ""),
+                    right_arm.get("type", left_arm.get("type", "")),
+                )
+                robot_id = robot_config.get("id", "bimanual_follower")
+                cmd += [
+                    f"--robot.type={robot_type}",
+                    f"--robot.left_arm_port={left_port}",
+                    f"--robot.right_arm_port={right_port}",
+                    f"--robot.id={robot_id}",
+                ]
+            else:
+                arm = get_first_enabled_arm(self.config, "robot")
+                if not arm:
+                    self.log_message.emit('error', "No enabled robot arm configured")
+                    return False
+                robot_type = arm.get("type", robot_config.get("type", "so100_follower"))
+                robot_port = arm.get("port", robot_config.get("port", "/dev/ttyACM0"))
+                robot_id = arm.get("id", robot_config.get("id", "follower_arm"))
+                if not robot_port:
+                    self.log_message.emit('error', "Robot port is not configured")
+                    return False
+                robot_ports_to_check.append(robot_port)
+                cmd += [
+                    f"--robot.type={robot_type}",
+                    f"--robot.port={robot_port}",
+                    f"--robot.id={robot_id}",
+                ]
+
+            cmd.append(f"--robot.cameras={camera_str}")
+
+            # Teleop arguments (optional but recommended)
+            teleop_cfg = self.config.get("teleop", {})
+            teleop_mode = teleop_cfg.get("mode", "solo")
+            teleop_id = teleop_cfg.get("id", "leader")
+            if teleop_mode == "bimanual":
+                teleop_arms = [arm for arm in teleop_cfg.get("arms", []) if arm.get("enabled", True)]
+                if len(teleop_arms) < 2:
+                    self.log_message.emit('error', "Bimanual teleop requires two enabled leader arms")
+                    return False
+                left_leader, right_leader = teleop_arms[0], teleop_arms[1]
+                left_port = left_leader.get("port")
+                right_port = right_leader.get("port")
+                if not left_port or not right_port:
+                    self.log_message.emit('error', "Both leader arms must have ports configured for bimanual teleop")
+                    return False
+                teleop_ports_to_check.extend([left_port, right_port])
+                teleop_type = self._infer_bimanual_leader_type(
+                    left_leader.get("type", ""),
+                    right_leader.get("type", left_leader.get("type", "")),
+                )
+                cmd += [
+                    f"--teleop.type={teleop_type}",
+                    f"--teleop.left_arm_port={left_port}",
+                    f"--teleop.right_arm_port={right_port}",
+                    f"--teleop.id={teleop_id}",
+                ]
+            else:
+                teleop_arm = get_first_enabled_arm(self.config, "teleop")
+                if teleop_arm:
+                    teleop_type = teleop_arm.get("type", teleop_cfg.get("type", "so100_leader"))
+                    teleop_port = teleop_arm.get("port", teleop_cfg.get("port", "/dev/ttyACM1"))
+                    teleop_id = teleop_arm.get("id", teleop_id)
+                    if teleop_port:
+                        teleop_ports_to_check.append(teleop_port)
+                        cmd += [
+                            f"--teleop.type={teleop_type}",
+                            f"--teleop.port={teleop_port}",
+                            f"--teleop.id={teleop_id}",
+                        ]
+
+            # Check port permissions for all devices involved
+            for label, port in ([(f"Robot arm {i+1}", p) for i, p in enumerate(robot_ports_to_check)]
+                                + [(f"Leader arm {i+1}", p) for i, p in enumerate(teleop_ports_to_check)]):
+                if not port:
+                    continue
+                if not Path(port).exists():
+                    self.log_message.emit('error', f"{label} port not found: {port}")
+                    self.log_message.emit('error', "Make sure the hardware is connected")
+                    return False
+                try:
+                    test_result = subprocess.run(
+                        ['test', '-r', port, '-a', '-w', port],
+                        capture_output=True,
+                        timeout=1
+                    )
+                    if test_result.returncode != 0:
+                        self.log_message.emit('warning', f"No permission to access {port} ({label})")
+                        self.log_message.emit('warning', f"Run: sudo chmod 666 {port}")
+                except Exception:
+                    pass  # Ignore permission test errors
             
             # Log the actual command for debugging (only first time)
             # cmd_str = " ".join(cmd)
@@ -1413,6 +1501,22 @@ class ExecutionWorker(QThread):
             "--port=8080"
         ]
     
+    @staticmethod
+    def _infer_bimanual_robot_type(left_type: str, right_type: str) -> str:
+        left = (left_type or "").lower()
+        right = (right_type or left).lower()
+        if "so101" in left and "so101" in right:
+            return "bi_so101_follower"
+        return "bi_so100_follower"
+
+    @staticmethod
+    def _infer_bimanual_leader_type(left_type: str, right_type: str) -> str:
+        left = (left_type or "").lower()
+        right = (right_type or left).lower()
+        if "so101" in left and "so101" in right:
+            return "bi_so101_leader"
+        return "bi_so100_leader"
+
     def _build_robot_client_cmd(self, checkpoint_path: Path) -> list:
         """Build command for robot client"""
         # Get python path from lerobot config, or fall back to system python
@@ -1429,12 +1533,53 @@ class ExecutionWorker(QThread):
             camera_str += f"{cam_name}: {{type: opencv, index_or_path: '{cam_path}', width: {cam_config['width']}, height: {cam_config['height']}, fps: {cam_config['fps']}}}, "
         camera_str = camera_str.rstrip(", ") + "}"
         
-        return [
+        base_args = [
             lerobot_bin, "-m", "lerobot.async_inference.robot_client",
             "--server_address=127.0.0.1:8080",
-            f"--robot.type={robot_config.get('type', 'so100_follower')}",
-            f"--robot.port={robot_config.get('port', '/dev/ttyACM0')}",
-            f"--robot.id={robot_config.get('id', 'follower_arm')}",
+        ]
+
+        mode = robot_config.get("mode", "solo")
+        if mode == "bimanual":
+            arms = [arm for arm in robot_config.get("arms", []) if arm.get("enabled", True)]
+            if len(arms) < 2:
+                raise ValueError("Bimanual mode requires 2 robot arms configured")
+            left_arm, right_arm = arms[0], arms[1]
+            left_port = left_arm.get("port")
+            right_port = right_arm.get("port")
+            if not left_port or not right_port:
+                raise ValueError("Bimanual mode requires both arm ports configured")
+
+            robot_type = self._infer_bimanual_robot_type(
+                left_arm.get("type", ""),
+                right_arm.get("type", left_arm.get("type", "")),
+            )
+            robot_id = robot_config.get("id", "bimanual_follower")
+
+            args = base_args + [
+                f"--robot.type={robot_type}",
+                f"--robot.left_arm_port={left_port}",
+                f"--robot.right_arm_port={right_port}",
+                f"--robot.id={robot_id}",
+            ]
+        else:
+            arm = get_first_enabled_arm(self.config, "robot")
+            if not arm:
+                raise ValueError("No enabled robot arm configured")
+
+            robot_type = arm.get("type", robot_config.get("type", "so100_follower"))
+            robot_port = arm.get("port", robot_config.get("port", "/dev/ttyACM0"))
+            robot_id = arm.get("id", robot_config.get("id", "follower_arm"))
+
+            if not robot_port:
+                raise ValueError("Robot port not configured")
+
+            args = base_args + [
+                f"--robot.type={robot_type}",
+                f"--robot.port={robot_port}",
+                f"--robot.id={robot_id}",
+            ]
+
+        args += [
             f"--robot.cameras={camera_str}",
             f"--policy_type={self.config['policy'].get('type', 'act')}",
             f"--pretrained_name_or_path={checkpoint_path}",
@@ -1442,6 +1587,8 @@ class ExecutionWorker(QThread):
             "--actions_per_chunk=30",
             "--chunk_size_threshold=0.6"
         ]
+
+        return args
     
     
     def stop(self):

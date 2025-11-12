@@ -112,6 +112,7 @@ class SingleArmConfig(QFrame):
     home_clicked = Signal()
     set_home_clicked = Signal()
     calibrate_clicked = Signal()
+    test_clicked = Signal()
     
     def __init__(self, arm_name="Arm 1", show_home_controls=True, parent=None):
         super().__init__(parent)
@@ -264,6 +265,11 @@ class SingleArmConfig(QFrame):
             self.calib_btn.setFixedHeight(35)
             self.calib_btn.clicked.connect(self.calibrate_clicked.emit)
             btn_row.addWidget(self.calib_btn)
+
+            self.test_btn = QPushButton("Test")
+            self.test_btn.setFixedHeight(35)
+            self.test_btn.clicked.connect(self.test_clicked.emit)
+            btn_row.addWidget(self.test_btn)
             
             layout.addLayout(btn_row)
         else:
@@ -274,6 +280,11 @@ class SingleArmConfig(QFrame):
             self.calib_btn.setFixedHeight(35)
             self.calib_btn.clicked.connect(self.calibrate_clicked.emit)
             btn_row.addWidget(self.calib_btn)
+
+            self.test_btn = QPushButton("Test")
+            self.test_btn.setFixedHeight(35)
+            self.test_btn.clicked.connect(self.test_clicked.emit)
+            btn_row.addWidget(self.test_btn)
             btn_row.addStretch()
             
             layout.addLayout(btn_row)
@@ -333,4 +344,3 @@ class SingleArmConfig(QFrame):
     def set_home_positions(self, positions):
         import json
         self.home_edit.setText(json.dumps(positions))
-

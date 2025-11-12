@@ -13,10 +13,10 @@ This document contains the working configuration for bimanual teleoperation with
 
 | Arm Type | Position | Port | ID | Robot Type |
 |----------|----------|------|-----|------------|
-| Follower | Left | `/dev/ttyACM0` | `follower_left` | SO101 |
-| Follower | Right | `/dev/ttyACM2` | `follower_right` | SO101 |
-| Leader | Left | `/dev/ttyACM1` | `leader_left` | SO100 |
-| Leader | Right | `/dev/ttyACM3` | `leader_right` | SO101 |
+| Follower | Left | `/dev/ttyACM0` | `left_follower` | SO101 |
+| Follower | Right | `/dev/ttyACM2` | `right_follower` | SO101 |
+| Leader | Left | `/dev/ttyACM1` | `left_leader` | SO100 |
+| Leader | Right | `/dev/ttyACM3` | `right_leader` | SO101 |
 
 ### Important Notes
 - **Both follower arms are SO101** → Use `bi_so101_follower`
@@ -29,15 +29,15 @@ Calibrations are stored in: `~/.cache/huggingface/lerobot/calibration/`
 
 ### Required Calibration Files
 
-For bimanual operation, calibration files must follow the naming pattern: `{id}_{side}.json`
+For bimanual operation, calibration files use the `<side>_<role>.json` naming from `config.json`.
 
 **Follower Arms (in `robots/so101_follower/`):**
-- `follower_left.json` - Left follower arm
-- `follower_right.json` - Right follower arm
+- `left_follower.json` - Left follower arm
+- `right_follower.json` - Right follower arm
 
-**Leader Arms (in `teleoperators/bi_so100_leader/`):**
-- `leader_left.json` - Left leader arm (SO100)
-- `leader_right.json` - Right leader arm (SO101)
+**Leader Arms (per single-arm type):**
+- `teleoperators/so100_leader/left_leader.json` - Left leader arm (SO100)
+- `teleoperators/so101_leader/right_leader.json` - Right leader arm (SO101)
 
 ### Calibrating Arms
 
@@ -48,25 +48,25 @@ If you need to recalibrate any arm:
 lerobot-calibrate \
   --robot.type=so101_follower \
   --robot.port=/dev/ttyACM0 \
-  --robot.id=follower_left
+  --robot.id=left_follower
 
 # Calibrate right follower
 lerobot-calibrate \
   --robot.type=so101_follower \
   --robot.port=/dev/ttyACM2 \
-  --robot.id=follower_right
+  --robot.id=right_follower
 
 # Calibrate left leader (SO100)
 lerobot-calibrate \
   --teleop.type=so100_leader \
   --teleop.port=/dev/ttyACM1 \
-  --teleop.id=leader_left
+  --teleop.id=left_leader
 
 # Calibrate right leader (SO101)
 lerobot-calibrate \
   --teleop.type=so101_leader \
   --teleop.port=/dev/ttyACM3 \
-  --teleop.id=leader_right
+  --teleop.id=right_leader
 ```
 
 ## Running Bimanual Teleoperation
@@ -103,6 +103,8 @@ lerobot-teleoperate \
   --display_data=false
 ```
 
+> **Note:** The aggregated IDs (`follower`, `leader`) cause LeRobot to look for `left/right` calibration files automatically (`left_follower.json`, `right_follower.json`, `left_leader.json`, `right_leader.json`). Keep those files in the directories listed above before running this command or the helper script.
+
 ### Stopping Teleoperation
 
 ```bash
@@ -134,6 +136,13 @@ lerobot-record \
   --num-episodes=50 \
   --run-compute-stats=true
 ```
+
+## NiceBot UI Verification Checklist
+
+1. **Confirm config state** – run `python switch_mode.py status` and ensure both `robot` and `teleop` modes report `BIMANUAL (2/2 arms enabled)`.
+2. **Validate device mapping** – in `Settings → Multi-Arm`, check that the left/right rows show `/dev/ttyACM0` and `/dev/ttyACM2` for followers plus `/dev/ttyACM1` and `/dev/ttyACM3` for leaders. These values come directly from `config.json`.
+3. **Smoke test the UI** – start the dashboard (`python app.py`), connect, and verify that the status banner calls out `👥 Bimanual` before attempting teleop.
+4. **Fallback CLI** – if the UI is unavailable, use `./run_bimanual_teleop.sh` (described above) to ensure the underlying LeRobot stack still launches cleanly.
 
 ## Troubleshooting
 
@@ -175,14 +184,14 @@ Calibration files must be in the correct directory with the correct naming:
 ```bash
 # Check if files exist
 ls -la ~/.cache/huggingface/lerobot/calibration/robots/so101_follower/
-ls -la ~/.cache/huggingface/lerobot/calibration/teleoperators/bi_so100_leader/
+ls -la ~/.cache/huggingface/lerobot/calibration/teleoperators/so100_leader/
+ls -la ~/.cache/huggingface/lerobot/calibration/teleoperators/so101_leader/
 
-# If missing, copy from individual calibrations
-cp ~/.cache/huggingface/lerobot/calibration/robots/so101_follower/left_follower.json \
-   ~/.cache/huggingface/lerobot/calibration/robots/so101_follower/follower_left.json
-
-cp ~/.cache/huggingface/lerobot/calibration/teleoperators/so100_leader/left_leader.json \
-   ~/.cache/huggingface/lerobot/calibration/teleoperators/bi_so100_leader/leader_left.json
+# Expected files (rerun `lerobot-calibrate` if any are missing):
+#   robots/so101_follower/left_follower.json
+#   robots/so101_follower/right_follower.json
+#   teleoperators/so100_leader/left_leader.json
+#   teleoperators/so101_leader/right_leader.json
 ```
 
 ## Configuration Files
@@ -284,4 +293,3 @@ This script handles:
 - Teleoperation runs continuously
 - Follower arms track leader movements in real-time
 - No motor communication issues
-

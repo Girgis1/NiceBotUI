@@ -8,12 +8,12 @@ echo "🤖 Starting Bimanual Teleoperation"
 echo "=================================="
 echo ""
 echo "Robot Configuration:"
-echo "  Left arm (follower):  /dev/ttyACM1 (left_follower)"
-echo "  Right arm (follower): /dev/ttyACM0 (right_follower)"
+echo "  Left arm (follower):  /dev/ttyACM0 (left_follower, SO101)"
+echo "  Right arm (follower): /dev/ttyACM2 (right_follower, SO101)"
 echo ""
 echo "Teleop Configuration:"
-echo "  Left arm (leader):  /dev/ttyACM2 (left_leader)"
-echo "  Right arm (leader): /dev/ttyACM3 (right_leader)"
+echo "  Left arm (leader):  /dev/ttyACM1 (left_leader, SO100)"
+echo "  Right arm (leader): /dev/ttyACM3 (right_leader, SO101)"
 echo ""
 echo "Press Ctrl+C to stop teleoperation"
 echo ""
@@ -32,4 +32,3 @@ lerobot-teleoperate \
   --teleop.right_arm_port=/dev/ttyACM3 \
   --teleop.id=leader \
   --display_data=false
-
