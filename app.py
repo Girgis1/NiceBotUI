@@ -17,6 +17,7 @@ from PySide6.QtGui import QShortcut, QKeySequence
 from tabs.dashboard_tab import DashboardTab
 from tabs.record_tab import RecordTab
 from tabs.sequence_tab import SequenceTab
+from utils.config_store import ConfigStore
 from utils.device_manager import DeviceManager
 from utils.camera_hub import shutdown_camera_hub
 
@@ -40,7 +41,8 @@ class MainWindow(QMainWindow):
     
     def __init__(self, fullscreen=True):
         super().__init__()
-        self.config = self.load_config()
+        self.config_store = ConfigStore.instance()
+        self.config = self.config_store.get_config()
         self.fullscreen_mode = fullscreen
         
         self.setWindowTitle("LeRobot Operator Console")
@@ -257,12 +259,12 @@ class MainWindow(QMainWindow):
                 button.setChecked(True)
     
     def load_config(self):
-        """Load configuration using the shared bootstrap helper."""
-        return load_app_config(CONFIG_PATH)
+        """Load configuration using the shared config store."""
+        return self.config_store.reload()
     
     def save_config(self):
         """Persist configuration to JSON."""
-        save_app_config(self.config, CONFIG_PATH)
+        self.config_store.save()
     
     def create_default_config(self):
         """Create default configuration with solo/bimanual mode support."""

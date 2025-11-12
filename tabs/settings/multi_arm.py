@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from utils.home_move_worker import HomeMoveRequest, HomeMoveWorker
+from utils.home_sequence import HomeSequenceRunner
 from utils.mode_widgets import ModeSelector, SingleArmConfig
 from utils.config_compat import (
     get_enabled_arms,
@@ -50,11 +50,14 @@ class MultiArmMixin:
         rest_row = QHBoxLayout()
         rest_row.setSpacing(6)
 
+        self._ensure_config_store()
+
         self.home_btn = QPushButton("🏠 Home All Arms")
         self.home_btn.setFixedHeight(45)
         self.home_btn.setStyleSheet(self.get_button_style("#2196F3", "#1976D2"))
         self.home_btn.clicked.connect(self.home_all_arms)
         rest_row.addWidget(self.home_btn)
+        self._setup_home_sequence_runner()
 
         velocity_label = QLabel("Master Velocity:")
         velocity_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
@@ -85,6 +88,7 @@ class MultiArmMixin:
             """
         )
         rest_row.addWidget(self.rest_velocity_spin)
+        self.rest_velocity_spin.valueChanged.connect(self._on_rest_velocity_changed)
 
         self.test_ports_btn = QPushButton("🧪 Test Ports")
         self.test_ports_btn.setFixedHeight(45)
@@ -159,6 +163,7 @@ class MultiArmMixin:
         arms_row.addWidget(self.robot_arm2_config)
         bimanual_layout.addLayout(arms_row)
         layout.addWidget(self.bimanual_container)
+        self._connect_robot_arm_signal_handlers()
 
         layout.addSpacing(8)
 
@@ -215,6 +220,34 @@ class MultiArmMixin:
         layout.addStretch()
         return widget
 
+    def _setup_home_sequence_runner(self) -> None:
+        if getattr(self, "_home_sequence_runner", None):
+            return
+
+        self._ensure_config_store()
+        self._home_sequence_runner = HomeSequenceRunner(self)
+        self._home_sequence_runner.progress.connect(self._on_home_progress)
+        self._home_sequence_runner.arm_started.connect(self._on_settings_home_arm_started)
+        self._home_sequence_runner.arm_finished.connect(self._on_settings_home_arm_finished)
+        self._home_sequence_runner.finished.connect(self._on_settings_home_sequence_finished)
+        self._home_sequence_runner.error.connect(self._on_settings_home_error)
+
+    def _connect_robot_arm_signal_handlers(self) -> None:
+        if self.solo_arm_config and self.solo_arm_selector:
+            self.solo_arm_config.port_changed.connect(
+                lambda port: self._handle_robot_port_change(self.solo_arm_selector.currentIndex(), port)
+            )
+            self.solo_arm_config.id_changed.connect(
+                lambda robot_id: self._handle_robot_id_change(self.solo_arm_selector.currentIndex(), robot_id)
+            )
+
+        if self.robot_arm1_config:
+            self.robot_arm1_config.port_changed.connect(lambda port: self._handle_robot_port_change(0, port))
+            self.robot_arm1_config.id_changed.connect(lambda robot_id: self._handle_robot_id_change(0, robot_id))
+        if self.robot_arm2_config:
+            self.robot_arm2_config.port_changed.connect(lambda port: self._handle_robot_port_change(1, port))
+            self.robot_arm2_config.id_changed.connect(lambda robot_id: self._handle_robot_id_change(1, robot_id))
+
     def _selector_style(self) -> str:
         return (
             """
@@ -261,34 +294,26 @@ class MultiArmMixin:
             self.teleop_solo_arm_config.set_id(arm.get("id", ""))
 
     def home_arm(self, arm_index: int):
-        if self._home_thread and self._home_thread.isRunning():
+        self._setup_home_sequence_runner()
+        if self._home_sequence_runner.is_running:
             self.status_label.setText("⏳ Already moving...")
+            self.status_label.setStyleSheet("QLabel { color: #FFB74D; font-size: 15px; padding: 8px; }")
             return
 
         home_pos = get_home_positions(self.config, arm_index)
         if not home_pos:
             self.status_label.setText(f"❌ No home position for Arm {arm_index + 1}. Set home first.")
+            self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
             return
 
         velocity = self.rest_velocity_spin.value() if self.rest_velocity_spin else 600
-        self.status_label.setText(f"🏠 Moving Arm {arm_index + 1} to home...")
-        self.home_btn.setEnabled(False)
-
-        request = HomeMoveRequest(config=self.config, velocity_override=velocity, arm_index=arm_index)
-        worker = HomeMoveWorker(request)
-        thread = QThread(self)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.progress.connect(self._on_home_progress)
-        worker.finished.connect(self._on_home_finished)
-        worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(self._on_home_thread_finished)
-
-        self._home_worker = worker
-        self._home_thread = thread
-        self._pending_home_velocity = velocity
-        thread.start()
+        started = self._home_sequence_runner.start(
+            config=self.config,
+            arm_indexes=[arm_index],
+            velocity_override=velocity,
+        )
+        if started:
+            self.home_btn.setEnabled(False)
 
     def set_home_arm(self, arm_index: int):
         try:
@@ -393,6 +418,7 @@ class MultiArmMixin:
 
     def _apply_calibration_result(self, arm_index: int, payload: Dict[str, str]):
         try:
+            self._ensure_config_store()
             arms = self.config.setdefault("robot", {}).setdefault("arms", [])
             while len(arms) <= arm_index:
                 arms.append({})
@@ -401,7 +427,7 @@ class MultiArmMixin:
             arm_cfg["id"] = payload["robot_id"]
             arm_cfg["robot_type"] = payload["robot_type"]
             arm_cfg["arm_role"] = payload["arm_role"]
-            Path(self.config_path).write_text(json.dumps(self.config, indent=2))
+            self.config_store.save()
             self._sync_ui_arm_fields(arm_index, payload)
             self.status_label.setText(
                 f"✓ Calibration saved for Arm {arm_index + 1}: {payload['robot_id']} on {payload['port']}"
@@ -423,24 +449,94 @@ class MultiArmMixin:
             self.solo_arm_config.set_port(payload["port"])
             self.solo_arm_config.set_id(payload["robot_id"])
 
+    def _handle_robot_port_change(self, arm_index: int, port: str) -> None:
+        self._auto_update_robot_field(arm_index, "port", port)
+
+    def _handle_robot_id_change(self, arm_index: int, robot_id: str) -> None:
+        self._auto_update_robot_field(arm_index, "id", robot_id)
+
+    def _auto_update_robot_field(self, arm_index: int, key: str, value: str) -> None:
+        self._ensure_config_store()
+
+        def mutator(cfg: dict) -> None:
+            robot_cfg = cfg.setdefault("robot", {})
+            arms = robot_cfg.setdefault("arms", [])
+            while len(arms) <= arm_index:
+                arms.append({})
+            arms[arm_index][key] = value
+
+        self.config_store.update(mutator)
+        self._save_config_snapshot(f"💾 Saved {key} for Arm {arm_index + 1}")
+
+    def _save_config_snapshot(self, status: str | None = None) -> None:
+        self._ensure_config_store()
+        try:
+            self.config_store.save()
+            if status:
+                self.status_label.setText(status)
+                self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+        except Exception as exc:
+            self.status_label.setText(f"❌ Failed to save settings: {exc}")
+            self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+
+    def _on_rest_velocity_changed(self, value: int) -> None:
+        self._ensure_config_store()
+
+        def mutator(cfg: dict) -> None:
+            robot_cfg = cfg.setdefault("robot", {})
+            for arm in robot_cfg.setdefault("arms", []):
+                arm["home_velocity"] = int(value)
+
+        self.config_store.update(mutator)
+        self.status_label.setText(f"💾 Home velocity set to {value}")
+        self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+
     def home_all_arms(self):
+        self._setup_home_sequence_runner()
+        if self._home_sequence_runner.is_running:
+            self.status_label.setText("⏳ Already moving to home...")
+            self.status_label.setStyleSheet("QLabel { color: #FFB74D; font-size: 15px; padding: 8px; }")
+            return
+
         enabled_arms = get_enabled_arms(self.config, "robot")
         if not enabled_arms:
             self.status_label.setText("❌ No enabled arms to home")
             return
+        has_home = any(arm.get("home_positions") for arm in enabled_arms)
+        if not has_home:
+            self.status_label.setText("❌ No home positions configured. Set home first.")
+            return
+
         self.status_label.setText(f"🏠 Homing {len(enabled_arms)} enabled arm(s)...")
-        self.home_arm(0)
+        self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
+        velocity = self.rest_velocity_spin.value() if self.rest_velocity_spin else None
+        started = self._home_sequence_runner.start(
+            config=self.config,
+            selection="all",
+            velocity_override=velocity,
+        )
+        if started:
+            self.home_btn.setEnabled(False)
 
     def set_rest_position(self):
         try:
             from utils.motor_controller import MotorController
 
-            self.status_label.setText("⏳ Reading motor positions from Arm 1...")
+            arm_index = 0
+            arm_name = "Arm 1"
+            if hasattr(self, "robot_mode_selector") and self.robot_mode_selector:
+                mode = self.robot_mode_selector.get_mode()
+                if mode == "solo" and hasattr(self, "solo_arm_selector") and self.solo_arm_selector:
+                    arm_index = self.solo_arm_selector.currentIndex()
+                    current_text = self.solo_arm_selector.currentText()
+                    arm_name = current_text or f"Arm {arm_index + 1}"
+
+            self.status_label.setText(f"⏳ Reading motor positions from {arm_name}...")
             self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
 
-            motor_controller = MotorController(self.config, arm_index=0)
+            motor_controller = MotorController(self.config, arm_index=arm_index)
             if not motor_controller.connect():
-                self.status_label.setText("❌ Failed to connect to motors")
+                self.status_label.setText(f"❌ Failed to connect to {arm_name}")
                 self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
                 return
 
@@ -448,18 +544,18 @@ class MultiArmMixin:
             motor_controller.disconnect()
 
             if positions is None:
-                self.status_label.setText("❌ Failed to read motor positions")
+                self.status_label.setText(f"❌ Failed to read motor positions from {arm_name}")
                 self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
                 return
 
             self.config = save_home_positions(
                 positions,
-                arm_index=0,
+                arm_index=arm_index,
                 home_velocity=self.rest_velocity_spin.value() if self.rest_velocity_spin else None,
                 config_path=self.config_path,
             )
-            self._update_home_widgets(0, positions)
-            self.status_label.setText(f"✓ Home saved for Arm 1: {positions}")
+            self._update_home_widgets(arm_index, positions)
+            self.status_label.setText(f"✓ Home saved for {arm_name}: {positions}")
             self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
             self.config_changed.emit()
         except Exception as exc:
@@ -467,44 +563,45 @@ class MultiArmMixin:
             self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
 
     def go_home(self):
-        if self._home_thread and self._home_thread.isRunning():
+        self._setup_home_sequence_runner()
+        if self._home_sequence_runner.is_running:
             self.status_label.setText("⏳ Already moving to home...")
             self.status_label.setStyleSheet("QLabel { color: #FFB74D; font-size: 15px; padding: 8px; }")
             return
 
-        home_pos = get_home_positions(self.config, arm_index=0)
+        arm_index = 0
+        arm_name = "Arm 1"
+        if hasattr(self, "robot_mode_selector") and self.robot_mode_selector:
+            mode = self.robot_mode_selector.get_mode()
+            if mode == "solo" and hasattr(self, "solo_arm_selector") and self.solo_arm_selector:
+                arm_index = self.solo_arm_selector.currentIndex()
+                current_text = self.solo_arm_selector.currentText()
+                arm_name = current_text or f"Arm {arm_index + 1}"
+
+        home_pos = get_home_positions(self.config, arm_index=arm_index)
         if not home_pos:
-            self.status_label.setText("❌ No home position saved for Arm 1. Click 'Set Home' first.")
+            self.status_label.setText(f"❌ No home position saved for {arm_name}. Click 'Set Home' first.")
             self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
             return
 
         velocity = self.rest_velocity_spin.value()
-        self._pending_home_velocity = velocity
 
-        self.status_label.setText("🏠 Moving Arm 1 to home position...")
+        self.status_label.setText(f"🏠 Moving {arm_name} to home position...")
         self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
-        self.home_btn.setEnabled(False)
-
-        request = HomeMoveRequest(config=self.config, velocity_override=velocity, arm_index=0)
-        worker = HomeMoveWorker(request)
-        thread = QThread(self)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.progress.connect(self._on_home_progress)
-        worker.finished.connect(self._on_home_finished)
-        worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(self._on_home_thread_finished)
-
-        self._home_thread = thread
-        self._home_worker = worker
-        thread.start()
+        started = self._home_sequence_runner.start(
+            config=self.config,
+            arm_indexes=[arm_index],
+            velocity_override=velocity,
+        )
+        if started:
+            self.home_btn.setEnabled(False)
 
     def calibrate_arm(self):
         try:
             from PySide6.QtWidgets import QMessageBox
             from utils.motor_controller import MotorController
 
+            self._ensure_config_store()
             reply = QMessageBox.warning(
                 self,
                 "Calibration Warning",
@@ -560,7 +657,7 @@ class MultiArmMixin:
             calib_cfg["calibrated"] = True
             calib_cfg["date"] = str(Path(__file__).stat().st_mtime)
 
-            Path(self.config_path).write_text(json.dumps(self.config, indent=2))
+            self.config_store.save()
             motor_controller.disconnect()
 
             self.status_label.setText("✓ Calibration complete!")
@@ -574,26 +671,27 @@ class MultiArmMixin:
         self.status_label.setText(message)
         self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
 
-    def _on_home_finished(self, success: bool, message: str) -> None:
-        self.home_btn.setEnabled(True)
-        if success:
-            detail = message or f"✓ Moved to home position at velocity {self._pending_home_velocity or 0}"
-            color = "#4CAF50"
-        else:
-            detail = message or "Unknown error"
-            if not detail.startswith("❌"):
-                detail = f"❌ Error: {detail}"
-            color = "#f44336"
+    def _on_settings_home_arm_started(self, arm_info: dict) -> None:
+        arm_name = arm_info.get("arm_name") or f"Arm {arm_info.get('arm_id', '?')}"
+        self.status_label.setText(f"🏠 Homing {arm_name}...")
+        self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
+
+    def _on_settings_home_arm_finished(self, arm_info: dict, success: bool, message: str) -> None:
+        detail = message or ("✓ Home position reached" if success else "❌ Home move failed")
+        color = "#4CAF50" if success else "#f44336"
         self.status_label.setText(detail)
         self.status_label.setStyleSheet(f"QLabel {{ color: {color}; font-size: 15px; padding: 8px; }}")
-        self._pending_home_velocity = None
 
-    def _on_home_thread_finished(self) -> None:
-        if self._home_thread:
-            self._home_thread.deleteLater()
-        self._home_thread = None
-        self._home_worker = None
-        self._pending_home_velocity = None
+    def _on_settings_home_sequence_finished(self, success: bool, message: str) -> None:
+        color = "#4CAF50" if success else "#f44336"
+        self.status_label.setText(message)
+        self.status_label.setStyleSheet(f"QLabel {{ color: {color}; font-size: 15px; padding: 8px; }}")
+        self.home_btn.setEnabled(True)
+
+    def _on_settings_home_error(self, message: str) -> None:
+        self.status_label.setText(f"❌ {message}")
+        self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+        self.home_btn.setEnabled(True)
 
     # ------------------------------------------------------------------ Port testing
     def test_robot_arm(self, arm_index: int, source_widget: SingleArmConfig | None = None):

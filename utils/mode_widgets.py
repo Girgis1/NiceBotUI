@@ -113,6 +113,8 @@ class SingleArmConfig(QFrame):
     set_home_clicked = Signal()
     calibrate_clicked = Signal()
     test_clicked = Signal()
+    port_changed = Signal(str)
+    id_changed = Signal(str)
     
     def __init__(self, arm_name="Arm 1", show_home_controls=True, parent=None):
         super().__init__(parent)
@@ -179,6 +181,7 @@ class SingleArmConfig(QFrame):
             }
         """)
         port_row.addWidget(self.port_combo)
+        self.port_combo.currentTextChanged.connect(self._on_port_text_changed)
         layout.addLayout(port_row)
         
         # Calibration ID dropdown
@@ -221,6 +224,7 @@ class SingleArmConfig(QFrame):
             }
         """)
         id_row.addWidget(self.id_combo)
+        self.id_combo.currentTextChanged.connect(self._on_id_text_changed)
         layout.addLayout(id_row)
         
         # Home positions (only for robot arms, not teleop)
@@ -327,14 +331,19 @@ class SingleArmConfig(QFrame):
     
     def set_port(self, port):
         """Set port from full path, display short form"""
+        blocked = self.port_combo.blockSignals(True)
         if port.startswith("/dev/tty"):
             short_form = port.replace("/dev/tty", "")
             self.port_combo.setCurrentText(short_form)
         else:
             self.port_combo.setCurrentText(port)
+        self.port_combo.blockSignals(blocked)
     
     def get_id(self): return self.id_combo.currentText()
-    def set_id(self, calib_id): self.id_combo.setCurrentText(calib_id)
+    def set_id(self, calib_id):
+        blocked = self.id_combo.blockSignals(True)
+        self.id_combo.setCurrentText(calib_id)
+        self.id_combo.blockSignals(blocked)
     def get_home_positions(self):
         try:
             import json
@@ -344,3 +353,9 @@ class SingleArmConfig(QFrame):
     def set_home_positions(self, positions):
         import json
         self.home_edit.setText(json.dumps(positions))
+
+    def _on_port_text_changed(self, _: str):
+        self.port_changed.emit(self.get_port())
+
+    def _on_id_text_changed(self, _: str):
+        self.id_changed.emit(self.get_id())

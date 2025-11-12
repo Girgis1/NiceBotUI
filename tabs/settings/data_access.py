@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from utils.config_compat import ensure_multi_arm_config, get_home_velocity
+from utils.config_store import ConfigStore
 
 DEFAULT_HOME_POSITIONS = [2082, 1106, 2994, 2421, 1044, 2054]
 
@@ -21,11 +22,6 @@ def read_config(path: Path) -> Dict[str, Any]:
         return {}
 
 
-def write_config(path: Path, config: Dict[str, Any]) -> None:
-    """Persist the config JSON to disk."""
-    path.write_text(json.dumps(config, indent=2))
-
-
 class SettingsDataAccessMixin:
     """Mixin housing config serialization helpers for SettingsTab."""
 
@@ -33,8 +29,14 @@ class SettingsDataAccessMixin:
         self.config = ensure_multi_arm_config(self.config)
         return self.config
 
+    def _ensure_config_store(self) -> None:
+        if not hasattr(self, "config_store") or self.config_store is None:
+            self.config_store = ConfigStore.instance()
+
     def load_settings(self):
         """Populate UI widgets from the in-memory config."""
+        self._ensure_config_store()
+        self.config = self.config_store.get_config()
         config = self._ensure_schema()
 
         # Load robot mode and set UI
@@ -52,10 +54,6 @@ class SettingsDataAccessMixin:
                 self.robot_arm1_config.set_port(arm1.get("port", ""))
                 self.robot_arm1_config.set_id(arm1.get("id", ""))
                 self.robot_arm1_config.set_home_positions(arm1.get("home_positions", []))
-            if self.solo_arm_config:
-                self.solo_arm_config.set_port(arm1.get("port", ""))
-                self.solo_arm_config.set_id(arm1.get("id", ""))
-                self.solo_arm_config.set_home_positions(arm1.get("home_positions", []))
 
         if len(arms) > 1 and self.robot_arm2_config:
             arm2 = arms[1]
@@ -63,13 +61,19 @@ class SettingsDataAccessMixin:
             self.robot_arm2_config.set_id(arm2.get("id", ""))
             self.robot_arm2_config.set_home_positions(arm2.get("home_positions", []))
 
+        if self.solo_arm_config and self.solo_arm_selector:
+            self.on_solo_arm_changed(self.solo_arm_selector.currentIndex())
+
         self.robot_fps_spin.setValue(config.get("robot", {}).get("fps", 30))
         self.position_tolerance_spin.setValue(config.get("robot", {}).get("position_tolerance", 10))
         self.position_verification_check.setChecked(config.get("robot", {}).get("position_verification_enabled", True))
 
         # Home velocity for backward compatibility with the old home button
         home_vel = get_home_velocity(config, 0)
-        self.rest_velocity_spin.setValue(home_vel)
+        if hasattr(self, "rest_velocity_spin") and self.rest_velocity_spin:
+            blocked = self.rest_velocity_spin.blockSignals(True)
+            self.rest_velocity_spin.setValue(home_vel)
+            self.rest_velocity_spin.blockSignals(blocked)
 
         # Teleop configuration
         teleop_mode = config.get("teleop", {}).get("mode", "solo")
@@ -221,7 +225,8 @@ class SettingsDataAccessMixin:
         safety_cfg["torque_auto_disable"] = self.torque_disable_check.isChecked()
 
         try:
-            write_config(self.config_path, config)
+            self.config_store.set_config(config)
+            self.config = self.config_store.get_config()
             self.status_label.setText("✓ Settings saved successfully!")
             self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
             self.config_changed.emit()
@@ -231,6 +236,7 @@ class SettingsDataAccessMixin:
 
     def reset_defaults(self):
         """Restore UI controls to known-safe defaults."""
+        self._ensure_config_store()
         if self.robot_mode_selector:
             self.robot_mode_selector.set_mode("solo")
             self.on_robot_mode_changed("solo")
@@ -264,7 +270,10 @@ class SettingsDataAccessMixin:
         self.robot_fps_spin.setValue(30)
         self.position_tolerance_spin.setValue(10)
         self.position_verification_check.setChecked(True)
-        self.rest_velocity_spin.setValue(600)
+        if hasattr(self, "rest_velocity_spin") and self.rest_velocity_spin:
+            blocked = self.rest_velocity_spin.blockSignals(True)
+            self.rest_velocity_spin.setValue(600)
+            self.rest_velocity_spin.blockSignals(blocked)
 
         self.cam_front_edit.setText("/dev/video1")
         self.cam_wrist_edit.setText("/dev/video3")
@@ -299,7 +308,9 @@ class SettingsDataAccessMixin:
         self.torque_threshold_spin.setValue(120.0)
         self.torque_disable_check.setChecked(True)
 
-        self.status_label.setText("⚠️ Defaults loaded. Click Save to apply.")
+        self.config_store.save()
+        self.config = self.config_store.get_config()
+        self.status_label.setText("⚠️ Defaults loaded and saved.")
         self.status_label.setStyleSheet("QLabel { color: #FF9800; font-size: 15px; padding: 8px; }")
 
     # Helpers -----------------------------------------------------------------
