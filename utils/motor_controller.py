@@ -67,7 +67,7 @@ class MotorController:
             raise RuntimeError("Motor control not available")
         
         try:
-            positions = read_current_position()
+            positions = read_current_position(self.arm_index)
             return positions if positions else []
         except Exception as e:
             print(f"Error reading positions: {e}")

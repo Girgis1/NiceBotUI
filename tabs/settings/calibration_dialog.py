@@ -591,8 +591,8 @@ class SO101CalibrationDialog(QDialog):
     def _motor_sort_key(self, label: str):
         match = re.search(r"(\d+)", label)
         if match:
-            return (0, int(match.group(1)))
-        return (1, label.lower())
+            return (0, int(match.group(1)), label.lower())
+        return (1, 0, label.lower())
 
     def _set_log_fullscreen(self, fullscreen: bool):
         if fullscreen == self._log_fullscreen:

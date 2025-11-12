@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal, QThread
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QDoubleSpinBox,
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from tabs.diagnostics_tab import DiagnosticsTab
 from app.config import CONFIG_PATH
+from utils.config_store import ConfigStore
 
 from .camera_panel import CameraPanelMixin
 from .data_access import SettingsDataAccessMixin
@@ -44,12 +45,11 @@ class SettingsTab(
 
     def __init__(self, config: dict, parent: Optional[QWidget] = None, device_manager=None):
         super().__init__(parent)
-        self.config = config
+        self.config_store = ConfigStore.instance()
+        self.config = self.config_store.get_config()
         self.config_path = CONFIG_PATH
         self.device_manager = device_manager
-        self._home_thread: Optional[QThread] = None
-        self._home_worker = None
-        self._pending_home_velocity: Optional[int] = None
+        self._home_sequence_runner = None
         self._port_test_worker = None
 
         # Mode selector + arm widgets (populated in mixins)

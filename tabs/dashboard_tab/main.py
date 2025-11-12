@@ -18,15 +18,13 @@ from PySide6.QtWidgets import (
     QFrame, QTextEdit, QComboBox, QSizePolicy, QSpinBox, QSlider,
     QStackedWidget
 )
-from PySide6.QtCore import Qt, QTimer, QThread
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QColor, QImage, QPixmap
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from utils.camera_hub import CameraStreamHub
-from utils.home_move_worker import HomeMoveWorker
-
 from .widgets import CameraDetailDialog, CameraPreviewWidget, CircularProgress, StatusIndicator
 from .state import DashboardStateMixin
 from .camera import DashboardCameraMixin
@@ -48,9 +46,7 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
         self.is_running = False
         self._vision_state_active = False
         self._last_vision_signature = None
-        self._home_thread: Optional[QThread] = None
-        self._home_worker: Optional[HomeMoveWorker] = None
-        self._home_arms_queue: List[Dict] = []  # Queue for multi-arm homing
+        self._home_sequence_runner = None
         self._fatal_error_active = False
         self._last_log_code: Optional[str] = None
         self._last_log_message: Optional[str] = None
