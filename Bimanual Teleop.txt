@@ -59,7 +59,26 @@ python -m lerobot.teleoperate \
   --teleop.right_arm_id=right_leader \
   --display_data=true
   
-  
+  ssh jetson
+cd ~/NiceBotUI
+source .venv/bin/activate
+source ~/jetson_helpers.sh
+run_logged python run_bi_so101_teleop.py \
+    --robot.type=bi_so101_follower \
+    --robot.left_arm_port=/dev/ttyACM0 \
+    --robot.right_arm_port=/dev/ttyACM1 \
+    --robot.left_arm_id=left_follower \
+    --robot.right_arm_id=right_follower \
+    --robot.auto_calibrate=false \
+    --teleop.type=bi_so101_leader \
+    --teleop.left_arm_port=/dev/ttyACM2 \
+    --teleop.right_arm_port=/dev/ttyACM3 \
+    --teleop.left_arm_id=leader_white \
+    --teleop.right_arm_id=right_leader \
+    --teleop.left_arm_type=so101_leader \
+    --teleop.right_arm_type=so101_leader \
+    --teleop.auto_calibrate=false \
+    --display_data=false
   
   
   
@@ -81,4 +100,42 @@ python -m lerobot.teleoperate \
   --teleop.id=bimanual_leader \
   --display_data=true
 
+_____________________________________________________________________________
 
+ssh jetson
+cd ~/NiceBotUI
+source .venv/bin/activate
+./run_bimanual_teleop.sh
+
+
+
+
+cd ~/NiceBotUI
+source .venv/bin/activate
+
+# Give USB permissions
+sudo chmod 666 /dev/ttyACM0 /dev/ttyACM1 /dev/ttyACM2 /dev/ttyACM3
+
+# Calibrate left follower (robot left arm)
+lerobot-calibrate \
+  --robot.type=so101_follower \
+  --robot.port=/dev/ttyACM1 \
+  --robot.id=left_follower
+
+# Calibrate right follower (robot right arm)
+lerobot-calibrate \
+  --robot.type=so101_follower \
+  --robot.port=/dev/ttyACM0 \
+  --robot.id=right_follower
+
+# Calibrate left leader (teleop left arm)
+lerobot-calibrate \
+  --teleop.type=so101_leader \
+  --teleop.port=/dev/ttyACM2 \
+  --teleop.id=left_leader
+
+# Calibrate right leader (teleop right arm)  
+lerobot-calibrate \
+  --teleop.type=so101_leader \
+  --teleop.port=/dev/ttyACM3 \
+  --teleop.id=right_leader
