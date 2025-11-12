@@ -2,6 +2,15 @@
 # Sync LerobotGUI to Nvidia Jetson
 # Usage: ./sync_to_jetson.sh [--dry-run]
 
+# Directories/files that should never be pushed from the dev machine
+# (they are generated on the Jetson and synced back separately).
+JETSON_OWNED=(
+    "data/"
+    "logs/"
+    "runtime/"
+    ".cache/"
+)
+
 EXCLUDE_PATTERNS=(
     ".venv"
     "__pycache__"
@@ -10,6 +19,7 @@ EXCLUDE_PATTERNS=(
     "*.log"
     ".DS_Store"
     "node_modules"
+    "${JETSON_OWNED[@]}"
 )
 
 # Build exclude arguments
@@ -37,4 +47,3 @@ eval rsync -avz $DRY_RUN $EXCLUDE_ARGS ~/NiceBotUI/ jetson:~/NiceBotUI/
 
 echo ""
 echo "✅ Sync complete!"
-
