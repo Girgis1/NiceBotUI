@@ -92,7 +92,7 @@ except Exception:
 - Ensure UI provides meaningful error feedback
 - Performance test with error conditions
 
-@codex: Started the cleanup in `tabs/settings/camera_panel.py` (preview + assignment handlers now call `log_exception(...)`), `tabs/diagnostics_tab.py` (connect/disconnect/refresh/read paths emit structured logs), and the Record tab (motor controller rebuild + dashboard notifications log failures instead of printing). More modules remain, but at least the camera UI, diagnostics tab, and record tab no longer swallow errors silently.
+@codex: Started the cleanup in `tabs/settings/camera_panel.py` (preview + assignment handlers now call `log_exception(...)`), `tabs/diagnostics_tab.py` (connect/disconnect/refresh/read paths emit structured logs), and the Record tab (motor controller rebuild, teleop torque/connect failures, and transport-controls disconnects now log instead of printing). More modules remain, but at least the camera UI, diagnostics tab, and record tab no longer swallow errors silently.
 
 ---
 

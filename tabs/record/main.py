@@ -912,7 +912,7 @@ class RecordTab(
                     self.status_label.setText("❌ Failed to connect to motors")
                     return False
         except Exception as exc:
-            print(f"[TELEOP] ❌ Failed to connect: {exc}")
+            log_exception("RecordTab: teleop motor connect failed", exc, level="error")
             self.status_label.setText("❌ Failed to connect to motors")
             return False
         return bool(self.motor_controller.bus)
@@ -929,7 +929,7 @@ class RecordTab(
                 self.teleop_torque_enabled = True
                 self._update_torque_label(locked=True)
             except Exception as exc:
-                print(f"[TELEOP] ❌ Failed to enable torque: {exc}")
+                log_exception("RecordTab: teleop enable torque failed", exc, level="error")
                 self.status_label.setText("❌ Failed to enable torque")
                 return False
 
@@ -948,7 +948,7 @@ class RecordTab(
             self._update_torque_label(locked=False)
             self.status_label.setText("Torque released - manually move the arm, then press SET")
         except Exception as exc:
-            print(f"[TELEOP] ❌ Failed to release torque: {exc}")
+            log_exception("RecordTab: teleop release torque failed", exc, level="error")
             self.status_label.setText("❌ Failed to release torque")
 
     def on_hold_released(self):
