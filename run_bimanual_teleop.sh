@@ -41,8 +41,9 @@ LEFT_FOLLOWER_PORT="${LEFT_FOLLOWER_PORT:-/dev/ttyACM0}"
 RIGHT_FOLLOWER_PORT="${RIGHT_FOLLOWER_PORT:-/dev/ttyACM2}"
 LEFT_LEADER_PORT="${LEFT_LEADER_PORT:-/dev/ttyACM1}"
 RIGHT_LEADER_PORT="${RIGHT_LEADER_PORT:-/dev/ttyACM3}"
-FALLOWER_TYPE="bi_so101_follower"
+FOLLOWER_TYPE="bi_so101_follower"
 LEADER_TYPE="bi_so100_leader"
+TELEOP_FPS="${TELEOP_FPS:-50}"
 
 # Pick up ports from config.json when not overridden
 CONFIG_JSON="${PROJECT_ROOT}/config.json"
@@ -91,7 +92,7 @@ INFO
 sudo chmod 666 ${LEFT_FOLLOWER_PORT} ${RIGHT_FOLLOWER_PORT} ${LEFT_LEADER_PORT} ${RIGHT_LEADER_PORT}
 
 "${TELEOP_BIN}" \
-  --robot.type=${FALLOWER_TYPE} \
+  --robot.type=${FOLLOWER_TYPE} \
   --robot.left_arm_port=${LEFT_FOLLOWER_PORT} \
   --robot.right_arm_port=${RIGHT_FOLLOWER_PORT} \
   --robot.id=follower \
@@ -99,4 +100,5 @@ sudo chmod 666 ${LEFT_FOLLOWER_PORT} ${RIGHT_FOLLOWER_PORT} ${LEFT_LEADER_PORT} 
   --teleop.left_arm_port=${LEFT_LEADER_PORT} \
   --teleop.right_arm_port=${RIGHT_LEADER_PORT} \
   --teleop.id=leader \
-  --display_data=false
+  --display_data=false \
+  --fps=${TELEOP_FPS}
