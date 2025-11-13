@@ -17,6 +17,7 @@ from PySide6.QtCore import QThread, Signal
 # Add utils to path for config_compat
 sys.path.insert(0, str(Path(__file__).parent))
 from utils.config_compat import get_first_enabled_arm, get_arm_port
+from utils.logging_utils import log_exception
 
 
 class RobotWorker(QThread):
@@ -95,9 +96,10 @@ class RobotWorker(QThread):
         except RuntimeError as e:
             self.error_occurred.emit('startup_failed', {'error': str(e)})
             self.run_completed.emit(False, str(e))
-        except Exception as e:
-            self.error_occurred.emit('unknown', {'error': str(e)})
-            self.run_completed.emit(False, f"Failed to start: {e}")
+        except Exception as exc:
+            log_exception("RobotWorker: unexpected failure during run", exc, stack=True)
+            self.error_occurred.emit('unknown', {'error': str(exc)})
+            self.run_completed.emit(False, f"Failed to start: {exc}")
         finally:
             self._cleanup_processes()
             self.connection_changed.emit(False)
@@ -302,15 +304,16 @@ class RobotWorker(QThread):
                     self.log_message.emit('error', output_text)
                 self.run_completed.emit(False, f"Failed with code {return_code}")
                 
-        except Exception as e:
-            self.log_message.emit('error', f"Monitor error: {e}")
-            self.run_completed.emit(False, str(e))
+        except Exception as exc:
+            log_exception("RobotWorker: monitor_process error", exc, stack=True)
+            self.log_message.emit('error', f"Monitor error: {exc}")
+            self.run_completed.emit(False, str(exc))
         finally:
             if self.client_proc and self.client_proc.stdout:
                 try:
                     self.client_proc.stdout.close()
-                except Exception:
-                    pass
+                except Exception as close_exc:
+                    log_exception("RobotWorker: failed to close client stdout", close_exc, level="debug")
             
     def _parse_error(self, stderr_text, return_code):
         """Parse stderr to determine error type"""
@@ -375,14 +378,14 @@ class RobotWorker(QThread):
                     self.client_proc.wait(timeout=0.5)  # Reduced from 2s to 0.5s
                 except subprocess.TimeoutExpired:
                     self.client_proc.kill()  # Force kill if still not dead
-            except:
-                pass
+            except Exception as exc:
+                log_exception("RobotWorker: error while stopping client", exc, level="warning")
             finally:
                 if self.client_proc and self.client_proc.stdout:
                     try:
                         self.client_proc.stdout.close()
-                    except Exception:
-                        pass
+                    except Exception as close_exc:
+                        log_exception("RobotWorker: failed to close client stdout during cleanup", close_exc, level="debug")
                 self.client_proc = None
         
         # Then stop server
@@ -396,8 +399,8 @@ class RobotWorker(QThread):
                     self.server_proc.wait(timeout=0.5)  # Reduced from 2s to 0.5s
                 except subprocess.TimeoutExpired:
                     self.server_proc.kill()  # Force kill
-            except:
-                pass
+            except Exception as exc:
+                log_exception("RobotWorker: error while stopping server", exc, level="warning")
             finally:
                 self.server_proc = None
     
@@ -430,4 +433,3 @@ class RobotWorker(QThread):
                     return
 
         raise TimeoutError("Timed out waiting for policy server to become ready")
-

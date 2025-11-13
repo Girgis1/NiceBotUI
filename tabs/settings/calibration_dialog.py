@@ -562,7 +562,7 @@ class SO101CalibrationDialog(QDialog):
             label = self._motor_label_from_line(stripped)
             if not label:
                 continue
-            self._motor_lines[label] = stripped
+            self._motor_lines[str(label)] = stripped
             updated = True
         if updated:
             self._render_motor_snapshot()
@@ -589,10 +589,11 @@ class SO101CalibrationDialog(QDialog):
         return None
 
     def _motor_sort_key(self, label: str):
-        match = re.search(r"(\d+)", label)
+        label_str = str(label)
+        match = re.search(r"(\d+)", label_str)
         if match:
-            return (0, int(match.group(1)), label.lower())
-        return (1, 0, label.lower())
+            return (0, int(match.group(1)), label_str.lower())
+        return (1, 0, label_str.lower())
 
     def _set_log_fullscreen(self, fullscreen: bool):
         if fullscreen == self._log_fullscreen:

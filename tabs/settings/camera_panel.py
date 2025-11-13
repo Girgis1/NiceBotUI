@@ -395,37 +395,14 @@ class CameraPanelMixin:
         return target_w, target_h
 
     def _format_preview_frame(self, frame, target_size: Tuple[int, int]):
-        """Resize ``frame`` to ``target_size`` while preserving aspect ratio."""
+        """Stretch frame to the configured preview size (no letterboxing)."""
         if cv2 is None:
             return frame
 
         target_w, target_h = target_size
-        src_h, src_w = frame.shape[:2]
-        if not src_w or not src_h:
-            return frame
-
-        src_ratio = src_w / src_h
-        target_ratio = target_w / target_h
-
-        if abs(src_ratio - target_ratio) < 0.01:
-            return cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
-
-        if src_ratio > target_ratio:
-            new_w = target_w
-            new_h = max(1, int(round(target_w / src_ratio)))
-            resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
-            pad = max(0, target_h - new_h)
-            top = pad // 2
-            bottom = pad - top
-            return cv2.copyMakeBorder(resized, top, bottom, 0, 0, cv2.BORDER_CONSTANT, value=(0, 0, 0))
-
-        new_h = target_h
-        new_w = max(1, int(round(target_h * src_ratio)))
-        resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        pad = max(0, target_w - new_w)
-        left = pad // 2
-        right = pad - left
-        return cv2.copyMakeBorder(resized, 0, 0, left, right, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+        target_w = max(1, int(target_w))
+        target_h = max(1, int(target_h))
+        return cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
 
     def _update_preview_label(self, preview_label: QLabel, frame) -> None:
         """Render ``frame`` (BGR) onto ``preview_label``."""

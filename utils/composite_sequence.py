@@ -24,6 +24,8 @@ from datetime import datetime
 from typing import Optional, List, Dict
 import pytz
 
+from utils.logging_utils import log_exception
+
 try:
     from .sequence_step import SequenceStep, ActionStep, ModelStep, DelayStep, HomeStep, VisionStep
 except ImportError:
@@ -106,8 +108,9 @@ class CompositeSequence:
             # Save initial manifest
             return self.save_manifest()
             
-        except Exception as e:
-            print(f"[ERROR] Failed to create composite sequence {self.name}: {e}")
+        except Exception as exc:
+            log_exception(f"CompositeSequence: failed to create {self.name}", exc)
+            print(f"[ERROR] Failed to create composite sequence {self.name}: {exc}")
             return False
     
     def save_manifest(self) -> bool:
@@ -136,8 +139,9 @@ class CompositeSequence:
             print(f"[SEQUENCE] ✓ Saved manifest: {self.name} ({self.step_count} steps)")
             return True
             
-        except Exception as e:
-            print(f"[ERROR] Failed to save manifest for {self.name}: {e}")
+        except Exception as exc:
+            log_exception(f"CompositeSequence: failed to save manifest for {self.name}", exc)
+            print(f"[ERROR] Failed to save manifest for {self.name}: {exc}")
             return False
     
     @staticmethod
@@ -177,10 +181,9 @@ class CompositeSequence:
             print(f"[SEQUENCE] ✓ Loaded: {composite.name} ({composite.step_count} steps, loop={composite.loop})")
             return composite
             
-        except Exception as e:
-            print(f"[ERROR] Failed to load composite sequence {name}: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception as exc:
+            log_exception(f"CompositeSequence: failed to load {name}", exc, stack=True)
+            print(f"[ERROR] Failed to load composite sequence {name}: {exc}")
             return None
     
     def add_step(self, step_type: str, name: str, step_file: str, 
@@ -321,8 +324,9 @@ class CompositeSequence:
             else:
                 return ""
                 
-        except Exception as e:
-            print(f"[ERROR] Failed to add action step: {e}")
+        except Exception as exc:
+            log_exception("CompositeSequence: failed to add action step", exc)
+            print(f"[ERROR] Failed to add action step: {exc}")
             return ""
     
     def add_model_step(self, name: str, task: str, checkpoint: str = "last", 
@@ -350,8 +354,9 @@ class CompositeSequence:
             else:
                 return ""
                 
-        except Exception as e:
-            print(f"[ERROR] Failed to add model step: {e}")
+        except Exception as exc:
+            log_exception("CompositeSequence: failed to add model step", exc)
+            print(f"[ERROR] Failed to add model step: {exc}")
             return ""
 
     def add_vision_step(self, name: str, camera: Dict, trigger: Dict,
@@ -377,8 +382,9 @@ class CompositeSequence:
                 )
                 return step_id
             return ""
-        except Exception as e:
-            print(f"[ERROR] Failed to add vision step: {e}")
+        except Exception as exc:
+            log_exception("CompositeSequence: failed to add vision step", exc)
+            print(f"[ERROR] Failed to add vision step: {exc}")
             return ""
     
     def add_delay_step(self, name: str, duration: float, enabled: bool = True, 
@@ -405,8 +411,9 @@ class CompositeSequence:
             else:
                 return ""
                 
-        except Exception as e:
-            print(f"[ERROR] Failed to add delay step: {e}")
+        except Exception as exc:
+            log_exception("CompositeSequence: failed to add delay step", exc)
+            print(f"[ERROR] Failed to add delay step: {exc}")
             return ""
     
     def add_home_step(self, name: str = "Home", enabled: bool = True, 
@@ -440,8 +447,9 @@ class CompositeSequence:
             else:
                 return ""
                 
-        except Exception as e:
-            print(f"[ERROR] Failed to add home step: {e}")
+        except Exception as exc:
+            log_exception("CompositeSequence: failed to add home step", exc)
+            print(f"[ERROR] Failed to add home step: {exc}")
             return ""
     
     def get_step_data(self, filename: str) -> Optional[Dict]:
@@ -458,8 +466,9 @@ class CompositeSequence:
             
             return data
             
-        except Exception as e:
-            print(f"[ERROR] Failed to load step {filename}: {e}")
+        except Exception as exc:
+            log_exception(f"CompositeSequence: failed to load step {filename}", exc)
+            print(f"[ERROR] Failed to load step {filename}: {exc}")
             return None
     
     def delete_step_file(self, filename: str) -> bool:
@@ -473,8 +482,9 @@ class CompositeSequence:
                 return True
             return False
             
-        except Exception as e:
-            print(f"[ERROR] Failed to delete step {filename}: {e}")
+        except Exception as exc:
+            log_exception(f"CompositeSequence: failed to delete step {filename}", exc)
+            print(f"[ERROR] Failed to delete step {filename}: {exc}")
             return False
     
     def get_full_sequence_data(self) -> Dict:
@@ -526,8 +536,9 @@ class CompositeSequence:
                 return True
             return False
             
-        except Exception as e:
-            print(f"[ERROR] Failed to delete sequence {self.name}: {e}")
+        except Exception as exc:
+            log_exception(f"CompositeSequence: failed to delete sequence {self.name}", exc)
+            print(f"[ERROR] Failed to delete sequence {self.name}: {exc}")
             return False
 
 

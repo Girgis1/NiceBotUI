@@ -15,6 +15,9 @@ import numpy as np
 import psutil
 import yaml
 
+from utils.camera_backend import open_capture
+from utils.logging_utils import log_exception
+
 try:  # pragma: no cover - support running as package or script
     from .detectors.presence import PresenceDetector
     from .ipc import IPCManager
@@ -132,9 +135,8 @@ class VisionDaemon:
                 config = yaml.safe_load(f)
             print(f"[DAEMON] ✓ Loaded config from {self.config_path}")
             return config
-        except Exception as e:
-            print(f"[DAEMON] Error loading config: {e}")
-            # Return default config
+        except Exception as exc:
+            log_exception("VisionDaemon: failed to load config", exc)
             return self._get_default_config()
     
     def _get_default_config(self) -> Dict:
@@ -214,10 +216,9 @@ class VisionDaemon:
             print("[DAEMON] ✓ All components initialized")
             return True
         
-        except Exception as e:
-            print(f"[DAEMON] Initialization error: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception as exc:
+            log_exception("VisionDaemon: initialization error", exc, stack=True)
+            print(f"[DAEMON] Initialization error: {exc}")
             return False
     
     def _init_camera(self) -> bool:
@@ -229,7 +230,8 @@ class VisionDaemon:
             desired_fps = cam_cfg.get('fps', 30)
             allow_virtual = cam_cfg.get('allow_virtual_fallback', True)
 
-            capture = cv2.VideoCapture(self.camera_index)
+            backend_hint = cam_cfg.get('backend')
+            backend_name, capture = open_capture(self.camera_index, preferred_backend=backend_hint)
 
             if capture and capture.isOpened():
                 capture.set(cv2.CAP_PROP_FRAME_WIDTH, desired_width)
@@ -238,7 +240,8 @@ class VisionDaemon:
 
                 self.camera = capture
                 self.using_virtual_camera = False
-                print(f"[DAEMON] ✓ Camera {self.camera_index} opened")
+                backend_label = backend_name or "default"
+                print(f"[DAEMON] ✓ Camera {self.camera_index} opened via {backend_label}")
                 return True
 
             if capture:
@@ -256,8 +259,9 @@ class VisionDaemon:
             print(f"[DAEMON] ✗ Failed to open camera {self.camera_index}")
             return False
 
-        except Exception as e:
-            print(f"[DAEMON] Camera initialization error: {e}")
+        except Exception as exc:
+            log_exception("VisionDaemon: camera initialization error", exc)
+            print(f"[DAEMON] Camera initialization error: {exc}")
             return False
     
     def _load_active_triggers(self):
@@ -276,8 +280,9 @@ class VisionDaemon:
             for trigger_id, data in self.active_triggers.items():
                 print(f"  - {data['name']} ({data['type']})")
         
-        except Exception as e:
-            print(f"[DAEMON] Error loading triggers: {e}")
+        except Exception as exc:
+            log_exception("VisionDaemon: error loading triggers", exc)
+            print(f"[DAEMON] Error loading triggers: {exc}")
     
     def run(self):
         """Main daemon loop"""
@@ -331,10 +336,9 @@ class VisionDaemon:
             print("[DAEMON] Main loop stopped")
             return 0
         
-        except Exception as e:
-            print(f"[DAEMON] Fatal error in main loop: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception as exc:
+            log_exception("VisionDaemon: fatal error in main loop", exc, stack=True)
+            print(f"[DAEMON] Fatal error in main loop: {exc}")
             return 1
         
         finally:
@@ -347,8 +351,9 @@ class VisionDaemon:
             if not ret or frame is None:
                 return None
             return frame
-        except Exception as e:
-            print(f"[DAEMON] Frame capture error: {e}")
+        except Exception as exc:
+            log_exception("VisionDaemon: frame capture error", exc)
+            print(f"[DAEMON] Frame capture error: {exc}")
             return None
     
     def _process_trigger(self, frame: np.ndarray, trigger_data: Dict):
@@ -393,8 +398,9 @@ class VisionDaemon:
                 if self.config['performance']['adaptive_framerate']:
                     self._adjust_framerate(detected=True)
         
-        except Exception as e:
-            print(f"[DAEMON] Error processing trigger: {e}")
+        except Exception as exc:
+            log_exception("VisionDaemon: error processing trigger", exc, stack=True)
+            print(f"[DAEMON] Error processing trigger: {exc}")
     
     def _adjust_framerate(self, detected: bool):
         """Adjust frame rate based on detection activity"""
@@ -434,8 +440,9 @@ class VisionDaemon:
                       f"{memory_mb:.1f}MB memory, "
                       f"{self.current_fps:.2f} FPS")
         
-        except Exception as e:
-            print(f"[DAEMON] Memory cleanup error: {e}")
+        except Exception as exc:
+            log_exception("VisionDaemon: memory cleanup error", exc)
+            print(f"[DAEMON] Memory cleanup error: {exc}")
     
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals"""
@@ -462,8 +469,9 @@ class VisionDaemon:
             
             print("[DAEMON] ✓ Cleanup complete")
         
-        except Exception as e:
-            print(f"[DAEMON] Cleanup error: {e}")
+        except Exception as exc:
+            log_exception("VisionDaemon: cleanup error", exc, level="warning")
+            print(f"[DAEMON] Cleanup error: {exc}")
     
     def stop(self):
         """Stop the daemon"""
@@ -498,4 +506,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-

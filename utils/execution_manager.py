@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.motor_controller import MotorController
 from utils.actions_manager import ActionsManager
 from utils.sequences_manager import SequencesManager
+from utils.camera_backend import open_capture
 from utils.camera_hub import CameraStreamHub
 from utils.config_compat import get_active_arm_index, get_first_enabled_arm
 from utils.execution import (
@@ -513,7 +514,8 @@ class ExecutionWorker(QThread):
                 self._reset_vision_tracking()
                 return False
         else:
-            cap = cv2.VideoCapture(camera_index)
+            backend_hint = camera_cfg.get("backend")
+            backend_name, cap = open_capture(camera_index, preferred_backend=backend_hint)
             if not cap or not cap.isOpened():
                 self.log_message.emit('warning', f"Vision step: camera {camera_index} unavailable, switching to demo feed")
                 self.vision_state_update.emit(

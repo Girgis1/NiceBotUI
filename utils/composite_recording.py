@@ -22,6 +22,8 @@ from datetime import datetime
 from typing import Optional, List, Dict
 import pytz
 
+from utils.logging_utils import log_exception
+
 try:
     from .recording_component import RecordingComponent, LiveRecordingComponent, PositionSetComponent
 except ImportError:
@@ -92,8 +94,9 @@ class CompositeRecording:
             # Save initial manifest
             return self.save()
             
-        except Exception as e:
-            print(f"[ERROR] Failed to create composite recording {self.name}: {e}")
+        except Exception as exc:
+            log_exception(f"CompositeRecording: failed to create {self.name}", exc)
+            print(f"[ERROR] Failed to create composite recording {self.name}: {exc}")
             return False
     
     def save(self) -> bool:
@@ -120,8 +123,9 @@ class CompositeRecording:
             print(f"[COMPOSITE] ✓ Saved manifest: {self.name} ({self.step_count} steps)")
             return True
             
-        except Exception as e:
-            print(f"[ERROR] Failed to save manifest for {self.name}: {e}")
+        except Exception as exc:
+            log_exception(f"CompositeRecording: failed to save manifest for {self.name}", exc)
+            print(f"[ERROR] Failed to save manifest for {self.name}: {exc}")
             return False
     
     @staticmethod
@@ -160,10 +164,9 @@ class CompositeRecording:
             print(f"[COMPOSITE] ✓ Loaded: {composite.name} ({composite.step_count} steps)")
             return composite
             
-        except Exception as e:
-            print(f"[ERROR] Failed to load composite recording {name}: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception as exc:
+            log_exception(f"CompositeRecording: failed to load {name}", exc, stack=True)
+            print(f"[ERROR] Failed to load composite recording {name}: {exc}")
             return None
     
     def add_step(self, step_type: str, name: str, component_file: str, 
@@ -294,8 +297,9 @@ class CompositeRecording:
             else:
                 return ""
                 
-        except Exception as e:
-            print(f"[ERROR] Failed to save live recording component: {e}")
+        except Exception as exc:
+            log_exception("CompositeRecording: failed to save live component", exc)
+            print(f"[ERROR] Failed to save live recording component: {exc}")
             return ""
     
     def add_position_set_component(self, name: str, positions: List[Dict],
@@ -320,8 +324,9 @@ class CompositeRecording:
             else:
                 return ""
                 
-        except Exception as e:
-            print(f"[ERROR] Failed to save position set component: {e}")
+        except Exception as exc:
+            log_exception("CompositeRecording: failed to save position component", exc)
+            print(f"[ERROR] Failed to save position set component: {exc}")
             return ""
     
     def get_component(self, filename: str) -> Optional[Dict]:
@@ -338,8 +343,9 @@ class CompositeRecording:
             
             return data
             
-        except Exception as e:
-            print(f"[ERROR] Failed to load component {filename}: {e}")
+        except Exception as exc:
+            log_exception(f"CompositeRecording: failed to load component {filename}", exc)
+            print(f"[ERROR] Failed to load component {filename}: {exc}")
             return None
     
     def delete_component(self, filename: str) -> bool:
@@ -353,8 +359,9 @@ class CompositeRecording:
                 return True
             return False
             
-        except Exception as e:
-            print(f"[ERROR] Failed to delete component {filename}: {e}")
+        except Exception as exc:
+            log_exception(f"CompositeRecording: failed to delete component {filename}", exc)
+            print(f"[ERROR] Failed to delete component {filename}: {exc}")
             return False
     
     def get_full_recording_data(self) -> Dict:
@@ -403,8 +410,9 @@ class CompositeRecording:
                 return True
             return False
             
-        except Exception as e:
-            print(f"[ERROR] Failed to delete recording {self.name}: {e}")
+        except Exception as exc:
+            log_exception(f"CompositeRecording: failed to delete recording {self.name}", exc)
+            print(f"[ERROR] Failed to delete recording {self.name}: {exc}")
             return False
 
 
@@ -479,4 +487,3 @@ if __name__ == "__main__":
     print()
     
     print("✓ Composite recording manager working!")
-

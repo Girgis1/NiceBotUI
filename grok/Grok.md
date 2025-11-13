@@ -1059,6 +1059,178 @@ def update_preview(self, force=False):
 
 ---
 
+## 2025-01-15 19:45:00 - Camera Preview Implementation Bug - CRITICAL FIX NEEDED
+
+**Issue:** Camera preview uses letterbox/pillarbox instead of requested stretch-to-fit, violating user requirements.
+
+**Investigation Results:**
+**Location:** `tabs/settings/camera_panel.py` `_format_preview_frame()` method
+**Status:** IMPLEMENTATION BUG - Does not match documented/spec'd behavior
+
+**Root Cause Analysis:**
+
+### **🚨 IMPLEMENTATION vs SPECIFICATION MISMATCH**
+
+**User Request:** "can we force the camera to the new aspect ratio without cropping or black bars?"
+**Response:** "Yes, it's simple: Use anamorphic stretching (distort the image to fit exactly)"
+
+**What Was Documented:**
+```python
+# Stretch to fit configured dimensions (eliminates cropping)
+target_width = self.cam_width_spin.value()
+target_height = self.cam_height_spin.value()
+frame = cv2.resize(frame, (target_width, target_height))  # SIMPLE STRETCH
+```
+
+**What Was Actually Implemented:**
+```python
+# Complex letterbox/pillarbox logic with black bars
+def _format_preview_frame(self, frame, target_size: Tuple[int, int]):
+    # ... complex aspect ratio preservation ...
+    # ... adds black bars instead of stretching ...
+    return cv2.copyMakeBorder(resized, top, bottom, 0, 0, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+```
+
+### **Business Impact:**
+
+**User Expectations Violated:**
+- ❌ **Requested**: No cropping, no black bars, fill entire space
+- ✅ **Delivered**: Aspect ratio preserved, black bars added
+
+**Functional Impact:**
+- **Performance**: Letterbox is 10x more complex than simple stretch
+- **User Experience**: Preview doesn't match configured dimensions
+- **Code Complexity**: Unnecessary complexity for simple requirement
+
+### **Correct Implementation Required:**
+
+**Replace Complex Letterbox Logic:**
+```python
+def _format_preview_frame(self, frame, target_size: Tuple[int, int]):
+    """Stretch frame to target_size without preserving aspect ratio."""
+    if cv2 is None:
+        return frame
+
+    target_w, target_h = target_size
+    # SIMPLE STRETCH - No aspect ratio preservation, no black bars
+    return cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
+```
+
+**Remove All Letterbox/Pillarbox Code:**
+- Delete aspect ratio calculation logic
+- Delete border addition logic
+- Delete complex conditional branching
+
+### **Testing Requirements:**
+
+1. **Visual Verification**: Preview should fill entire configured dimensions
+2. **No Black Bars**: Image should stretch to fill space completely
+3. **Performance**: Faster rendering (no border operations)
+4. **Functionality**: All other camera preview features still work
+
+### **Implementation Priority:** CRITICAL (user requirement violation)
+**Effort Estimate:** 5 minutes (delete complex code, add simple resize)
+**Risk Level:** LOW (simplifying existing code)
+**Testing Effort:** LOW (visual inspection)
+
+**IMMEDIATE FIX REQUIRED:** Replace letterbox implementation with simple stretch-to-fit as originally specified and documented.
+
+---
+
+## 2025-01-15 20:00:00 - Jetson App Unresponsiveness Investigation (CRITICAL)
+
+**Issue:** NiceBotUI becomes unresponsive on Jetson Orin Nano with "force quit/wait" messages during camera initialization.
+
+**Investigation Results:**
+**Location:** Jetson Orin Nano 8GB running outdated codebase with camera resource conflicts
+**Root Cause:** Multiple critical issues combining to cause UI hangs
+
+### **🚨 IDENTIFIED ISSUES:**
+
+**Issue 1: Outdated Codebase (CRITICAL)**
+```
+Jetson running: ac82f33 (old version)
+Local latest:  ee3311e (has fixes)
+Missing: Camera resource conflict fixes, Jetson optimizations
+```
+**Impact:** Jetson lacks critical bug fixes for camera access conflicts
+
+**Issue 2: Camera Resource Conflicts (CRITICAL)**
+```
+Log evidence: 15+ camera timeout errors per session
+[ WARN:0@26.996] global cap_v4l.cpp:1049 tryIoctl VIDEOIO(V4L2:/dev/video2): select() timeout.
+[ERROR:0@6.710] global obsensor_uvc_stream_channel.cpp:163 getStreamChannelGroup Camera index out of range
+```
+**Impact:** Settings panel and dashboard competing for camera access → timeouts → UI hangs
+
+**Issue 3: Repository Sync Issues (HIGH)**
+```
+Jetson git status: 50+ modified/untracked files
+Local changes preventing code updates
+Mixed old/new code causing instability
+```
+**Impact:** Cannot deploy fixes to Jetson due to local modifications
+
+### **Business Impact:**
+**Current State:** App unusable on Jetson - requires force quit every few minutes
+**Safety Risk:** Camera failures during robot operation can cause accidents
+**Productivity:** Complete workflow disruption for Jetson development
+
+### **Immediate Resolution Required:**
+
+**Step 1: Reset Jetson Repository (URGENT)**
+```bash
+# On Jetson - BACKUP any important local changes first
+ssh jetson
+cd ~/NiceBotUI
+git status  # See what needs to be saved
+# Backup important changes if any
+git reset --hard origin/main  # Reset to clean state
+git clean -fd  # Remove untracked files
+```
+
+**Step 2: Deploy Latest Fixes**
+```bash
+# From local machine
+./sync_to_jetson.sh --push-config
+```
+
+**Step 3: Verify Fixes Applied**
+```bash
+ssh jetson "cd ~/NiceBotUI && git log --oneline -1"
+# Should show: ee3311e Final cleanup...
+```
+
+### **Expected Results After Fix:**
+
+**Before (Current):**
+- ❌ App hangs every few minutes
+- ❌ Camera timeouts and "force quit" required
+- ❌ 15+ camera errors per session
+- ❌ Unusable for robot control
+
+**After (Fixed):**
+- ✅ Stable operation for hours
+- ✅ Coordinated camera access (no conflicts)
+- ✅ Jetson-optimized performance
+- ✅ Clean UI responsiveness
+
+### **Testing Protocol:**
+1. Start app: `run_logged python app.py`
+2. Monitor for camera errors in logs
+3. Test camera preview functionality
+4. Run for 30+ minutes without hangs
+5. Verify dashboard camera feeds work
+
+### **Implementation Priority:** CRITICAL (blocking Jetson development)
+**Effort Estimate:** 15 minutes (repo reset + sync)
+**Risk Level:** LOW (reset to known good state)
+**Downtime:** 5-10 minutes during reset/sync
+
+**URGENT ACTION REQUIRED:** Reset Jetson repository and deploy camera conflict fixes immediately.
+
+---
+
 ## 2025-01-15 17:30:00 - Camera Resource Conflict Investigation (CRITICAL SAFETY ISSUE)
 
 **Issue:** Cameras become "offline" after prolonged use in industrial robotics environment. App must be rock-solid stable for safety.

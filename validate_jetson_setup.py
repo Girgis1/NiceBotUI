@@ -64,8 +64,8 @@ def check_jetson_hardware():
             if "nvidia jetson" in model.lower():
                 is_jetson = True
                 jetson_model = model
-    except Exception as e:
-        print_warning(f"Could not read device tree model: {e}")
+    except Exception as exc:
+        print_warning(f"Could not read device tree model: {exc}")
 
     if is_jetson:
         print_success(f"Confirmed: Running on {jetson_model}")
