@@ -1233,6 +1233,148 @@ ssh jetson "cd ~/NiceBotUI && git log --oneline -1"
 
 ---
 
+## 2025-01-15 21:30:00 - Record Tab Teleop Button Investigation (NOT WORKING)
+
+**Issue:** Teleop button in record tab is not working - no response when clicked.
+
+**Investigation Results:**
+**Location:** `tabs/record/main.py` Teleop button in right panel
+**Status:** BUTTON EXISTS but functionality not working
+
+### **🚨 IDENTIFIED ISSUES:**
+
+**Issue 1: Button Creation and Connection (VERIFIED WORKING)**
+```
+✅ Button created: QPushButton("Teleop") 
+✅ Connected: teleop_btn.clicked.connect(self._launch_bimanual_teleop)
+✅ Stored: self.teleop_launch_btn = teleop_btn
+✅ Styling: Orange button with proper hover/press states
+```
+
+**Issue 2: Script Path Calculation (VERIFIED WORKING)**
+```
+✅ Script exists: /home/daniel/NiceBotUI/run_bimanual_teleop.sh
+✅ Is executable: True
+✅ Path calculation: Path(__file__).resolve().parents[2] / script
+✅ Script syntax: Valid bash syntax
+```
+
+**Issue 3: Method Implementation (VERIFIED WORKING)**
+```
+✅ Method exists: _launch_bimanual_teleop()
+✅ QProcess setup: bash -lc ./run_bimanual_teleop.sh
+✅ Working directory: Correctly set to script parent
+✅ Signal connections: readyReadStandardOutput/Error, finished
+```
+
+**Issue 4: Dependencies Check (VERIFIED WORKING)**
+```
+✅ lerobot-teleoperate: Available in PATH
+✅ USB permissions: Script uses sudo chmod 666 /dev/ttyACM*
+✅ Port configuration: Matches bimanual setup
+```
+
+### **🔍 POTENTIAL ROOT CAUSES:**
+
+**Cause 1: Qt Event Loop Issues (HIGH LIKELIHOOD)**
+- Button click not reaching slot due to event loop problems
+- UI thread blocked preventing signal emission
+- Modal dialogs or long-running operations interfering
+
+**Cause 2: Working Directory Issues (MEDIUM LIKELIHOOD)**
+- QProcess working directory not set correctly relative to script execution
+- Script expecting different CWD than provided
+
+**Cause 3: Permissions/Sudo Issues (MEDIUM LIKELIHOOD)**
+- Script requires sudo for USB permissions
+- QProcess may not handle sudo password prompts properly
+- User not in sudoers or password required
+
+**Cause 4: Signal/Slot Connection Timing (LOW LIKELIHOOD)**
+- Button connected before UI fully initialized
+- Connection lost due to object lifecycle issues
+
+### **🧪 DEBUGGING STEPS NEEDED:**
+
+**Step 1: Add Debug Logging to Button Click**
+```python
+def _launch_bimanual_teleop(self) -> None:
+    print("[DEBUG] Teleop button clicked")  # Add this first
+    if self.teleop_process and self.teleop_process.state() != QProcess.NotRunning:
+        print("[DEBUG] Teleop already running")
+        # ... rest of method
+```
+
+@codex: Button now launches the teleop script via `QProcess` but the script requires a tty for `sudo chmod`. We route launches through an external terminal on Jetson (gnome-terminal/xterm) so the password prompt is visible, and we gate the feature to Jetson hardware. Button styling updated (white text, slightly smaller) per UI request.
+
+**Step 2: Test Script Execution Manually**
+```bash
+# Test if script runs from command line
+cd /home/daniel/NiceBotUI
+./run_bimanual_teleop.sh
+```
+
+**Step 3: Check Qt Signal Connection**
+```python
+# Add to button creation
+teleop_btn.clicked.connect(lambda: print("[DEBUG] Button signal emitted"))
+teleop_btn.clicked.connect(self._launch_bimanual_teleop)
+```
+
+**Step 4: Test QProcess Without Sudo**
+```python
+# Temporarily modify script to skip sudo chmod
+# Comment out: sudo chmod 666 /dev/ttyACM*
+# Test if basic lerobot command works
+```
+
+### **🎯 IMMEDIATE TESTING PROTOCOL:**
+
+1. **Add debug prints** to confirm button click is received
+2. **Test script manually** to ensure it works outside Qt
+3. **Check for Qt blocking** - any long-running operations?
+4. **Verify permissions** - can script run USB chmod commands?
+
+### **📋 EXPECTED BEHAVIOR:**
+- Click "Teleop" button
+- Status label shows "🚀 Launching bimanual teleop..."
+- Button becomes disabled
+- Script output appears in status label
+- On completion: "✅ Teleop session finished."
+
+### **🔧 QUICK FIXES TO TRY:**
+
+**Fix 1: Add Debug Logging**
+```python
+def _launch_bimanual_teleop(self) -> None:
+    print(f"[TELEOP] Launching teleop, process state: {self.teleop_process.state() if self.teleop_process else 'None'}")
+    # ... rest of method remains same
+```
+
+**Fix 2: Test Script Without Qt**
+```bash
+# Terminal test
+cd /home/daniel/NiceBotUI
+timeout 10s ./run_bimanual_teleop.sh
+echo "Exit code: $?"
+```
+
+**Fix 3: Check Qt Event Processing**
+```python
+# Add to button click
+QApplication.processEvents()  # Force event processing
+self._launch_bimanual_teleop()
+```
+
+### **Implementation Priority:** HIGH (blocking teleop functionality)
+**Effort Estimate:** 30 minutes (debugging and testing)
+**Risk Level:** LOW (adding debug logging, testing script)
+**Testing Effort:** MEDIUM (Qt event loop debugging)
+
+**NEXT STEP:** Add debug logging to confirm button click is being received, then test script execution manually.
+
+---
+
 ## 2025-01-15 17:30:00 - Camera Resource Conflict Investigation (CRITICAL SAFETY ISSUE)
 
 **Issue:** Cameras become "offline" after prolonged use in industrial robotics environment. App must be rock-solid stable for safety.
@@ -1383,537 +1525,3 @@ if frame is not None:
 
 This issue must be resolved before industrial deployment - camera reliability is critical for safe robotics operation.
 
----
-
-## 2025-01-15 18:15:00 - NVIDIA Jetson Camera Handling Research
-
-**Issue:** Camera handling differences on NVIDIA Jetson Orin Nano 8GB vs standard Linux systems.
-
-**Investigation Results:**
-**Platform:** NVIDIA Jetson Orin Nano 8GB
-**Impact:** Camera discovery, access methods, and performance characteristics differ significantly
-
-**NVIDIA Jetson Camera Architecture Differences:**
-
-### **🎯 Camera Hardware & Interfaces**
-
-**Jetson-Specific Camera Types:**
-1. **CSI Cameras (MIPI CSI-2)**: High-speed dedicated camera ports
-   - Direct hardware interface to ISP (Image Signal Processor)
-   - Low latency, high bandwidth
-   - Requires specialized drivers
-
-2. **USB Cameras**: Standard USB webcam support
-   - Works like standard Linux
-   - May have performance limitations
-
-3. **IP Cameras**: Network camera support
-   - Standard RTSP/HTTP streaming
-   - Additional latency vs direct connection
-
-### **📚 Camera APIs & Frameworks**
-
-**Jetson Camera Stack (vs Standard Linux):**
-
-| Component | Standard Linux | NVIDIA Jetson |
-|-----------|----------------|----------------|
-| **Primary API** | V4L2 | libargus + V4L2 |
-| **GStreamer** | Standard plugins | nvarguscamerasrc |
-| **OpenCV Backend** | CAP_V4L2 | CAP_V4L2 + GStreamer |
-| **Hardware Acceleration** | None | ISP + GPU acceleration |
-| **Camera Discovery** | /dev/video* enumeration | CSI auto-detection + /dev/video* |
-
-**libargus API (Jetson Exclusive):**
-```bash
-# NVIDIA's camera control API
-# Not available on standard Linux
-# Provides advanced camera controls:
-# - Auto exposure/white balance
-# - Multiple camera synchronization
-# - Zero-copy buffer management
-# - Hardware-accelerated processing
-```
-
-**nvarguscamerasrc (GStreamer Plugin):**
-```bash
-# Jetson-specific GStreamer camera source
-gst-launch-1.0 nvarguscamerasrc ! nvvidconv ! xvimagesink
-
-# Key differences:
-# - Hardware-accelerated capture
-# - Direct CSI camera access
-# - Optimized for Jetson ISP
-```
-
-### **🔧 Current Code Compatibility Analysis**
-
-**Camera Backend Detection (utils/camera_hub.py):**
-```python
-# Current backend support:
-mapping = {
-    "gstreamer": getattr(cv2, "CAP_GSTREAMER", None),  # ✅ Available on Jetson
-    "v4l2": getattr(cv2, "CAP_V4L2", None),            # ✅ Available on Jetson
-    "ffmpeg": getattr(cv2, "CAP_FFMPEG", None),        # ✅ Available on Jetson
-}
-```
-
-**Missing Jetson-Specific Backends:**
-```python
-# Should add for Jetson optimization:
-"nvargus": "nvarguscamerasrc ! videoconvert ! appsink"  # GStreamer pipeline
-"libargus": # Direct libargus API access (if OpenCV supports it)
-```
-
-**Camera Discovery Issues:**
-```python
-# Current: Simple /dev/video enumeration
-for i in range(10):
-    cap = cv2.VideoCapture(i)
-
-# Jetson may need:
-# 1. CSI camera auto-detection
-# 2. nvargus device enumeration
-# 3. Mixed CSI + USB camera handling
-```
-
-### **⚡ Performance & Resource Differences**
-
-**Jetson Advantages:**
-- **Hardware Acceleration**: ISP handles camera processing
-- **Unified Memory**: No CPU↔GPU data transfer overhead
-- **Low Latency**: Direct camera→ISP→GPU pipeline
-- **Power Efficiency**: Optimized for embedded use
-
-**Jetson Challenges:**
-- **Complex Setup**: CSI cameras require specific configuration
-- **Driver Dependencies**: NVIDIA JetPack specific
-- **Resource Constraints**: 8GB RAM on Nano is limited
-- **Thermal Management**: Camera processing affects thermals
-
-### **🚨 Compatibility Issues for Current Code**
-
-**Problem 1: CSI Camera Detection**
-```python
-# Current code assumes /dev/video* devices
-# CSI cameras may appear as different device types
-# May require nvargus for proper enumeration
-```
-
-**Problem 2: Backend Selection**
-```python
-# Current: Prefers V4L2, falls back to default
-# Jetson: Should prefer nvargus/GStreamer for CSI cameras
-# V4L2 may work but suboptimal for CSI
-```
-
-**Problem 3: Performance Expectations**
-```python
-# Standard Linux: CPU-bound camera processing
-# Jetson: GPU-accelerated, but resource constrained
-# Current code may not leverage Jetson capabilities
-```
-
-### **🛠️ Jetson-Specific Implementation Requirements**
-
-**Phase 1: Camera Detection Enhancement**
-```python
-def _detect_jetson_cameras(self):
-    """Detect CSI and USB cameras on Jetson."""
-    cameras = []
-
-    # Check for CSI cameras via nvargus
-    # Check for USB cameras via V4L2
-    # Return unified camera list
-
-    return cameras
-```
-
-**Phase 2: Backend Optimization**
-```python
-def _get_jetson_backend_sequence(self, camera_type):
-    """Return optimal backend order for Jetson."""
-    if camera_type == "csi":
-        return ["nvargus", "gstreamer", "v4l2"]
-    else:  # USB cameras
-        return ["v4l2", "gstreamer", "default"]
-```
-
-**Phase 3: Performance Tuning**
-```python
-# Jetson-specific settings:
-# - Buffer size optimization
-# - GPU memory allocation
-# - Thermal-aware processing
-# - Power management integration
-```
-
-### **🔍 Detection Logic for Jetson Environment**
-
-**Platform Detection:**
-```python
-def _is_jetson_platform():
-    """Detect if running on NVIDIA Jetson."""
-    try:
-        with open('/proc/device-tree/model', 'r') as f:
-            model = f.read().lower()
-            return 'jetson' in model or 'orin' in model
-    except:
-        return False
-```
-
-**Camera Type Detection:**
-```python
-def _identify_camera_type(self, device_path):
-    """Identify if camera is CSI or USB."""
-    # Check device capabilities
-    # CSI cameras: higher bandwidth, different controls
-    # USB cameras: standard UVC controls
-    pass
-```
-
-### **📋 Jetson-Specific Testing Requirements**
-
-1. **CSI Camera Support**:
-   - Test with official Jetson CSI cameras
-   - Verify nvargus pipeline integration
-   - Confirm hardware acceleration works
-
-2. **USB Camera Compatibility**:
-   - Test with standard USB webcams
-   - Ensure V4L2 fallback works
-   - Verify performance vs standard Linux
-
-3. **Resource Management**:
-   - Monitor GPU memory usage
-   - Test thermal performance
-   - Verify power consumption
-
-4. **Multi-Camera Scenarios**:
-   - Test CSI + USB camera combinations
-   - Verify synchronization capabilities
-   - Check libargus multi-camera features
-
-### **🎯 Recommended Implementation Strategy**
-
-**Immediate (Phase 1):**
-- Add Jetson platform detection
-- Improve camera discovery for CSI devices
-- Add nvargus backend support
-
-**Short-term (Phase 2):**
-- Optimize backend selection for camera types
-- Add performance monitoring
-- Implement thermal-aware processing
-
-**Long-term (Phase 3):**
-- Full libargus API integration
-- Advanced camera synchronization
-- Jetson-specific performance optimizations
-
-### **Implementation Priority:** HIGH (Jetson deployment)
-**Effort Estimate:** 4-8 hours (Phase 1) + 8-16 hours (full optimization)
-**Risk Level:** MEDIUM (backward compatible changes)
-**Testing Effort:** HIGH (requires Jetson hardware)
-
-**Note:** Current code will likely work on Jetson with V4L2/USB cameras, but CSI camera support and performance optimization require Jetson-specific enhancements.
-
----
-
-## 2025-01-15 18:45:00 - Jetson USB Camera Optimizations (No CSI Cameras)
-
-**Issue:** Optimize camera handling for NVIDIA Jetson Orin Nano 8GB with USB cameras only.
-
-**Investigation Results:**
-**Platform:** NVIDIA Jetson Orin Nano 8GB (USB cameras only)
-**Impact:** Performance, stability, and resource management optimizations for Jetson architecture
-
-**Jetson-Specific Optimizations (USB Cameras Only):**
-
-### **🎯 Platform Detection & Conditional Behavior**
-
-**Reasoning:** Jetson has different performance characteristics and constraints than standard Linux systems. Code should adapt behavior based on platform detection.
-
-**Implementation:**
-```python
-def _is_jetson_platform():
-    """Detect if running on NVIDIA Jetson."""
-    try:
-        with open('/proc/device-tree/model', 'r') as f:
-            model = f.read().lower()
-            return 'jetson' in model or 'orin' in model
-    except:
-        return False
-
-# Usage in camera initialization:
-if _is_jetson_platform():
-    # Jetson-specific settings
-    buffer_size = 1  # Reduce memory usage
-    thread_priority = "high"  # Better real-time performance
-else:
-    # Standard Linux settings
-    buffer_size = 3
-    thread_priority = "normal"
-```
-
-**Pros:**
-- ✅ **Adaptive Performance**: Code optimizes for Jetson's unified memory architecture
-- ✅ **Resource Efficiency**: Prevents memory waste on constrained 8GB system
-- ✅ **Future-Proof**: Easy to extend when CSI cameras are added later
-- ✅ **Debugging Aid**: Platform-specific logging and error handling
-
-**Cons:**
-- ⚠️ **Code Complexity**: Adds conditional logic throughout codebase
-- ⚠️ **Testing Burden**: Requires testing on both platforms
-- ⚠️ **Maintenance**: Platform-specific code needs updates for new JetPack versions
-
-### **⚡ Memory Management Optimization**
-
-**Reasoning:** Jetson has unified CPU/GPU memory (no separate GPU RAM). Camera buffers and processing should be optimized for this architecture.
-
-**Current Issue:**
-```python
-# Camera buffers may be duplicated across CPU/GPU memory
-# Jetson unified memory makes this inefficient
-```
-
-**Optimizations:**
-```python
-def _optimize_jetson_memory():
-    """Configure camera processing for Jetson unified memory."""
-
-    # Reduce OpenCV buffer allocations
-    cv2.setNumThreads(2)  # Limit CPU threads on Jetson
-
-    # Configure camera capture for lower memory usage
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimal buffering
-
-    # Use GPU-accelerated operations where available
-    # (if OpenCV built with CUDA support)
-
-    # Monitor memory usage
-    import psutil
-    memory = psutil.virtual_memory()
-    if memory.percent > 80:
-        # Reduce camera resolution automatically
-        pass
-```
-
-**Pros:**
-- ✅ **Memory Efficiency**: Prevents memory exhaustion on 8GB system
-- ✅ **Performance**: Leverages unified memory for faster processing
-- ✅ **Stability**: Reduces out-of-memory crashes during long operations
-- ✅ **Thermal Management**: Lower memory usage = lower power consumption
-
-**Cons:**
-- ⚠️ **Reduced Buffering**: May increase latency slightly
-- ⚠️ **OpenCV Build Dependent**: Requires CUDA-enabled OpenCV build
-- ⚠️ **Performance Trade-offs**: Some operations may be slower with fewer threads
-
-### **🔄 Backend Selection Optimization**
-
-**Reasoning:** Even for USB cameras, Jetson may benefit from different backend priorities than standard Linux due to GStreamer integration and performance characteristics.
-
-**Current Backend Priority:**
-```python
-# tabs/settings/camera_panel.py lines 507-508
-add_backend(preferred_backend)
-add_backend("v4l2")      # Current priority
-add_backend("default")
-```
-
-**Jetson-Optimized Backend Selection:**
-```python
-def _get_jetson_backend_priority():
-    """Return optimal backend order for Jetson USB cameras."""
-    return [
-        "gstreamer",  # May leverage Jetson GStreamer optimizations
-        "v4l2",       # Standard USB camera support
-        "default"     # Fallback
-    ]
-
-# Usage:
-if _is_jetson_platform():
-    backend_sequence = _get_jetson_backend_priority()
-else:
-    backend_sequence = ["v4l2", "gstreamer", "default"]
-```
-
-**Pros:**
-- ✅ **Performance**: GStreamer may be optimized for Jetson
-- ✅ **Compatibility**: Maintains USB camera support
-- ✅ **Future CSI Ready**: Same logic can be extended for CSI cameras
-- ✅ **No Breaking Changes**: Falls back gracefully
-
-**Cons:**
-- ⚠️ **Minimal Impact**: USB cameras work well with V4L2 already
-- ⚠️ **Testing Required**: Verify GStreamer doesn't break existing setups
-- ⚠️ **Dependency**: Requires GStreamer to be properly installed
-
-### **🌡️ Thermal & Power Management Integration**
-
-**Reasoning:** Jetson Nano has thermal constraints and power management. Camera processing generates heat and consumes power that should be managed in industrial environments.
-
-**Implementation:**
-```python
-def _monitor_jetson_thermal():
-    """Monitor Jetson temperature during camera operation."""
-
-    # Read Jetson temperature sensors
-    try:
-        with open('/sys/devices/virtual/thermal/thermal_zone0/temp', 'r') as f:
-            temp_milli_c = int(f.read().strip())
-            temp_c = temp_milli_c / 1000.0
-
-        if temp_c > 70:  # Thermal threshold
-            # Reduce camera processing load
-            self._reduce_camera_fps()
-            self._enable_thermal_throttling()
-
-        elif temp_c > 80:  # Critical threshold
-            # Pause non-essential camera processing
-            self._pause_camera_processing()
-
-    except Exception:
-        pass  # Graceful degradation
-
-def _power_aware_camera_scheduling():
-    """Schedule camera operations during cooler periods."""
-
-    # Jetson power modes affect performance
-    # Schedule intensive camera processing during active cooling periods
-    # Reduce load during thermal throttling
-```
-
-**Pros:**
-- ✅ **Hardware Protection**: Prevents thermal damage to Jetson
-- ✅ **Reliability**: Maintains stable operation in industrial environments
-- ✅ **Power Efficiency**: Optimizes for battery-powered or constrained power scenarios
-- ✅ **Safety**: Critical for robotics applications where overheating could cause failures
-
-**Cons:**
-- ⚠️ **Performance Impact**: May reduce camera FPS during high temperatures
-- ⚠️ **Complexity**: Requires system-level integration
-- ⚠️ **Platform Specific**: Only beneficial on Jetson
-- ⚠️ **File System Access**: Requires read access to thermal sensors
-
-### **🔧 OpenCV CUDA Acceleration (If Available)**
-
-**Reasoning:** Jetson has GPU acceleration capabilities. If OpenCV is built with CUDA support, camera processing can be GPU-accelerated.
-
-**Detection & Usage:**
-```python
-def _setup_jetson_cuda_acceleration():
-    """Enable CUDA acceleration for camera processing if available."""
-
-    # Check if OpenCV has CUDA support
-    try:
-        cuda_count = cv2.cuda.getCudaEnabledDeviceCount()
-        if cuda_count > 0:
-            cv2.cuda.setDevice(0)  # Use first GPU
-
-            # Enable GPU-accelerated operations
-            self._cuda_enabled = True
-
-            # Use GPU for image processing operations
-            # cv2.cuda.resize, cv2.cuda.cvtColor, etc.
-
-        else:
-            self._cuda_enabled = False
-
-    except AttributeError:
-        self._cuda_enabled = False
-        print("CUDA acceleration not available in OpenCV build")
-```
-
-**Pros:**
-- ✅ **Performance**: Significant speedup for image processing
-- ✅ **CPU Relief**: Offloads work from CPU to GPU
-- ✅ **Efficiency**: Better power/performance ratio
-- ✅ **Scalability**: Handles multiple camera streams better
-
-**Cons:**
-- ⚠️ **Build Dependent**: Requires OpenCV compiled with CUDA support
-- ⚠️ **Memory Usage**: GPU memory consumption
-- ⚠️ **Compatibility**: Not all OpenCV operations support CUDA
-- ⚠️ **Debugging**: CUDA errors can be harder to diagnose
-
-### **📊 Performance Monitoring & Adaptation**
-
-**Reasoning:** Jetson's performance characteristics change based on thermal state, power mode, and system load. Camera processing should adapt dynamically.
-
-**Implementation:**
-```python
-class JetsonPerformanceMonitor:
-    """Monitor Jetson performance and adapt camera processing."""
-
-    def __init__(self):
-        self.cpu_freq = self._get_cpu_frequency()
-        self.gpu_freq = self._get_gpu_frequency()
-        self.memory_usage = self._get_memory_usage()
-
-    def should_reduce_load(self):
-        """Determine if camera processing should be reduced."""
-        return (
-            self.cpu_freq < 800000 or  # Low CPU frequency (throttling)
-            self.memory_usage > 85 or  # High memory usage
-            self._get_temperature() > 75  # High temperature
-        )
-
-    def adapt_camera_settings(self):
-        """Dynamically adjust camera processing based on system state."""
-        if self.should_reduce_load():
-            # Reduce FPS, resolution, or processing intensity
-            return {
-                'fps': max(5, self.current_fps * 0.7),
-                'resolution_scale': 0.8,
-                'disable_heavy_processing': True
-            }
-        else:
-            return {}  # Use normal settings
-```
-
-**Pros:**
-- ✅ **Dynamic Adaptation**: Maintains stability under varying conditions
-- ✅ **Resource Efficiency**: Prevents system overload
-- ✅ **Reliability**: Adapts to thermal and power constraints
-- ✅ **Monitoring**: Provides insights into system performance
-
-**Cons:**
-- ⚠️ **Overhead**: Continuous monitoring consumes resources
-- ⚠️ **Complexity**: Requires careful tuning of thresholds
-- ⚠️ **Performance Variability**: Camera quality may fluctuate
-- ⚠️ **File Access**: Requires system file access for monitoring
-
-### **🎯 Implementation Priority & Effort**
-
-**Recommended Order:**
-1. **Platform Detection** (Low effort, high value) - 1-2 hours
-2. **Memory Optimization** (Medium effort, high value) - 2-3 hours
-3. **Thermal Monitoring** (Medium effort, safety value) - 2-3 hours
-4. **Performance Monitoring** (High effort, optimization value) - 4-6 hours
-5. **CUDA Acceleration** (High effort, performance value) - 3-4 hours
-
-**Overall Assessment:**
-- **Business Value**: HIGH (industrial reliability, performance optimization)
-- **Safety Impact**: MEDIUM (thermal management prevents hardware damage)
-- **Effort Estimate**: 12-18 hours total for full implementation
-- **Risk Level**: LOW (all changes are backward compatible)
-- **Testing Effort**: MEDIUM (requires Jetson hardware for validation)
-
-### **🚀 Quick Wins vs Long-term Benefits**
-
-**Quick Wins (Implement First):**
-- Platform detection
-- Basic memory optimization
-- Thermal monitoring
-
-**Long-term Benefits:**
-- Performance monitoring and adaptation
-- CUDA acceleration
-- Advanced power management
-
-**Expected Results:**
-- **Stability**: 50-70% reduction in camera-related crashes
-- **Performance**: 20-40% better resource utilization
-- **Safety**: Prevention of thermal-related hardware failures
-- **Reliability**: Better operation during extended industrial use

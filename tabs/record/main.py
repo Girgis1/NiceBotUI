@@ -4,6 +4,7 @@ Allows recording sequences of motor positions for playback
 """
 
 import sys
+import shutil
 from pathlib import Path
 from functools import partial
 from typing import Optional
@@ -13,7 +14,7 @@ from PySide6.QtWidgets import (
     QComboBox, QInputDialog, QMessageBox, QLineEdit, QSlider,
     QGridLayout, QFrame
 )
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal, QProcess
 from PySide6.QtGui import QFont
 
 # Add parent directory to path
@@ -79,6 +80,7 @@ class RecordTab(
         self.teleop_hold_timer = QTimer()
         self.teleop_hold_timer.setInterval(180)
         self.teleop_hold_timer.timeout.connect(self._apply_active_teleop_step)
+        self.teleop_process: QProcess | None = None
 
         self.init_ui()
         self.refresh_action_list()
@@ -524,6 +526,64 @@ class RecordTab(
             except Exception:
                 pass
 
+    def _launch_bimanual_teleop(self) -> None:
+        if self.teleop_process and self.teleop_process.state() != QProcess.NotRunning:
+            self.status_label.setText("⏳ Teleop already running…")
+            return
+
+        script_path = Path(__file__).resolve().parents[2] / "run_bimanual_teleop.sh"
+        if not script_path.exists():
+            self.status_label.setText(f"❌ Teleop script missing: {script_path}")
+            return
+
+        if not Path("/etc/nv_tegra_release").exists():
+            self.status_label.setText("⚠️ Teleop available only on the Jetson device.")
+            return
+
+        terminal = shutil.which("gnome-terminal") or shutil.which("xterm")
+        if terminal:
+            if "gnome-terminal" in terminal:
+                args = ["--", "bash", "-lc", "./run_bimanual_teleop.sh; read -p 'Press Enter to close…'"]
+            else:
+                args = ["-hold", "-e", "./run_bimanual_teleop.sh"]
+            started = QProcess.startDetached(terminal, args, str(script_path.parent))
+            if started:
+                self.status_label.setText("🟠 Teleop launching in external terminal…")
+            else:
+                self.status_label.setText("❌ Failed to launch teleop terminal.")
+            return
+
+        self.status_label.setText("🚀 Launching bimanual teleop…")
+        self.teleop_launch_btn.setEnabled(False)
+
+        process = QProcess(self)
+        process.setProgram("bash")
+        process.setArguments(["-lc", "./run_bimanual_teleop.sh"])
+        process.setWorkingDirectory(str(script_path.parent))
+        process.readyReadStandardOutput.connect(lambda: self._handle_teleop_output(process.readAllStandardOutput(), False))
+        process.readyReadStandardError.connect(lambda: self._handle_teleop_output(process.readAllStandardError(), True))
+        process.finished.connect(self._handle_teleop_finished)
+        process.start()
+        self.teleop_process = process
+
+    def _handle_teleop_output(self, data, is_error: bool) -> None:
+        try:
+            text = bytes(data).decode("utf-8", errors="ignore").strip()
+        except Exception:
+            text = ""
+        if not text:
+            return
+        prefix = "⚠️" if is_error else "🟠"
+        self.status_label.setText(f"{prefix} {text}")
+
+    def _handle_teleop_finished(self, exit_code: int, status: QProcess.ExitStatus) -> None:
+        if exit_code == 0 and status == QProcess.NormalExit:
+            self.status_label.setText("✅ Teleop session finished.")
+        else:
+            self.status_label.setText("⚠️ Teleop script exited unexpectedly.")
+        self.teleop_launch_btn.setEnabled(True)
+        self.teleop_process = None
+
     def _create_teleop_panel(self) -> QWidget:
         """Create keypad teleoperation panel - 5 row layout for 600px height."""
 
@@ -733,6 +793,33 @@ class RecordTab(
         panel_layout.addWidget(self.torque_status_label)
 
         panel_layout.addStretch()
+
+        teleop_btn = QPushButton("Teleop")
+        teleop_btn.setMinimumHeight(64)
+        teleop_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #FF9800;
+                color: #FFFFFF;
+                border: none;
+                border-radius: 10px;
+                font-size: 20px;
+                font-weight: bold;
+                padding: 12px;
+            }
+            QPushButton:hover {
+                background-color: #FB8C00;
+            }
+            QPushButton:pressed {
+                background-color: #EF6C00;
+            }
+            QPushButton:disabled {
+                background-color: #BDBDBD;
+                color: #424242;
+            }
+        """)
+        teleop_btn.clicked.connect(self._launch_bimanual_teleop)
+        panel_layout.addWidget(teleop_btn)
+        self.teleop_launch_btn = teleop_btn
 
         return teleop_panel
 

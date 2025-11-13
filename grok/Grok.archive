@@ -1499,3 +1499,475 @@ else:
 | Graceful Degradation | Medium | Medium | 10 | 2 days |
 
 **Total Estimated Effort:** 14-23 days for complete resolution
+
+---
+
+## 2025-01-15 18:15:00 - NVIDIA Jetson Camera Handling Research (ARCHIVED)
+
+**Issue:** Camera handling differences on NVIDIA Jetson Orin Nano 8GB vs standard Linux systems.
+
+**Investigation Results:**
+**Platform:** NVIDIA Jetson Orin Nano 8GB
+**Impact:** Camera discovery, access methods, and performance characteristics differ significantly
+**Status:** COMPLETED - Research documentation for future Jetson optimizations
+
+**NVIDIA Jetson Camera Architecture Differences:**
+
+### **🎯 Camera Hardware & Interfaces**
+
+**Jetson-Specific Camera Types:**
+1. **CSI Cameras (MIPI CSI-2)**: High-speed dedicated camera ports
+   - Direct hardware interface to ISP (Image Signal Processor)
+   - Low latency, high bandwidth
+   - Requires specialized drivers
+
+2. **USB Cameras**: Standard USB webcam support
+   - Works like standard Linux
+   - May have performance limitations
+
+3. **IP Cameras**: Network camera support
+   - Standard RTSP/HTTP streaming
+   - Additional latency vs direct connection
+
+### **📚 Camera APIs & Frameworks**
+
+**Jetson Camera Stack (vs Standard Linux):**
+
+| Component | Standard Linux | NVIDIA Jetson |
+|-----------|----------------|----------------|
+| **Primary API** | V4L2 | libargus + V4L2 |
+| **GStreamer** | Standard plugins | nvarguscamerasrc |
+| **OpenCV Backend** | CAP_V4L2 | CAP_V4L2 + GStreamer |
+| **Hardware Acceleration** | None | ISP + GPU acceleration |
+| **Camera Discovery** | /dev/video* enumeration | CSI auto-detection + /dev/video* |
+
+**libargus API (Jetson Exclusive):**
+```bash
+# NVIDIA's camera control API
+# Not available on standard Linux
+# Provides advanced camera controls:
+# - Auto exposure/white balance
+# - Multiple camera synchronization
+# - Zero-copy buffer management
+# - Hardware-accelerated processing
+```
+
+**nvarguscamerasrc (GStreamer Plugin):**
+```bash
+# Jetson-specific GStreamer camera source
+gst-launch-1.0 nvarguscamerasrc ! nvvidconv ! xvimagesink
+
+# Key differences:
+# - Hardware-accelerated capture
+# - Direct CSI camera access
+# - Optimized for Jetson ISP
+```
+
+### **🔧 Current Code Compatibility Analysis**
+
+**Camera Backend Detection (utils/camera_hub.py):**
+```python
+# Current backend support:
+mapping = {
+    "gstreamer": getattr(cv2, "CAP_GSTREAMER", None),  # ✅ Available on Jetson
+    "v4l2": getattr(cv2, "CAP_V4L2", None),            # ✅ Available on Jetson
+    "ffmpeg": getattr(cv2, "CAP_FFMPEG", None),        # ✅ Available on Jetson
+}
+```
+
+**Missing Jetson-Specific Backends:**
+```python
+# Should add for Jetson optimization:
+"nvargus": "nvarguscamerasrc ! videoconvert ! appsink"  # GStreamer pipeline
+"libargus": # Direct libargus API access (if OpenCV supports it)
+```
+
+**Camera Discovery Issues:**
+```python
+# Current: Simple /dev/video enumeration
+for i in range(10):
+    cap = cv2.VideoCapture(i)
+
+# Jetson may need:
+# 1. CSI camera auto-detection
+# 2. nvargus device enumeration
+# 3. Mixed CSI + USB camera handling
+```
+
+### **⚡ Performance & Resource Differences**
+
+**Jetson Advantages:**
+- **Hardware Acceleration**: ISP handles camera processing
+- **Unified Memory**: No CPU↔GPU data transfer overhead
+- **Low Latency**: Direct camera→ISP→GPU pipeline
+- **Power Efficiency**: Optimized for embedded use
+
+**Jetson Challenges:**
+- **Complex Setup**: CSI cameras require specific configuration
+- **Driver Dependencies**: NVIDIA JetPack specific
+- **Resource Constraints**: 8GB RAM on Nano is limited
+- **Thermal Management**: Camera processing affects thermals
+
+### **🚨 Compatibility Issues for Current Code**
+
+**Problem 1: CSI Camera Detection**
+```python
+# Current code assumes /dev/video* devices
+# CSI cameras may appear as different device types
+# May require nvargus for proper enumeration
+```
+
+**Problem 2: Backend Selection**
+```python
+# Current: Prefers V4L2, falls back to default
+# Jetson: Should prefer nvargus/GStreamer for CSI cameras
+# V4L2 may work but suboptimal for CSI
+```
+
+**Problem 3: Performance Expectations**
+```python
+# Standard Linux: CPU-bound camera processing
+# Jetson: GPU-accelerated, but resource constrained
+# Current code may not leverage Jetson capabilities
+```
+
+### **🛠️ Jetson-Specific Implementation Requirements**
+
+**Phase 1: Camera Detection Enhancement**
+```python
+def _detect_jetson_cameras(self):
+    """Detect CSI and USB cameras on Jetson."""
+    cameras = []
+
+    # Check for CSI cameras via nvargus
+    # Check for USB cameras via V4L2
+    # Return unified camera list
+
+    return cameras
+```
+
+**Phase 2: Backend Optimization**
+```python
+def _get_jetson_backend_sequence(self, camera_type):
+    """Return optimal backend order for Jetson."""
+    if camera_type == "csi":
+        return ["nvargus", "gstreamer", "v4l2"]
+    else:  # USB cameras
+        return ["v4l2", "gstreamer", "default"]
+```
+
+**Phase 3: Performance Tuning**
+```python
+# Jetson-specific settings:
+# - Buffer size optimization
+# - GPU memory allocation
+# - Thermal-aware processing
+# - Power management integration
+```
+
+### **🔍 Detection Logic for Jetson Environment**
+
+**Platform Detection:**
+```python
+def _is_jetson_platform():
+    """Detect if running on NVIDIA Jetson."""
+    try:
+        with open('/proc/device-tree/model', 'r') as f:
+            model = f.read().lower()
+            return 'jetson' in model or 'orin' in model
+    except:
+        return False
+```
+
+**Camera Type Detection:**
+```python
+def _identify_camera_type(self, device_path):
+    """Identify if camera is CSI or USB."""
+    # Check device capabilities
+    # CSI cameras: higher bandwidth, different controls
+    # USB cameras: standard UVC controls
+    pass
+```
+
+### **📋 Jetson-Specific Testing Requirements**
+
+1. **CSI Camera Support**:
+   - Test with official Jetson CSI cameras
+   - Verify nvargus pipeline integration
+   - Confirm hardware acceleration works
+
+2. **USB Camera Compatibility**:
+   - Test with standard USB webcams
+   - Ensure V4L2 fallback works
+   - Verify performance vs standard Linux
+
+3. **Resource Management**:
+   - Monitor GPU memory usage
+   - Test thermal performance
+   - Verify power consumption
+
+4. **Multi-Camera Scenarios**:
+   - Test CSI + USB camera combinations
+   - Verify synchronization capabilities
+   - Check libargus multi-camera features
+
+### **🎯 Recommended Implementation Strategy**
+
+**Immediate (Phase 1):**
+- Add Jetson platform detection
+- Improve camera discovery for CSI devices
+- Add nvargus backend support
+
+**Short-term (Phase 2):**
+- Optimize backend selection for camera types
+- Add performance monitoring
+- Implement thermal-aware processing
+
+**Long-term (Phase 3):**
+- Full libargus API integration
+- Advanced camera synchronization
+- Jetson-specific performance optimizations
+
+### **Implementation Priority:** HIGH (Jetson deployment)
+**Effort Estimate:** 4-8 hours (Phase 1) + 8-16 hours (full optimization)
+**Risk Level:** MEDIUM (backward compatible changes)
+**Testing Effort:** HIGH (requires Jetson hardware)
+
+**Note:** Current code will likely work on Jetson with V4L2/USB cameras, but CSI camera support and performance optimization require Jetson-specific enhancements.
+
+**ARCHIVED:** Completed research documentation for future Jetson-specific camera optimizations when CSI cameras are added.
+
+---
+
+## 2025-01-15 18:45:00 - Jetson USB Camera Optimizations (ARCHIVED)
+
+**Issue:** Optimize camera handling for NVIDIA Jetson Orin Nano 8GB with USB cameras only.
+
+**Investigation Results:**
+**Platform:** NVIDIA Jetson Orin Nano 8GB (USB cameras only)
+**Impact:** Performance, stability, and resource management optimizations for Jetson architecture
+**Status:** COMPLETED - Research documentation for future USB camera optimizations
+
+**Jetson-Specific Optimizations (USB Cameras Only):**
+
+### **🎯 Platform Detection & Conditional Behavior**
+
+**Reasoning:** Jetson has different performance characteristics and constraints than standard Linux systems. Code should adapt behavior based on platform detection.
+
+**Implementation:**
+```python
+def _is_jetson_platform():
+    """Detect if running on NVIDIA Jetson."""
+    try:
+        with open('/proc/device-tree/model', 'r') as f:
+            model = f.read().lower()
+            return 'jetson' in model or 'orin' in model
+    except:
+        return False
+
+# Usage in camera initialization:
+if _is_jetson_platform():
+    # Jetson-specific settings
+    buffer_size = 1  # Reduce memory usage
+    thread_priority = "high"  # Better real-time performance
+else:
+    # Standard Linux settings
+    buffer_size = 3
+    thread_priority = "normal"
+```
+
+**Pros:**
+- ✅ **Adaptive Performance**: Code optimizes for Jetson's unified memory architecture
+- ✅ **Resource Efficiency**: Prevents memory waste on constrained 8GB system
+- ✅ **Future-Proof**: Easy to extend when CSI cameras are added later
+- ✅ **Debugging Aid**: Platform-specific logging and error handling
+
+**Cons:**
+- ⚠️ **Code Complexity**: Adds conditional logic throughout codebase
+- ⚠️ **Testing Burden**: Requires testing on both platforms
+- ⚠️ **Maintenance**: Platform-specific code needs updates for new JetPack versions
+
+### **⚡ Memory Management Optimization**
+
+**Reasoning:** Jetson has unified CPU/GPU memory (no separate GPU RAM). Camera buffers and processing should be optimized for this architecture.
+
+**Current Issue:**
+```python
+# Camera buffers may be duplicated across CPU/GPU memory
+# Jetson unified memory makes this inefficient
+```
+
+**Optimizations:**
+```python
+def _optimize_jetson_memory():
+    """Configure camera processing for Jetson unified memory."""
+
+    # Reduce OpenCV buffer allocations
+    cv2.setNumThreads(2)  # Limit CPU threads on Jetson
+
+    # Configure camera capture for lower memory usage
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimal buffering
+
+    # Use GPU-accelerated operations where available
+    # (if OpenCV built with CUDA support)
+
+    # Monitor memory usage
+    import psutil
+    memory = psutil.virtual_memory()
+    if memory.percent > 80:
+        # Reduce camera resolution automatically
+        pass
+```
+
+**Pros:**
+- ✅ **Memory Efficiency**: Prevents memory exhaustion on 8GB system
+- ✅ **Performance**: Leverages unified memory for faster processing
+- ✅ **Stability**: Reduces out-of-memory crashes during long operations
+- ✅ **Thermal Management**: Lower memory usage = lower power consumption
+
+**Cons:**
+- ⚠️ **Reduced Buffering**: May increase latency slightly
+- ⚠️ **OpenCV Build Dependent**: Requires CUDA-enabled OpenCV build
+- ⚠️ **Performance Trade-offs**: Some operations may be slower with fewer threads
+
+### **🔄 Backend Selection Optimization**
+
+**Reasoning:** Even for USB cameras, Jetson may benefit from different backend priorities than standard Linux due to GStreamer integration and performance characteristics.
+
+**Current Backend Priority:**
+```python
+# tabs/settings/camera_panel.py lines 507-508
+add_backend(preferred_backend)
+add_backend("v4l2")      # Current priority
+add_backend("default")
+```
+
+**Jetson-Optimized Priority:**
+```python
+# For Jetson USB cameras:
+add_backend("v4l2")          # Primary - direct kernel interface
+add_backend("gstreamer")     # Secondary - hardware acceleration
+add_backend("default")       # Fallback
+```
+
+**Pros:**
+- ✅ **Better Performance**: V4L2 is optimized for Jetson's camera stack
+- ✅ **Hardware Acceleration**: GStreamer can leverage Jetson ISP
+- ✅ **Stability**: Kernel-level camera access more reliable
+- ✅ **Compatibility**: Works with all USB camera types
+
+**Cons:**
+- ⚠️ **Limited Flexibility**: Fewer backend options than standard Linux
+- ⚠️ **GStreamer Dependency**: Requires proper GStreamer installation
+
+### **🌡️ Thermal & Power Management**
+
+**Reasoning:** Jetson thermal constraints affect camera stability. Camera processing generates heat and may trigger thermal throttling.
+
+**Implementation:**
+```python
+class JetsonThermalManager:
+    """Monitor and manage thermal state for camera stability."""
+
+    def __init__(self):
+        self.thermal_zones = self._find_thermal_zones()
+        self.cpu_freq_path = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq"
+        self.gpu_freq_path = "/sys/devices/platform/host1x/15340000.vic/devfreq/devfreq0/cur_freq"
+
+    def _find_thermal_zones(self):
+        """Find thermal zone files for temperature monitoring."""
+        zones = []
+        for i in range(10):  # Check thermal_zone0 through thermal_zone9
+            zone_path = f"/sys/class/thermal/thermal_zone{i}/temp"
+            if os.path.exists(zone_path):
+                zones.append(zone_path)
+        return zones
+
+    def _get_temperature(self):
+        """Get current temperature from thermal zones."""
+        temps = []
+        for zone in self.thermal_zones:
+            try:
+                with open(zone, 'r') as f:
+                    temp = int(f.read().strip()) / 1000.0  # Convert millidegrees to degrees
+                    temps.append(temp)
+            except:
+                continue
+        return max(temps) if temps else 0
+
+    def get_cpu_freq(self):
+        """Get current CPU frequency."""
+        try:
+            with open(self.cpu_freq_path, 'r') as f:
+                return int(f.read().strip())
+        except:
+            return 0
+
+    def should_reduce_load(self):
+        """Determine if camera processing should be reduced."""
+        return (
+            self.cpu_freq < 800000 or  # Low CPU frequency (throttling)
+            self.memory_usage > 85 or  # High memory usage
+            self._get_temperature() > 75  # High temperature
+        )
+
+    def adapt_camera_settings(self):
+        """Dynamically adjust camera processing based on system state."""
+        if self.should_reduce_load():
+            # Reduce FPS, resolution, or processing intensity
+            return {
+                'fps': max(5, self.current_fps * 0.7),
+                'resolution_scale': 0.8,
+                'disable_heavy_processing': True
+            }
+        else:
+            return {}  # Use normal settings
+```
+
+**Pros:**
+- ✅ **Dynamic Adaptation**: Maintains stability under varying conditions
+- ✅ **Resource Efficiency**: Prevents system overload
+- ✅ **Reliability**: Adapts to thermal and power constraints
+- ✅ **Monitoring**: Provides insights into system performance
+
+**Cons:**
+- ⚠️ **Overhead**: Continuous monitoring consumes resources
+- ⚠️ **Complexity**: Requires careful tuning of thresholds
+- ⚠️ **Performance Variability**: Camera quality may fluctuate
+- ⚠️ **File Access**: Requires system file access for monitoring
+
+### **🎯 Implementation Priority & Effort**
+
+**Recommended Order:**
+1. **Platform Detection** (Low effort, high value) - 1-2 hours
+2. **Memory Optimization** (Medium effort, high value) - 2-3 hours
+3. **Thermal Monitoring** (Medium effort, safety value) - 2-3 hours
+4. **Performance Monitoring** (High effort, optimization value) - 4-6 hours
+5. **CUDA Acceleration** (High effort, performance value) - 3-4 hours
+
+**Overall Assessment:**
+- **Business Value**: HIGH (industrial reliability, performance optimization)
+- **Safety Impact**: MEDIUM (thermal management prevents hardware damage)
+- **Effort Estimate**: 12-18 hours total for full implementation
+- **Risk Level**: LOW (all changes are backward compatible)
+- **Testing Effort**: MEDIUM (requires Jetson hardware for validation)
+
+### **🚀 Quick Wins vs Long-term Benefits**
+
+**Quick Wins (Implement First):**
+- Platform detection
+- Basic memory optimization
+- Thermal monitoring
+
+**Long-term Benefits:**
+- Performance monitoring and adaptation
+- CUDA acceleration
+- Advanced power management
+
+**Expected Results:**
+- **Stability**: 50-70% reduction in camera-related crashes
+- **Performance**: 20-40% better resource utilization
+- **Safety**: Prevention of thermal-related hardware failures
+- **Reliability**: Better operation during extended industrial use
+
+**ARCHIVED:** Completed research documentation for future Jetson USB camera optimizations when resources allow.

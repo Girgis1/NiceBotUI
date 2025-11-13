@@ -24,6 +24,7 @@ from PySide6.QtGui import QFont, QColor, QImage, QPixmap
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from utils.app_state import AppStateStore
 from utils.camera_hub import CameraStreamHub
 from utils.config_compat import (
     format_arm_label,
@@ -45,6 +46,8 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
         super().__init__(parent)
         self.config = config
         self.device_manager = device_manager
+        self.state_store = AppStateStore.instance()
+        self._robot_capable = True
         self.worker = None
         self.execution_worker = None  # New unified execution worker
         self.start_time = None
@@ -123,6 +126,10 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
                 self.device_manager.robot_arm_status_changed.connect(self.on_robot_arm_status_changed)
             self.device_manager.camera_status_changed.connect(self.on_camera_status_changed)
             self.device_manager.discovery_log.connect(self.on_discovery_log)
+
+        # Subscribe to app-state updates for cross-tab consistency
+        self.state_store.state_changed.connect(self._on_app_state_changed)
+        self._apply_state_snapshot()
         
         # Timers
         self.timer = QTimer()
@@ -759,3 +766,46 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
             indicator = indicators[idx]
             if indicator:
                 indicator.set_null()
+
+    # ------------------------------------------------------------------
+    # Shared state integration
+
+    def _apply_state_snapshot(self) -> None:
+        snapshot = self.state_store.snapshot()
+        robot_status = snapshot.get("robot.status")
+        if robot_status is not None:
+            self.on_robot_status_changed(robot_status)
+
+        if "capabilities.robot.followers" in snapshot:
+            self._robot_capable = bool(snapshot["capabilities.robot.followers"])
+            self._update_run_capability()
+
+        for key, value in snapshot.items():
+            if key.startswith("robot.arm."):
+                arm_name = key.split(".", 2)[2]
+                self.on_robot_arm_status_changed(arm_name, value)
+            elif key.startswith("cameras."):
+                cam_name = key.split(".", 1)[1]
+                self.on_camera_status_changed(cam_name, value)
+
+    def _on_app_state_changed(self, key: str, value) -> None:
+        if key == "robot.status":
+            self.on_robot_status_changed(value)
+        elif key.startswith("robot.arm."):
+            arm_name = key.split(".", 2)[2]
+            self.on_robot_arm_status_changed(arm_name, value)
+        elif key.startswith("cameras."):
+            cam_name = key.split(".", 1)[1]
+            self.on_camera_status_changed(cam_name, value)
+        elif key == "capabilities.robot.followers":
+            self._robot_capable = bool(value)
+            self._update_run_capability()
+
+    def _update_run_capability(self) -> None:
+        current_status = getattr(self, "_robot_status", "empty")
+        can_run = self._robot_capable and current_status != "empty"
+        toggle = getattr(self, "start_stop_btn", None)
+        if toggle is not None:
+            toggle.setEnabled(can_run or self.is_running)
+        if not can_run and not self.is_running and hasattr(self, "status_label"):
+            self.status_label.setText("⚠️ Robot unavailable — connect hardware to run sequences.")

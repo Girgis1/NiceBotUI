@@ -683,6 +683,8 @@ class DashboardExecutionMixin:
                 else:
                     self.robot_indicator2.set_connected(status == "online")
         self._update_status_summaries()
+        if hasattr(self, "_update_run_capability"):
+            self._update_run_capability()
 
     def on_robot_arm_status_changed(self, arm_name: str, status: str):
         """Handle per-arm robot status changes."""

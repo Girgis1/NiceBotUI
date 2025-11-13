@@ -14,6 +14,8 @@ from typing import Dict, List, Optional
 from PySide6.QtCore import QObject, Signal
 
 from utils.camera_backend import open_capture
+from utils.app_state import AppStateStore
+from utils.capabilities import detect_capabilities
 from utils.camera_support import prepare_camera_source
 from utils.logging_utils import log_exception
 
@@ -35,6 +37,7 @@ class DeviceManager(QObject):
     def __init__(self, config: dict):
         super().__init__()
         self.config = config
+        self._state_store = AppStateStore.instance()
         
         # Device status tracking
         self.robot_status = "empty"
@@ -46,9 +49,22 @@ class DeviceManager(QObject):
         self.discovered_robot_ports: Dict[str, str] = {}
         self._sync_robot_arm_status_map(initial=True)
         self._sync_camera_status_map(initial=True)
-        
+
         # Discovered devices
         self.discovered_cameras = {}
+
+        # Seed shared app state
+        self._state_store.set_state("robot.status", self.robot_status)
+        for arm_name, status in self.robot_arm_statuses.items():
+            self._state_store.set_state(f"robot.arm.{arm_name}", status)
+        for camera_name, status in self.camera_statuses.items():
+            self._state_store.set_state(f"cameras.{camera_name}", status)
+
+        capabilities = detect_capabilities(self.config)
+        self._state_store.set_state("capabilities.robot.followers", capabilities["robot"]["followers"]) 
+        self._state_store.set_state("capabilities.robot.leaders", capabilities["robot"]["leaders"]) 
+        for cam_name, available in capabilities["cameras"].items():
+            self._state_store.set_state(f"capabilities.camera.{cam_name}", available)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -98,6 +114,7 @@ class DeviceManager(QObject):
             return False
         self.robot_arm_statuses[arm_name] = status
         self.robot_arm_status_changed.emit(arm_name, status)
+        self._state_store.set_state(f"robot.arm.{arm_name}", status)
         return True
 
     def _set_overall_robot_status(self, status: str) -> bool:
@@ -107,6 +124,7 @@ class DeviceManager(QObject):
             return False
         self.robot_status = status
         self.robot_status_changed.emit(status)
+        self._state_store.set_state("robot.status", status)
         return True
 
     def _list_robot_ports(self) -> Dict[str, str]:
@@ -189,6 +207,7 @@ class DeviceManager(QObject):
         elif camera_name == "wrist_right":
             self.camera_wrist_right_status = status
         self.camera_status_changed.emit(camera_name, status)
+        self._state_store.set_state(f"cameras.{camera_name}", status)
 
     def _camera_matches_config(self, configured: str, discovered_path: str, discovered_index: str) -> bool:
         """Return True if a discovered camera looks like the configured entry."""
