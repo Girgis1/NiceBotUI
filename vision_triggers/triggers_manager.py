@@ -20,6 +20,7 @@ except ImportError:
     from composite_trigger import CompositeTrigger
 
 from .time_utils import format_timestamp
+from utils.logging_utils import log_exception
 TRIGGERS_DIR = Path(__file__).parent.parent / "data" / "vision_triggers"
 BACKUPS_DIR = Path(__file__).parent.parent / "data" / "backups" / "vision_triggers"
 
@@ -57,9 +58,9 @@ class TriggersManager:
             shutil.copytree(trigger_dir, backup_path)
             # Keep only last 10 backups per trigger
             self._cleanup_old_backups(trigger_dir.name)
-        except Exception as e:
-            print(f"[WARNING] Backup failed: {e}")
-    
+        except Exception as exc:
+            log_exception(f"TriggersManager: backup failed for {trigger_dir.name}", exc, level="warning")
+
     def _cleanup_old_backups(self, trigger_name: str, keep_count: int = 10):
         """Keep only the most recent N backups for a trigger"""
         pattern = f"{trigger_name}_*"
@@ -73,8 +74,8 @@ class TriggersManager:
         for old_backup in backups[keep_count:]:
             try:
                 shutil.rmtree(old_backup)
-            except Exception as e:
-                print(f"[WARNING] Failed to delete old backup {old_backup}: {e}")
+            except Exception as exc:
+                log_exception(f"TriggersManager: failed to delete backup {old_backup}", exc, level="warning")
     
     def list_triggers(self) -> List[str]:
         """List all trigger names
@@ -100,8 +101,8 @@ class TriggersManager:
             
             return sorted(triggers)
         
-        except Exception as e:
-            print(f"[ERROR] Failed to list triggers: {e}")
+        except Exception as exc:
+            log_exception("TriggersManager: failed to list triggers", exc)
             return []
     
     def load_all(self) -> Dict[str, Dict]:
@@ -116,7 +117,7 @@ class TriggersManager:
             try:
                 trigger_data = self.load_trigger(trigger_name)
             except Exception as exc:
-                print(f"[ERROR] Failed to load trigger '{trigger_name}': {exc}")
+                log_exception(f"TriggersManager: failed to load trigger '{trigger_name}'", exc)
                 continue
             
             if trigger_data:
@@ -142,10 +143,8 @@ class TriggersManager:
             # Get full data
             return composite.get_full_trigger_data()
         
-        except Exception as e:
-            print(f"[ERROR] Failed to load trigger {name}: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception as exc:
+            log_exception(f"TriggersManager: failed to load trigger {name}", exc, stack=True)
             return None
     
     def save_trigger(
@@ -220,10 +219,8 @@ class TriggersManager:
             
             return success
         
-        except Exception as e:
-            print(f"[ERROR] Failed to save trigger {name}: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception as exc:
+            log_exception(f"TriggersManager: failed to save trigger {name}", exc, stack=True)
             return False
     
     def delete_trigger(self, name: str) -> bool:
@@ -245,8 +242,8 @@ class TriggersManager:
             
             return result
         
-        except Exception as e:
-            print(f"[ERROR] Failed to delete trigger {name}: {e}")
+        except Exception as exc:
+            log_exception(f"TriggersManager: failed to delete trigger {name}", exc)
             return False
     
     def trigger_exists(self, name: str) -> bool:
@@ -263,8 +260,8 @@ class TriggersManager:
             
             return composite.get_info()
         
-        except Exception as e:
-            print(f"[ERROR] Failed to get trigger info for {name}: {e}")
+        except Exception as exc:
+            log_exception(f"TriggersManager: failed to get trigger info for {name}", exc)
             return None
     
     def get_composite_trigger(self, name: str) -> Optional[CompositeTrigger]:
@@ -430,4 +427,3 @@ if __name__ == "__main__":
     print()
     
     print("✓ TriggersManager working with composite format!")
-

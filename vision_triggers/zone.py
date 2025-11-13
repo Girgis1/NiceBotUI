@@ -14,6 +14,8 @@ import uuid
 from typing import List, Tuple, Optional, Dict
 from pathlib import Path
 
+from utils.logging_utils import log_exception
+
 
 class Zone:
     """Represents a detection zone (region of interest)"""
@@ -193,8 +195,8 @@ class Zone:
                 data = json.load(f)
             
             return cls.from_dict(data)
-        except Exception as e:
-            print(f"[ERROR] Failed to load zone from {filepath}: {e}")
+        except Exception as exc:
+            log_exception(f"Zone: failed to load {filepath}", exc)
             return None
     
     def __repr__(self) -> str:
@@ -264,4 +266,3 @@ if __name__ == "__main__":
         print(f"   ✓ Validation error caught: {e}")
     
     print("\n✓ Zone model tests complete!")
-

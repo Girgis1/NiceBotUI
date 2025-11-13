@@ -26,6 +26,7 @@ except ImportError:
     from zone import Zone
 
 from .time_utils import now_iso
+from utils.logging_utils import log_exception
 
 
 class CompositeTrigger:
@@ -97,8 +98,8 @@ class CompositeTrigger:
             # Save initial manifest
             return self.save()
             
-        except Exception as e:
-            print(f"[ERROR] Failed to create composite trigger {self.name}: {e}")
+        except Exception as exc:
+            log_exception(f"CompositeTrigger: failed to create {self.name}", exc)
             return False
     
     def save(self) -> bool:
@@ -192,10 +193,8 @@ class CompositeTrigger:
             
             return trigger
             
-        except Exception as e:
-            print(f"[ERROR] Failed to load trigger {name}: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception as exc:
+            log_exception(f"CompositeTrigger: failed to load {name}", exc, stack=True)
             return None
     
     def add_zone(self, zone: Zone):
@@ -265,8 +264,8 @@ class CompositeTrigger:
                 print(f"[TRIGGER] ✓ Deleted trigger folder: {self.trigger_dir}")
                 return True
             return False
-        except Exception as e:
-            print(f"[ERROR] Failed to delete trigger {self.name}: {e}")
+        except Exception as exc:
+            log_exception(f"CompositeTrigger: failed to delete {self.name}", exc)
             return False
     
     def get_info(self) -> Dict:
@@ -396,4 +395,3 @@ if __name__ == "__main__":
     print("   ✓ Cleanup complete\n")
     
     print("✓ CompositeTrigger tests complete!")
-

@@ -12,11 +12,12 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 from PySide6.QtCore import QThread, Signal
 
 # Add utils to path for config_compat
 sys.path.insert(0, str(Path(__file__).parent))
-from utils.config_compat import get_first_enabled_arm, get_arm_port
+from utils.config_compat import get_active_arm_index, get_arm_config, get_arm_port
 from utils.logging_utils import log_exception
 
 
@@ -37,6 +38,7 @@ class RobotWorker(QThread):
         self.server_proc = None  # Policy server process
         self.client_proc = None  # Robot client process
         self._stop_requested = False
+        self._solo_arm_index: Optional[int] = None
         
     def run(self):
         """Main worker thread execution - async inference (server + client)"""
@@ -146,6 +148,7 @@ class RobotWorker(QThread):
             f"--server_address={server_address}",
         ]
         
+        self._solo_arm_index = None
         if mode == "bimanual":
             # Bimanual mode: use bi_so100_follower with left/right arm ports
             arms = robot_cfg.get("arms", [])
@@ -184,7 +187,9 @@ class RobotWorker(QThread):
             ]
         else:
             # Solo mode: use single arm (so100_follower or so101_follower)
-            arm = get_first_enabled_arm(self.config, "robot")
+            preferred_idx = robot_cfg.get("active_arm_index")
+            arm_index = get_active_arm_index(self.config, preferred_idx, arm_type="robot")
+            arm = get_arm_config(self.config, arm_index, "robot")
             if not arm:
                 raise ValueError("No enabled robot arm configured")
             
@@ -197,6 +202,7 @@ class RobotWorker(QThread):
             if not robot_port:
                 raise ValueError("Robot port not configured")
             
+            self._solo_arm_index = arm_index
             args = base_args + [
                 "--robot.type", robot_type,
                 "--robot.port", robot_port,

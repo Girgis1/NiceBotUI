@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 from utils.home_sequence import HomeSequenceRunner
 from utils.mode_widgets import ModeSelector, SingleArmConfig
 from utils.config_compat import (
+    get_active_arm_index,
     get_enabled_arms,
     get_home_positions,
 )
@@ -491,6 +492,27 @@ class MultiArmMixin:
         self.status_label.setText(f"💾 Home velocity set to {value}")
         self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
 
+    def _resolve_selected_robot_arm(self) -> tuple[int, str]:
+        """Return (arm_index, label) honoring current mode/selection."""
+        arm_index = 0
+        arm_label = "Arm 1"
+
+        mode_selector = getattr(self, "robot_mode_selector", None)
+        solo_selector = getattr(self, "solo_arm_selector", None)
+        if mode_selector and mode_selector.get_mode() == "solo" and solo_selector:
+            arm_index = max(0, solo_selector.currentIndex())
+            current_text = solo_selector.currentText()
+            arm_label = current_text or f"Arm {arm_index + 1}"
+            return arm_index, arm_label
+
+        arm_index = get_active_arm_index(self.config, arm_type="robot")
+        arms = self.config.get("robot", {}).get("arms", [])
+        if 0 <= arm_index < len(arms):
+            arm_label = arms[arm_index].get("name") or arms[arm_index].get("id") or arm_label
+        else:
+            arm_label = f"Arm {arm_index + 1}"
+        return arm_index, arm_label
+
     def home_all_arms(self):
         self._setup_home_sequence_runner()
         if self._home_sequence_runner.is_running:
@@ -522,14 +544,7 @@ class MultiArmMixin:
         try:
             from utils.motor_controller import MotorController
 
-            arm_index = 0
-            arm_name = "Arm 1"
-            if hasattr(self, "robot_mode_selector") and self.robot_mode_selector:
-                mode = self.robot_mode_selector.get_mode()
-                if mode == "solo" and hasattr(self, "solo_arm_selector") and self.solo_arm_selector:
-                    arm_index = self.solo_arm_selector.currentIndex()
-                    current_text = self.solo_arm_selector.currentText()
-                    arm_name = current_text or f"Arm {arm_index + 1}"
+            arm_index, arm_name = self._resolve_selected_robot_arm()
 
             self.status_label.setText(f"⏳ Reading motor positions from {arm_name}...")
             self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
@@ -569,14 +584,7 @@ class MultiArmMixin:
             self.status_label.setStyleSheet("QLabel { color: #FFB74D; font-size: 15px; padding: 8px; }")
             return
 
-        arm_index = 0
-        arm_name = "Arm 1"
-        if hasattr(self, "robot_mode_selector") and self.robot_mode_selector:
-            mode = self.robot_mode_selector.get_mode()
-            if mode == "solo" and hasattr(self, "solo_arm_selector") and self.solo_arm_selector:
-                arm_index = self.solo_arm_selector.currentIndex()
-                current_text = self.solo_arm_selector.currentText()
-                arm_name = current_text or f"Arm {arm_index + 1}"
+        arm_index, arm_name = self._resolve_selected_robot_arm()
 
         home_pos = get_home_positions(self.config, arm_index=arm_index)
         if not home_pos:
