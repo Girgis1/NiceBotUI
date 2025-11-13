@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from functools import partial
 from pathlib import Path
 from typing import Optional, Tuple
@@ -169,17 +169,13 @@ class CameraPanelMixin:
             self.status_label.setText("⏳ Scanning for cameras...")
             self.status_label.setStyleSheet("QLabel { color: #2196F3; font-size: 15px; padding: 8px; }")
 
-            pause_ctx = CameraStreamHub.paused() if CameraStreamHub else nullcontext()
-            with pause_ctx:
+            with self._exclusive_camera_access():
                 found_cameras = self._discover_cameras_for_dialog()
 
             if not found_cameras:
                 self.status_label.setText("❌ No cameras found")
                 self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
                 return
-
-            for cam in found_cameras:
-                cam["capture"] = None
 
             dialog = QDialog(self)
             dialog.setWindowTitle("Found Cameras")
@@ -235,17 +231,6 @@ class CameraPanelMixin:
             assign_group.addButton(wrist_r_radio, 2)
             layout.addWidget(wrist_r_radio)
 
-            def ensure_capture(cam_entry):
-                capture = cam_entry.get("capture")
-                if capture and capture.isOpened():
-                    return capture
-                source = cam_entry["path"] if cam_entry["index"] is None else cam_entry["index"]
-                backend_name, capture = self._open_camera_capture(source, cam_entry.get("backend"))
-                if capture:
-                    cam_entry["capture"] = capture
-                    cam_entry["backend"] = backend_name
-                return capture
-
             def update_preview(force: bool = False):
                 selected_id = camera_list.currentData()
                 if selected_id is None:
@@ -257,29 +242,27 @@ class CameraPanelMixin:
                         preview_label.setText("Select a camera to preview")
                     return
 
+                source = selected_cam["path"] if selected_cam["index"] is None else selected_cam["index"]
+                capture = None
+
                 try:
-                    capture = ensure_capture(selected_cam)
+                    with self._exclusive_camera_access():
+                        backend_name, capture = self._open_camera_capture(source, selected_cam.get("backend"))
+                        if capture:
+                            selected_cam["backend"] = backend_name
+                            ret, frame = self._read_frame_with_retry(capture, attempts=6, delay=0.1)
+                        else:
+                            ret, frame = False, None
                 except Exception as exc:  # pragma: no cover - UI feedback path
                     print(f"[SETTINGS][CAMERA] Failed to initialize capture: {exc}")
                     if force:
                         preview_label.setText("⚠️ Unable to access camera")
-                    selected_cam["capture"] = None
-                    return
-
-                if not capture:
-                    if force:
-                        preview_label.setText("⚠️ Unable to access camera")
-                    return
-
-                try:
-                    ret, frame = self._read_frame_with_retry(capture, attempts=6, delay=0.1)
-                except Exception as exc:
-                    print(f"[SETTINGS][CAMERA] Error reading frame: {exc}")
                     ret, frame = False, None
+                finally:
+                    if capture:
+                        capture.release()
 
                 if not ret or frame is None or not frame.size:
-                    capture.release()
-                    selected_cam["capture"] = None
                     if force:
                         preview_label.setText("⚠️ Unable to read frame")
                     return
@@ -295,7 +278,7 @@ class CameraPanelMixin:
 
             preview_timer = QTimer(dialog)
             preview_timer.timeout.connect(update_preview)
-            preview_timer.start(100)
+            preview_timer.start(200)
             camera_list.currentIndexChanged.connect(lambda _: update_preview(force=True))
             update_preview(force=True)
 
@@ -313,52 +296,49 @@ class CameraPanelMixin:
             btn_layout.addWidget(select_btn)
             layout.addLayout(btn_layout)
 
-            if dialog.exec() == QDialog.Accepted:
-                selected_id = camera_list.currentData()
-                selected_cam = next((cam for cam in found_cameras if cam["id"] == selected_id), None)
-                if selected_cam:
-                    camera_path = selected_cam["path"]
-                    target = assign_group.checkedId()
-                    if target == 0:
-                        self.cam_front_edit.setText(camera_path)
-                        self._apply_camera_assignment_to_config("front", camera_path)
-                        self.camera_front_status = "online"
-                        if self.camera_front_circle:
-                            self.update_status_circle(self.camera_front_circle, "online")
-                        if self.device_manager:
-                            self.device_manager.update_camera_status("front", "online")
-                        if CameraStreamHub:
-                            CameraStreamHub.reset("front")
-                        self.status_label.setText(f"✓ Assigned {camera_path} to Front Camera")
-                    elif target == 1:
-                        self.cam_wrist_edit.setText(camera_path)
-                        self._apply_camera_assignment_to_config("wrist", camera_path)
-                        self.camera_wrist_status = "online"
-                        if self.camera_wrist_circle:
-                            self.update_status_circle(self.camera_wrist_circle, "online")
-                        if self.device_manager:
-                            self.device_manager.update_camera_status("wrist", "online")
-                        if CameraStreamHub:
-                            CameraStreamHub.reset("wrist")
-                        self.status_label.setText(f"✓ Assigned {camera_path} to Wrist L Camera")
-                    else:
-                        self.cam_wrist_right_edit.setText(camera_path)
-                        self._apply_camera_assignment_to_config("wrist_right", camera_path)
-                        self.camera_wrist_right_status = "online"
-                        if self.camera_wrist_right_circle:
-                            self.update_status_circle(self.camera_wrist_right_circle, "online")
-                        if self.device_manager:
-                            self.device_manager.update_camera_status("wrist_right", "online")
-                        if CameraStreamHub:
-                            CameraStreamHub.reset("wrist_right")
-                        self.status_label.setText(f"✓ Assigned {camera_path} to Wrist R Camera")
-                    self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
-
-            preview_timer.stop()
-            for cam in found_cameras:
-                capture = cam.get("capture")
-                if capture:
-                    capture.release()
+            try:
+                if dialog.exec() == QDialog.Accepted:
+                    selected_id = camera_list.currentData()
+                    selected_cam = next((cam for cam in found_cameras if cam["id"] == selected_id), None)
+                    if selected_cam:
+                        camera_path = selected_cam["path"]
+                        target = assign_group.checkedId()
+                        if target == 0:
+                            self.cam_front_edit.setText(camera_path)
+                            self._apply_camera_assignment_to_config("front", camera_path)
+                            self.camera_front_status = "online"
+                            if self.camera_front_circle:
+                                self.update_status_circle(self.camera_front_circle, "online")
+                            if self.device_manager:
+                                self.device_manager.update_camera_status("front", "online")
+                            if CameraStreamHub:
+                                CameraStreamHub.reset("front")
+                            self.status_label.setText(f"✓ Assigned {camera_path} to Front Camera")
+                        elif target == 1:
+                            self.cam_wrist_edit.setText(camera_path)
+                            self._apply_camera_assignment_to_config("wrist", camera_path)
+                            self.camera_wrist_status = "online"
+                            if self.camera_wrist_circle:
+                                self.update_status_circle(self.camera_wrist_circle, "online")
+                            if self.device_manager:
+                                self.device_manager.update_camera_status("wrist", "online")
+                            if CameraStreamHub:
+                                CameraStreamHub.reset("wrist")
+                            self.status_label.setText(f"✓ Assigned {camera_path} to Wrist L Camera")
+                        else:
+                            self.cam_wrist_right_edit.setText(camera_path)
+                            self._apply_camera_assignment_to_config("wrist_right", camera_path)
+                            self.camera_wrist_right_status = "online"
+                            if self.camera_wrist_right_circle:
+                                self.update_status_circle(self.camera_wrist_right_circle, "online")
+                            if self.device_manager:
+                                self.device_manager.update_camera_status("wrist_right", "online")
+                            if CameraStreamHub:
+                                CameraStreamHub.reset("wrist_right")
+                            self.status_label.setText(f"✓ Assigned {camera_path} to Wrist R Camera")
+                        self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+            finally:
+                preview_timer.stop()
         except Exception as exc:
             self.status_label.setText(f"❌ Error: {exc}")
             self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
@@ -467,6 +447,18 @@ class CameraPanelMixin:
             finally:
                 cap.release()
         return found
+
+    @contextmanager
+    def _exclusive_camera_access(self):
+        """Temporarily pause the shared hub so direct captures have exclusive access."""
+
+        if CameraStreamHub:
+            ctx = CameraStreamHub.paused(release_delay=0.15, resume_delay=0.03)
+        else:
+            ctx = nullcontext()
+        with ctx:
+            yield
+
     def _open_camera_capture(self, source, preferred_backend: Optional[str] = None):
         if cv2 is None:
             return None, None
