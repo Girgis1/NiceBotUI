@@ -29,6 +29,7 @@ from utils.config_compat import (
     set_active_arm_index,
 )
 from utils.motor_controller import MotorController
+from utils.logging_utils import log_exception
 
 from .record_store import RecordStoreMixin
 from .transport_controls import TransportControlsMixin
@@ -572,7 +573,8 @@ class RecordTab(
     def _handle_teleop_output(self, data, is_error: bool) -> None:
         try:
             text = bytes(data).decode("utf-8", errors="ignore").strip()
-        except Exception:
+        except Exception as exc:
+            log_exception("RecordTab: teleop output decode failed", exc, level="debug")
             text = ""
         if not text:
             return
