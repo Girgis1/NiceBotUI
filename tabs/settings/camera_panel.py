@@ -201,6 +201,9 @@ class CameraPanelMixin:
                 }
                 """
             )
+            camera_list.setEditable(False)
+            camera_list.setFocusPolicy(Qt.NoFocus)
+            camera_list.setAttribute(Qt.WA_InputMethodEnabled, False)
             for cam in found_cameras:
                 camera_list.addItem(f"{cam['path']} - {cam['resolution']}", cam["id"])
             layout.addWidget(camera_list)

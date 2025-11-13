@@ -5,11 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Optional, Sequence
 
-from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtCore import QObject, QThread, Signal, Qt
 
 from utils.config_compat import ensure_multi_arm_config
 from utils.config_store import ConfigStore
 from utils.home_move_worker import HomeMoveRequest, HomeMoveWorker
+from utils.logging_utils import log_exception
 
 HomeSelection = Literal["all", "left", "right"]
 
@@ -78,14 +79,19 @@ class HomeSequenceRunner(QObject):
             self.error.emit("Home sequence already running.")
             return False
 
-        if config is None:
-            cfg = self._store.reload() if reload_from_disk else self._store.get_config()
-        else:
-            store_cfg = self._store.get_config()
-            if config is store_cfg:
-                cfg = store_cfg
+        try:
+            if config is None:
+                cfg = self._store.reload() if reload_from_disk else self._store.get_config()
             else:
-                cfg = ensure_multi_arm_config(dict(config))
+                store_cfg = self._store.get_config()
+                if config is store_cfg:
+                    cfg = store_cfg
+                else:
+                    cfg = ensure_multi_arm_config(dict(config))
+        except Exception as exc:
+            log_exception("HomeSequenceRunner: failed to load config", exc)
+            self.error.emit(f"Configuration error: {exc}")
+            return False
 
         queue = self._build_queue(cfg, arm_indexes, selection, velocity_override)
         if not queue:
@@ -173,41 +179,68 @@ class HomeSequenceRunner(QObject):
             self.finished.emit(not self._had_failure, message)
             return
 
-        info = self._queue.pop(0)
-        self._active_arm = info
-        self.arm_started.emit(info.as_dict())
+        try:
+            info = self._queue.pop(0)
+            self._active_arm = info
+            self.arm_started.emit(info.as_dict())
 
-        request = HomeMoveRequest(
-            config=self._config,
-            velocity_override=info.velocity,
-            arm_index=info.arm_index,
-        )
+            request = HomeMoveRequest(
+                config=self._config,
+                velocity_override=info.velocity,
+                arm_index=info.arm_index,
+            )
 
-        worker = HomeMoveWorker(request)
-        thread = QThread(self)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.progress.connect(self.progress.emit)
-        worker.finished.connect(self._handle_arm_finished)
-        worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(self._on_thread_finished)
+            worker = HomeMoveWorker(request)
+            thread = QThread(self)
+            worker.moveToThread(thread)
 
-        self._current_worker = worker
-        self._current_thread = thread
-        thread.start()
+            thread.started.connect(worker.run)
+            worker.progress.connect(self.progress.emit, Qt.QueuedConnection)
+            worker.finished.connect(self._handle_arm_finished, Qt.QueuedConnection)
+            worker.finished.connect(thread.quit)
+            thread.finished.connect(worker.deleteLater)
+            thread.finished.connect(self._on_thread_finished)
+
+            self._current_worker = worker
+            self._current_thread = thread
+            thread.start()
+        except Exception as exc:
+            log_exception("HomeSequenceRunner: failed to start arm", exc, level="error", stack=True)
+            self._running = False
+            self.error.emit(f"Homing error: {exc}")
 
     def _handle_arm_finished(self, success: bool, message: str) -> None:
-        info = self._active_arm.as_dict() if self._active_arm else {}
-        if not success:
+        try:
+            info = self._active_arm.as_dict() if self._active_arm else {}
+            if not success:
+                self._had_failure = True
+            self.arm_finished.emit(info, success, message)
+        except Exception as exc:
             self._had_failure = True
-        self.arm_finished.emit(info, success, message)
-        self._active_arm = None
+            log_exception("HomeSequenceRunner: arm finished handler failed", exc, level="error", stack=True)
+            self.error.emit(f"Homing handler error: {exc}")
+        finally:
+            self._active_arm = None
 
     def _on_thread_finished(self) -> None:
-        if self._current_thread:
-            self._current_thread.deleteLater()
+        thread = self._current_thread
+        worker = self._current_worker
         self._current_thread = None
         self._current_worker = None
+
+        try:
+            if thread:
+                if thread.isRunning():
+                    thread.quit()
+                    thread.wait(2000)
+                thread.deleteLater()
+            if worker:
+                worker.deleteLater()
+        except Exception as exc:
+            log_exception("HomeSequenceRunner: thread cleanup failed", exc, level="warning")
+            self._running = False
+            self.error.emit(f"Thread cleanup failed: {exc}")
+            return
+
         if self._running:
             self._start_next_arm()

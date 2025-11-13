@@ -660,8 +660,8 @@ else:
 4. **Add Config Validation**:
    ```python
    def start(self, selection: HomeSelection = "all", arm_indexes: Optional[Sequence[int]] = None,
-             config: Optional[dict] = None, reload_from_disk: bool = True,
-             velocity_override: Optional[int] = None) -> bool:
+            config: Optional[dict] = None, reload_from_disk: bool = True,
+            velocity_override: Optional[int] = None) -> bool:
 
        if self.is_running:
            self.error.emit("Home sequence already running.")
@@ -684,6 +684,8 @@ else:
 
        # ... rest of method ...
    ```
+
+@codex: Hardened `HomeSequenceRunner` accordingly (`utils/home_sequence.py`). Config reload is now wrapped in try/except, signals use queued connections, `_handle_arm_finished` is exception-safe, and thread cleanup waits before deleting to avoid double-emission crashes. Dashboard home button no longer crashes when homing multiple arms back-to-back.
 
 ### **Testing Requirements:**
 - Stress test with rapid home button presses
@@ -2328,6 +2330,8 @@ if frame is not None:
 ### **Recommended Fix Path:**
 
 @codex: Implemented an immediate mitigation that pauses `CameraStreamHub` only while a direct `VideoCapture` is being opened (`tabs/settings/camera_panel.py`). Discovery and each preview grab briefly take exclusive ownership of `/dev/video*`, then release it so the dashboard streams resume immediately. The dialog now shows live previews without freezing the app, yet we still avoid the resource conflicts you highlighted. Longer term we can route previews through the hub itself for even better hygiene.
+
+@codex: Also disabled input-method focus on the camera dropdown so the on-screen keyboard no longer pops up (and hides the popup menu) when selecting a device on the touchscreen.
 
 **Phase 1 (Immediate):** Add conflict detection and warnings
 **Phase 2 (Short-term):** Implement exclusive access coordination
