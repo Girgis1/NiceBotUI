@@ -8,6 +8,7 @@ Handles:
 - Startup device discovery
 """
 
+import sys
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -23,6 +24,14 @@ try:  # Optional dependency for coordinating shared camera access
     from utils.camera_hub import CameraStreamHub
 except Exception:  # pragma: no cover - avoid hard dependency during bootstrapping
     CameraStreamHub = None
+
+
+def safe_print(*args, **kwargs) -> None:
+    """Print helper that swallows BrokenPipeError in GUI contexts."""
+    try:
+        print(*args, **kwargs)
+    except BrokenPipeError:
+        pass
 
 
 class DeviceManager(QObject):
@@ -301,15 +310,15 @@ class DeviceManager(QObject):
             self._mark_cameras_missing()
         
         # Print compact summary (both terminal and GUI)
-        print("\n=== Detecting Ports ===", flush=True)
+        safe_print("\n=== Detecting Ports ===", flush=True)
         self.discovery_log.emit("=== Detecting Ports ===")
         
-        print(f"----- Robot Arms: {robot_count} -----", flush=True)
+        safe_print(f"----- Robot Arms: {robot_count} -----", flush=True)
         self.discovery_log.emit(f"----- Robot Arms: {robot_count} -----")
         if robot_infos:
             for info in robot_infos:
                 port_msg = f"{info.get('name', 'arm').title()}: {info.get('port', 'Unknown')}"
-                print(port_msg, flush=True)
+                safe_print(port_msg, flush=True)
                 self.discovery_log.emit(port_msg)
         
         cameras_cfg = self.config.get("cameras", {}) or {}
@@ -318,12 +327,12 @@ class DeviceManager(QObject):
             "wrist": "Wrist L Camera",
             "wrist_right": "Wrist R Camera",
         }
-        print(f"----- Cameras: {len(camera_assignments)} -----", flush=True)
+        safe_print(f"----- Cameras: {len(camera_assignments)} -----", flush=True)
         self.discovery_log.emit(f"----- Cameras: {len(camera_assignments)} -----")
 
         if not cameras_cfg:
             msg = "No cameras configured."
-            print(msg, flush=True)
+            safe_print(msg, flush=True)
             self.discovery_log.emit(msg)
         else:
             for cam_name in cameras_cfg.keys():
@@ -336,11 +345,14 @@ class DeviceManager(QObject):
                         msg = f"{label}: {configured_path} (not detected)"
                     else:
                         msg = f"{label}: not configured"
-                print(msg, flush=True)
+                safe_print(msg, flush=True)
                 self.discovery_log.emit(msg)
         
-        print("", flush=True)  # Blank line at end
-        sys.stdout.flush()
+        safe_print("", flush=True)  # Blank line at end
+        try:
+            sys.stdout.flush()
+        except BrokenPipeError:
+            pass
         
         return results
 
