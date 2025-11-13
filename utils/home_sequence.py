@@ -197,8 +197,7 @@ class HomeSequenceRunner(QObject):
             thread.started.connect(worker.run)
             worker.progress.connect(self.progress.emit, Qt.QueuedConnection)
             worker.finished.connect(self._handle_arm_finished, Qt.QueuedConnection)
-            worker.finished.connect(thread.quit)
-            thread.finished.connect(worker.deleteLater)
+            worker.finished.connect(thread.quit, Qt.QueuedConnection)
             thread.finished.connect(self._on_thread_finished)
 
             self._current_worker = worker

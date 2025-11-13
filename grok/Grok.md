@@ -1790,6 +1790,164 @@ Result: Motors use lerobot library defaults (~600-1000 velocity range)
 
 ---
 
+## 2025-01-15 23:45:00 - Thread Cleanup Bug Review: HomeMoveWorker Double Deletion
+
+**Issue:** "thread cleanup failed internal C++ object (HomeMoveWorker) already deleted" error during homing operations.
+
+**Investigation Results:**
+**Location:** `utils/home_sequence.py` `_on_thread_finished()` method
+**Root Cause:** Race condition in Qt signal/slot connections causing double deletion of HomeMoveWorker C++ object
+**Impact:** Intermittent crashes during homing, especially with multiple arms or rapid successive home operations
+
+### **🚨 THREAD CLEANUP BUG ANALYSIS:**
+
+**Current Signal Connections (Problematic):**
+```python
+# In HomeSequenceRunner._start_next_arm()
+worker.finished.connect(self._handle_arm_finished, Qt.QueuedConnection)
+worker.finished.connect(thread.quit, Qt.QueuedConnection)        # ← Problem!
+thread.finished.connect(self._on_thread_finished)
+
+# In _on_thread_finished()
+thread.deleteLater()  # OK
+worker.deleteLater()  # ← Double deletion risk!
+```
+
+**Race Condition Timeline:**
+1. `worker.run()` completes → `worker.finished.emit()`
+2. **Signal 1:** `_handle_arm_finished()` called (queued)
+3. **Signal 2:** `thread.quit()` called immediately
+4. Thread finishes → `_on_thread_finished()` called
+5. `_on_thread_finished()` calls `worker.deleteLater()`
+6. **Signal 1 arrives late** → tries to access deleted C++ object → **CRASH**
+
+**Qt Event Loop Issue:**
+- `Qt.QueuedConnection` delays signal delivery
+- Direct connection to `thread.quit` executes immediately
+- Thread cleanup happens before queued signal processing
+- Worker object deleted while signal still in queue
+
+### **🔧 IMMEDIATE FIX REQUIRED:**
+
+**Option 1: Remove Direct Connection (RECOMMENDED)**
+```python
+# REMOVE this problematic connection:
+# worker.finished.connect(thread.quit, Qt.QueuedConnection)
+
+# Instead, let _handle_arm_finished trigger thread quit:
+def _handle_arm_finished(self, success: bool, message: str):
+    # ... existing code ...
+    if self._current_thread:
+        self._current_thread.quit()  # Safe, controlled quit
+```
+
+**Option 2: Use Single Signal with Proper Ordering**
+```python
+# Single finished handler that manages everything:
+def _on_worker_finished(self, success: bool, message: str):
+    # Handle arm finished logic
+    self._handle_arm_result(success, message)
+
+    # Then quit thread safely
+    if self._current_thread:
+        self._current_thread.quit()
+
+    # Thread finished will handle cleanup
+```
+
+**Option 3: Delay Worker Deletion**
+```python
+def _on_thread_finished(self):
+    # Store reference to prevent double deletion
+    worker = self._current_worker
+    self._current_worker = None
+
+    # Delete thread first
+    if self._current_thread:
+        self._current_thread.deleteLater()
+    self._current_thread = None
+
+    # Delete worker after short delay to ensure signals processed
+    if worker:
+        QTimer.singleShot(100, lambda: worker.deleteLater())
+```
+
+### **📋 ADDITIONAL THREAD CLEANUP ISSUES FOUND:**
+
+**Issue 2: Dashboard Execution Worker Cleanup**
+**Location:** `tabs/dashboard_tab/execution.py` `_reset_ui_after_run()`
+**Potential Issue:** Worker deletion without signal disconnection
+
+**Current Code:**
+```python
+if self.worker:
+    try:
+        if self.worker.isRunning():
+            self.worker.quit()
+            self.worker.wait(2000)
+        self.worker.deleteLater()  # ← Signals may still be connected
+    except Exception as e:
+        # Log error
+    finally:
+        self.worker = None
+```
+
+**Issue:** Qt signals may still fire after `deleteLater()`, causing callbacks on deleted C++ objects.
+
+**Fix Needed:**
+```python
+# Disconnect all signals before deletion
+if self.worker:
+    self.worker.finished.disconnect()  # Disconnect all signal connections
+    self.worker.progress.disconnect()
+    self.worker.deleteLater()
+```
+
+**Issue 3: Teleop Process Signal Cleanup**
+**Location:** `tabs/record/main.py` teleop QProcess management
+**Potential Issue:** Process cleanup without signal disconnection
+
+**Current Code:**
+```python
+def _handle_teleop_finished(self, exit_code, status):
+    # ... status updates ...
+    self.teleop_process = None  # ← No signal cleanup
+```
+
+**Issue:** QProcess signals may still be connected when process ends.
+
+### **🎯 BUG FIX PRIORITIES:**
+
+**Critical (Immediate):**
+1. **HomeMoveWorker double deletion** - Fix signal connection race condition
+2. **Dashboard worker signal cleanup** - Prevent callbacks on deleted objects
+
+**High (Next Sprint):**
+3. **Teleop process signal cleanup** - Proper QProcess lifecycle management
+4. **General thread safety audit** - Check all QThread/QProcess usage
+
+### **🧪 TESTING PROTOCOL:**
+
+**For HomeMoveWorker Fix:**
+1. Home single arm repeatedly (5+ times)
+2. Home multiple arms back-to-back
+3. Home during other operations
+4. Monitor for "already deleted" errors
+
+**For Dashboard Worker Fix:**
+1. Start/stop execution multiple times rapidly
+2. Interrupt running operations
+3. Check for worker-related crashes
+
+### **Implementation Priority:** CRITICAL (affects core homing functionality)
+**Effort Estimate:** 2-4 hours (signal connection fixes)
+**Risk Level:** MEDIUM (threading changes, but targeted fixes)
+**Testing Effort:** HIGH (multi-threaded testing required)
+
+**URGENT FIX NEEDED:** HomeMoveWorker double deletion is causing crashes during normal homing operations.
+
+---
+
 ## 2025-01-15 23:45:00 - Teleop Mode Integration Plan (MAJOR FEATURE)
 
 **Request:** Create "Teleop Mode" that disables speed limiters and allows full teleop control, with seamless integration for recording.

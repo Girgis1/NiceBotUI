@@ -36,6 +36,8 @@ try:  # Optional dependency used to coordinate shared camera access
 except Exception:  # pragma: no cover - avoid hard dependency in limited builds
     CameraStreamHub = None
 
+from utils.logging_utils import log_exception
+
 
 class CameraPanelMixin:
     """Encapsulates camera UI wiring and discovery helpers."""
@@ -257,7 +259,7 @@ class CameraPanelMixin:
                         else:
                             ret, frame = False, None
                 except Exception as exc:  # pragma: no cover - UI feedback path
-                    print(f"[SETTINGS][CAMERA] Failed to initialize capture: {exc}")
+                    log_exception("CameraPanel: failed to initialize preview capture", exc, level="warning")
                     if force:
                         preview_label.setText("⚠️ Unable to access camera")
                     ret, frame = False, None
@@ -275,7 +277,7 @@ class CameraPanelMixin:
                     formatted = self._format_preview_frame(frame, target_size)
                     self._update_preview_label(preview_label, formatted)
                 except Exception as exc:
-                    print(f"[SETTINGS][CAMERA] Preview processing failed: {exc}")
+                    log_exception("CameraPanel: preview processing failed", exc, level="warning")
                     if force:
                         preview_label.setText("⚠️ Preview error")
 
@@ -343,6 +345,7 @@ class CameraPanelMixin:
             finally:
                 preview_timer.stop()
         except Exception as exc:
+            log_exception("CameraPanel: find_cameras failed", exc, level="error")
             self.status_label.setText(f"❌ Error: {exc}")
             self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
 
@@ -366,8 +369,8 @@ class CameraPanelMixin:
         if CameraStreamHub:
             try:
                 CameraStreamHub.reset(camera_name)
-            except Exception:
-                pass
+            except Exception as exc:
+                log_exception(f"CameraPanel: failed to reset hub for {camera_name}", exc, level="debug")
 
     def _get_preview_dimensions(self) -> Tuple[int, int]:
         """Return a safe preview size derived from the UI controls."""
@@ -405,7 +408,8 @@ class CameraPanelMixin:
                     index = info.get("index")
                     path = info.get("path") or (f"/dev/video{index}" if index is not None else "")
                     candidates.append((index, path))
-            except Exception:
+            except Exception as exc:
+                log_exception("CameraPanel: device manager camera scan failed", exc, level="warning")
                 candidates = []
         if not candidates:
             is_linux = sys.platform.startswith("linux")
