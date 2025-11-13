@@ -25,6 +25,10 @@ REPO_FOLDERS=(
     "runtime"
 )
 
+REPO_FILES=(
+    "config.json"
+)
+
 HOME_FOLDERS=(
     ".cache/huggingface/lerobot/calibration"
     ".cache/huggingface/lerobot/local"
@@ -38,6 +42,16 @@ sync_repo_folder() {
         return
     fi
     rsync -az --delete "$src"/ "$dst"/
+}
+
+sync_repo_file() {
+    local rel="$1"
+    local src="${JETSON_REPO}/${rel}"
+    local dst="${DEV_HOST}:${DEV_PATH}/${rel}"
+    if [[ ! -f "$src" ]]; then
+        return
+    fi
+    rsync -az "$src" "$dst"
 }
 
 sync_home_folder() {
@@ -55,6 +69,9 @@ sync_once() {
     for folder in "${REPO_FOLDERS[@]}"; do
         sync_repo_folder "$folder"
     done
+    for file in "${REPO_FILES[@]}"; do
+        sync_repo_file "$file"
+    done
     for folder in "${HOME_FOLDERS[@]}"; do
         sync_home_folder "$folder"
     done
@@ -70,4 +87,3 @@ while true; do
     sync_once
     sleep "$SYNC_INTERVAL"
 done
-

@@ -25,6 +25,8 @@ from datetime import datetime
 from typing import Optional, List, Dict
 import pytz
 
+from utils.logging_utils import log_exception
+
 try:
     from .composite_recording import CompositeRecording
 except ImportError:
@@ -67,14 +69,14 @@ class ActionsManager:
                                 manifest = json.load(f)
                                 name = manifest.get("name", item.name)
                                 recordings.append(name)
-                        except:
-                            # If manifest is corrupted, use folder name
+                        except Exception as exc:
+                            log_exception(f"ActionsManager: manifest parse failed ({item.name})", exc, level="warning")
                             recordings.append(item.name)
 
             return sorted(recordings)
 
-        except Exception as e:
-            print(f"[ERROR] Failed to list recordings: {e}")
+        except Exception as exc:
+            log_exception("ActionsManager: list_actions failed", exc)
             return []
 
     def list_live_recordings(self) -> List[str]:
@@ -99,7 +101,7 @@ class ActionsManager:
                 with open(manifest_path, "r") as handle:
                     manifest = json.load(handle)
             except Exception as exc:
-                print(f"[WARN] Skipping manifest for {item.name}: {exc}")
+                log_exception(f"ActionsManager: manifest load failed ({item.name})", exc, level="warning")
                 continue
 
             steps = manifest.get("steps", [])
@@ -168,10 +170,8 @@ class ActionsManager:
             # Get full data (loads all components)
             return composite.get_full_recording_data()
             
-        except Exception as e:
-            print(f"[ERROR] Failed to load recording {name}: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception as exc:
+            log_exception(f"ActionsManager: failed to load recording {name}", exc, level="error", stack=True)
             return None
     
     def save_action(self, name: str, action_data: dict, action_type: str = "recording") -> bool:
@@ -198,10 +198,8 @@ class ActionsManager:
                 # Simple recording - create a composite with single component
                 return self._save_simple_as_composite(name, action_data, recording_type)
                 
-        except Exception as e:
-            print(f"[ERROR] Failed to save recording {name}: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception as exc:
+            log_exception(f"ActionsManager: failed to save recording {name}", exc, level="error", stack=True)
             return False
     
     def _save_simple_as_composite(self, name: str, data: dict, recording_type: str) -> bool:
@@ -268,10 +266,8 @@ class ActionsManager:
             # Save manifest
             return composite.save()
             
-        except Exception as e:
-            print(f"[ERROR] Failed to save simple recording as composite: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception as exc:
+            log_exception("ActionsManager: failed to save simple recording", exc, level="error", stack=True)
             return False
     
     def _save_composite_recording(self, name: str, data: dict) -> bool:
@@ -324,10 +320,8 @@ class ActionsManager:
             # Save manifest
             return composite.save()
             
-        except Exception as e:
-            print(f"[ERROR] Failed to save composite recording: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception as exc:
+            log_exception("ActionsManager: failed to save composite recording", exc, level="error", stack=True)
             return False
     
     def delete_action(self, name: str) -> bool:
@@ -356,8 +350,8 @@ class ActionsManager:
             
             return result
             
-        except Exception as e:
-            print(f"[ERROR] Failed to delete recording {name}: {e}")
+        except Exception as exc:
+            log_exception(f"ActionsManager: failed to delete recording {name}", exc)
             return False
     
     def action_exists(self, name: str) -> bool:
@@ -374,8 +368,8 @@ class ActionsManager:
             
             return composite.get_info()
             
-        except Exception as e:
-            print(f"[ERROR] Failed to get recording info for {name}: {e}")
+        except Exception as exc:
+            log_exception(f"ActionsManager: failed to get recording info for {name}", exc)
             return None
     
     def get_composite_recording(self, name: str) -> Optional[CompositeRecording]:

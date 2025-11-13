@@ -1,11 +1,21 @@
 """IPC helpers for sharing state between the sequencer and vision daemon."""
 
+from __future__ import annotations
+
 import json
+import os
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, Optional
 
+from utils.logging_utils import log_exception
 from .time_utils import get_timezone, now_iso
+
+if os.name == "posix":  # pragma: no cover - platform dependent
+    import fcntl  # type: ignore
+else:  # pragma: no cover - platform dependent
+    fcntl = None
 
 
 class IPCManager:
@@ -20,6 +30,98 @@ class IPCManager:
         
         # Ensure runtime directory exists
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        self._use_fcntl = os.name == "posix"
+    
+    # ------------------------------------------------------------------
+    # Internal helpers
+
+    @contextmanager
+    def _lock(self, name: str, exclusive: bool):
+        if not self._use_fcntl or fcntl is None:
+            yield None
+            return
+        lock_path = self.runtime_dir / f"{name}.lock"
+        lock_file = open(lock_path, "w")
+        flag = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+        fcntl.flock(lock_file.fileno(), flag)
+        try:
+            yield lock_file
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            lock_file.close()
+
+    def _temp_path(self, target: Path) -> Path:
+        return target.with_name(f".{target.name}.tmp")
+
+    def _write_json_atomic(self, target: Path, data: Dict, lock_name: str) -> bool:
+        temp_path = self._temp_path(target)
+        try:
+            with self._lock(lock_name, exclusive=True):
+                with open(temp_path, "w") as handle:
+                    json.dump(data, handle, indent=2)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temp_path, target)
+            return True
+        except Exception as exc:
+            log_exception(f"IPC: failed to write {target.name}", exc)
+            try:
+                if temp_path.exists():
+                    temp_path.unlink()
+            except OSError:
+                pass
+            return False
+
+    def _read_json(self, source: Path, lock_name: str) -> Optional[Dict]:
+        try:
+            with self._lock(lock_name, exclusive=False):
+                if not source.exists():
+                    return None
+                with open(source, "r") as handle:
+                    return json.load(handle)
+        except Exception as exc:
+            log_exception(f"IPC: failed to read {source.name}", exc)
+            return None
+
+    def _write_text_atomic(self, target: Path, text: str, lock_name: str) -> bool:
+        temp_path = self._temp_path(target)
+        try:
+            with self._lock(lock_name, exclusive=True):
+                with open(temp_path, "w") as handle:
+                    handle.write(text)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temp_path, target)
+            return True
+        except Exception as exc:
+            log_exception(f"IPC: failed to write text {target.name}", exc)
+            try:
+                if temp_path.exists():
+                    temp_path.unlink()
+            except OSError:
+                pass
+            return False
+
+    def _read_text(self, source: Path, lock_name: str) -> Optional[str]:
+        try:
+            with self._lock(lock_name, exclusive=False):
+                if not source.exists():
+                    return None
+                with open(source, "r") as handle:
+                    return handle.read().strip()
+        except Exception as exc:
+            log_exception(f"IPC: failed to read text {source.name}", exc)
+            return None
+
+    def _clear_file(self, path: Path, lock_name: str) -> bool:
+        try:
+            with self._lock(lock_name, exclusive=True):
+                if path.exists():
+                    path.unlink()
+            return True
+        except Exception as exc:
+            log_exception(f"IPC: failed to clear {path.name}", exc)
+            return False
     
     # Robot State (Sequencer → Daemon)
     
@@ -39,27 +141,15 @@ class IPCManager:
             current_sequence: Name of running sequence
             accepting_triggers: Whether to accept vision triggers
         """
-        try:
-            data = {
-                "state": state,
-                "moving": moving,
-                "current_sequence": current_sequence,
-                "accepting_triggers": accepting_triggers,
-                "timestamp": time.time(),
-                "timestamp_iso": now_iso(self.timezone),
-            }
-            
-            # Atomic write (write to temp, then rename)
-            temp_file = self.robot_state_file.with_suffix('.tmp')
-            with open(temp_file, 'w') as f:
-                json.dump(data, f, indent=2)
-            
-            temp_file.replace(self.robot_state_file)
-            return True
-        
-        except Exception as e:
-            print(f"[IPC] Error writing robot state: {e}")
-            return False
+        data = {
+            "state": state,
+            "moving": moving,
+            "current_sequence": current_sequence,
+            "accepting_triggers": accepting_triggers,
+            "timestamp": time.time(),
+            "timestamp_iso": now_iso(self.timezone),
+        }
+        return self._write_json_atomic(self.robot_state_file, data, "robot_state")
     
     def read_robot_state(self) -> Optional[Dict]:
         """
@@ -68,26 +158,17 @@ class IPCManager:
         Returns:
             Dict with robot state, or None if error/not found
         """
-        try:
-            if not self.robot_state_file.exists():
-                # Return default state if file doesn't exist yet
-                return {
-                    "state": "unknown",
-                    "moving": False,
-                    "current_sequence": None,
-                    "accepting_triggers": False,
-                    "timestamp": time.time(),
-                    "timestamp_iso": now_iso(self.timezone),
-                }
-            
-            with open(self.robot_state_file, 'r') as f:
-                data = json.load(f)
-            
-            return data
-        
-        except Exception as e:
-            print(f"[IPC] Error reading robot state: {e}")
-            return None
+        data = self._read_json(self.robot_state_file, "robot_state")
+        if data is None and not self.robot_state_file.exists():
+            return {
+                "state": "unknown",
+                "moving": False,
+                "current_sequence": None,
+                "accepting_triggers": False,
+                "timestamp": time.time(),
+                "timestamp_iso": now_iso(self.timezone),
+            }
+        return data
     
     # Vision Events (Daemon → Sequencer)
     
@@ -105,26 +186,14 @@ class IPCManager:
             trigger_id: ID of trigger that fired (if triggered)
             event: Event details (timestamp, result, zone, boxes, action)
         """
-        try:
-            data = {
-                "last_check": time.time(),
-                "last_check_iso": now_iso(self.timezone),
-                "status": status,
-                "trigger_id": trigger_id,
-                "event": event,
-            }
-            
-            # Atomic write
-            temp_file = self.vision_events_file.with_suffix('.tmp')
-            with open(temp_file, 'w') as f:
-                json.dump(data, f, indent=2)
-            
-            temp_file.replace(self.vision_events_file)
-            return True
-        
-        except Exception as e:
-            print(f"[IPC] Error writing vision event: {e}")
-            return False
+        data = {
+            "last_check": time.time(),
+            "last_check_iso": now_iso(self.timezone),
+            "status": status,
+            "trigger_id": trigger_id,
+            "event": event,
+        }
+        return self._write_json_atomic(self.vision_events_file, data, "vision_events")
     
     def read_vision_event(self) -> Optional[Dict]:
         """
@@ -133,63 +202,32 @@ class IPCManager:
         Returns:
             Dict with vision event data, or None if error/not found
         """
-        try:
-            if not self.vision_events_file.exists():
-                return None
-            
-            with open(self.vision_events_file, 'r') as f:
-                data = json.load(f)
-            
-            return data
-        
-        except Exception as e:
-            print(f"[IPC] Error reading vision event: {e}")
-            return None
+        return self._read_json(self.vision_events_file, "vision_events")
     
     def clear_vision_event(self) -> bool:
         """Clear vision event (after sequencer has processed it)"""
-        try:
-            if self.vision_events_file.exists():
-                self.vision_events_file.unlink()
-            return True
-        except Exception as e:
-            print(f"[IPC] Error clearing vision event: {e}")
-            return False
+        return self._clear_file(self.vision_events_file, "vision_events")
     
     # Daemon PID Management
     
     def write_daemon_pid(self, pid: int) -> bool:
         """Write daemon process ID"""
-        try:
-            with open(self.daemon_pid_file, 'w') as f:
-                f.write(str(pid))
-            return True
-        except Exception as e:
-            print(f"[IPC] Error writing daemon PID: {e}")
-            return False
+        return self._write_text_atomic(self.daemon_pid_file, str(pid), "daemon_pid")
     
     def read_daemon_pid(self) -> Optional[int]:
         """Read daemon process ID"""
+        text = self._read_text(self.daemon_pid_file, "daemon_pid")
+        if not text:
+            return None
         try:
-            if not self.daemon_pid_file.exists():
-                return None
-            
-            with open(self.daemon_pid_file, 'r') as f:
-                return int(f.read().strip())
-        
-        except Exception as e:
-            print(f"[IPC] Error reading daemon PID: {e}")
+            return int(text)
+        except ValueError as exc:
+            log_exception("IPC: daemon PID file corrupt", exc)
             return None
     
     def clear_daemon_pid(self) -> bool:
         """Clear daemon PID file"""
-        try:
-            if self.daemon_pid_file.exists():
-                self.daemon_pid_file.unlink()
-            return True
-        except Exception as e:
-            print(f"[IPC] Error clearing daemon PID: {e}")
-            return False
+        return self._clear_file(self.daemon_pid_file, "daemon_pid")
     
     def is_daemon_running(self) -> bool:
         """Check if daemon is running (checks PID file and process)"""
@@ -201,9 +239,9 @@ class IPCManager:
             import psutil
             return psutil.pid_exists(pid)
         except ImportError:
-            # Fallback: just check if PID file exists
             return self.daemon_pid_file.exists()
-        except Exception:
+        except Exception as exc:
+            log_exception("IPC: daemon running check failed", exc, level="warning")
             return False
     
     # Utility Methods
@@ -211,24 +249,17 @@ class IPCManager:
     def initialize(self) -> bool:
         """Initialize IPC system (create initial state files)"""
         try:
-            # Initialize robot state
             self.write_robot_state(
                 state="home",
                 moving=False,
-                accepting_triggers=False
+                accepting_triggers=False,
             )
-            
-            # Clear any existing vision events
             self.clear_vision_event()
-            
-            # Clear PID file
             self.clear_daemon_pid()
-            
             print("[IPC] ✓ Initialized IPC system")
             return True
-        
-        except Exception as e:
-            print(f"[IPC] Error initializing: {e}")
+        except Exception as exc:
+            log_exception("IPC: initialization failed", exc)
             return False
     
     def cleanup(self) -> bool:
@@ -238,8 +269,8 @@ class IPCManager:
             self.clear_daemon_pid()
             print("[IPC] ✓ Cleaned up IPC files")
             return True
-        except Exception as e:
-            print(f"[IPC] Error during cleanup: {e}")
+        except Exception as exc:
+            log_exception("IPC: cleanup failed", exc)
             return False
 
 
@@ -339,4 +370,3 @@ if __name__ == "__main__":
     print("   ✓ Cleanup complete\n")
     
     print("✓ IPC system tests complete!")
-

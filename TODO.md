@@ -1,7 +1,7 @@
 # TODO
 
 ## High Priority
-- [x] Consolidate Windows setup helpers into a single supported script and delete the redundant `Setup.bat`/`setup.bat` copy.
+- [x] Windows support removed - project now Linux/Jetson only
 - [x] Finalise the Jetson-first installation path: ensure `setup.sh` delegates cleanly to one Jetson-aware flow and filters out unsupported wheels (e.g., `opencv-python` on aarch64).
 
 ## Medium Priority

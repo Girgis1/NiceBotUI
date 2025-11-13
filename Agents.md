@@ -48,11 +48,15 @@ Syncs local changes to the Jetson device.
 
 **Usage:**
 ```bash
-./sync_to_jetson.sh [--dry-run]
+./sync_to_jetson.sh [--dry-run] [--push-config] [--skip-config-pull]
 ```
 
 **Flags:**
 - `--dry-run` - Preview what would be transferred without making changes
+- `--push-config` - Explicitly push Jetson-owned config files (overwrites `config.json`)
+- `--skip-config-pull` - Skip pulling Jetson configs back after pushing code (normally the script pulls the Jetson copy so local always matches device state)
+
+**Config Safety:** `config.json` (ports, home positions, etc.) is treated as Jetson-owned. By default it is never overwritten when pushing code. After each sync the script automatically pulls those files from the Jetson so your local repo reflects the live robot settings.
 
 **Excludes:**
 - `.venv/` (virtual environments)
@@ -83,6 +87,17 @@ Helper functions for running commands with logging on the Jetson.
 - `run_logged <command>` - Execute command with automatic logging
 - `tail_latest_log` - View most recent log in real-time
 - `list_logs` - Display available log files
+
+#### `jetson_auto_sync.sh` - Jetson Asset Backups
+Runs on the Jetson to periodically push runtime artifacts (data, logs, runtime caches, and now `config.json`) back to the dev machine. Export `DEV_HOST` / `DEV_PATH` before launching if you need a custom SSH alias or destination.
+
+```bash
+# On the Jetson
+DEV_HOST=my-dev ./jetson_auto_sync.sh          # loop forever
+DEV_HOST=my-dev ./jetson_auto_sync.sh --once   # single pass
+```
+
+Use this whenever you want the Jetson to continuously mirror its saved settings to your laptop without running a manual `sync_from_jetson.sh`.
 
 ## Common Workflows
 
@@ -363,4 +378,3 @@ ssh jetson "find ~/LerobotGUI -type f | wc -l"
 
 **Last Updated:** 2025-11-05  
 **Maintained for:** AI coding agents working on LerobotGUI project
-

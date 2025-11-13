@@ -30,6 +30,7 @@ except ImportError:  # pragma: no cover
     np = None
 
 from utils.camera_support import CameraSource, prepare_camera_source
+from utils.logging_utils import log_exception
 
 
 @dataclass
@@ -92,8 +93,8 @@ class CameraStream:
         if self._capture is not None:
             try:
                 self._capture.release()
-            except Exception:  # pragma: no cover - best effort cleanup
-                pass
+            except Exception as exc:  # pragma: no cover - best effort cleanup
+                log_exception(f"CameraStream[{self.name}]: release failed", exc, level="debug")
             self._capture = None
 
     # ------------------------------------------------------------------
@@ -176,8 +177,8 @@ class CameraStream:
             buffer_prop = getattr(cv2, "CAP_PROP_BUFFERSIZE", None)
             if buffer_prop is not None:
                 cap.set(buffer_prop, 1)
-        except Exception:  # pragma: no cover - backend dependent
-            pass
+        except Exception as exc:  # pragma: no cover - backend dependent
+            log_exception(f"CameraStream[{self.name}]: buffer tuning failed", exc, level="debug")
 
         self._capture = cap
         return True
@@ -223,8 +224,8 @@ class CameraStream:
         if self._capture is not None:
             try:
                 self._capture.release()
-            except Exception:
-                pass
+            except Exception as exc:
+                log_exception(f"CameraStream[{self.name}]: release on exit failed", exc, level="debug")
             self._capture = None
 
     def _schedule_retry(self, delay: float) -> None:
@@ -332,7 +333,10 @@ class CameraStreamHub:
     def shutdown(self) -> None:
         with self._streams_lock:
             for stream in self._streams.values():
-                stream.stop()
+                try:
+                    stream.stop()
+                except Exception as exc:
+                    log_exception("CameraStreamHub: error stopping stream during shutdown", exc, level="warning")
             self._streams.clear()
         self._paused = False
 
@@ -346,7 +350,10 @@ class CameraStreamHub:
             if self._paused:
                 return False
             for stream in self._streams.values():
-                stream.stop()
+                try:
+                    stream.stop()
+                except Exception as exc:
+                    log_exception("CameraStreamHub: pause stop failed", exc, level="warning")
             self._paused = True
             return True
 
@@ -360,7 +367,10 @@ class CameraStreamHub:
             if not self._paused:
                 return False
             for stream in self._streams.values():
-                stream.start()
+                try:
+                    stream.start()
+                except Exception as exc:
+                    log_exception("CameraStreamHub: resume start failed", exc, level="warning")
             self._paused = False
             return True
 
@@ -378,7 +388,10 @@ class CameraStreamHub:
                     to_stop.append(stream)
 
         for stream in to_stop:
-            stream.stop()
+            try:
+                stream.stop()
+            except Exception as exc:
+                log_exception("CameraStreamHub: reset stream stop failed", exc, level="warning")
 
     @classmethod
     def reset(cls, camera_name: Optional[str] = None) -> None:

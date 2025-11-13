@@ -29,7 +29,7 @@ from utils.motor_controller import MotorController
 from utils.actions_manager import ActionsManager
 from utils.sequences_manager import SequencesManager
 from utils.camera_hub import CameraStreamHub
-from utils.config_compat import get_first_enabled_arm
+from utils.config_compat import get_active_arm_index, get_first_enabled_arm
 from utils.execution import (
     ExecutionContext,
     execute_composite_recording,
@@ -66,12 +66,14 @@ class ExecutionWorker(QThread):
         self.options = execution_data or {}  # Alias for compatibility
         self._stop_requested = False
         self._last_vision_state_signature = None
+        preferred_arm = self.options.get("arm_index")
+        self.arm_index = get_active_arm_index(self.config, preferred_arm, arm_type="robot")
+        self.options["arm_index"] = self.arm_index
         
         # Managers
         self.actions_mgr = ActionsManager()
         self.sequences_mgr = SequencesManager()
-        # Use first robot arm (arm_index=0) for execution
-        self.motor_controller = MotorController(config, arm_index=0)
+        self.motor_controller = MotorController(config, arm_index=self.arm_index)
         self.speed_multiplier = config.get("control", {}).get("speed_multiplier", 1.0)
         self.motor_controller.speed_multiplier = self.speed_multiplier
         self._model_hold_requested_home = False

@@ -141,6 +141,7 @@ def create_default_config() -> Dict[str, Any]:
             "speed_percent": 100,
             "loop_enabled": False,
             "run_selection": "",
+            "active_robot_arm_index": 0,
         },
     }
 
@@ -150,6 +151,8 @@ def load_config(path: Path = CONFIG_PATH) -> Dict[str, Any]:
     if path.exists():
         config = json.loads(path.read_text())
         config = ensure_multi_arm_config(config)
+        state = config.setdefault("dashboard_state", {})
+        state.setdefault("active_robot_arm_index", 0)
     else:
         config = create_default_config()
 

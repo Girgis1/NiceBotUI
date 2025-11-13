@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 import sys
 import time
 
@@ -245,32 +245,51 @@ class CameraPanelMixin:
                 return capture
 
             def update_preview(force: bool = False):
+                selected_id = camera_list.currentData()
+                if selected_id is None:
+                    return
+
+                selected_cam = next((cam for cam in found_cameras if cam["id"] == selected_id), None)
+                if not selected_cam:
+                    if force:
+                        preview_label.setText("Select a camera to preview")
+                    return
+
                 try:
-                    selected_id = camera_list.currentData()
-                    for cam in found_cameras:
-                        if cam["id"] != selected_id:
-                            continue
-                        capture = ensure_capture(cam)
-                        if not capture:
-                            if force:
-                                preview_label.setText("⚠️ Unable to read frame")
-                            break
-                        ret, frame = self._read_frame_with_retry(capture, attempts=6, delay=0.1)
-                        if not ret or frame is None or not frame.size:
-                            capture.release()
-                            cam["capture"] = None
-                            if force:
-                                preview_label.setText("⚠️ Unable to read frame")
-                            break
-                        frame = cv2.resize(frame, (480, 360))
-                        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                        h, w, ch = rgb_frame.shape
-                        bytes_per_line = ch * w
-                        qt_image = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
-                        preview_label.setPixmap(QPixmap.fromImage(qt_image))
-                        break
-                except Exception:
-                    pass
+                    capture = ensure_capture(selected_cam)
+                except Exception as exc:  # pragma: no cover - UI feedback path
+                    print(f"[SETTINGS][CAMERA] Failed to initialize capture: {exc}")
+                    if force:
+                        preview_label.setText("⚠️ Unable to access camera")
+                    selected_cam["capture"] = None
+                    return
+
+                if not capture:
+                    if force:
+                        preview_label.setText("⚠️ Unable to access camera")
+                    return
+
+                try:
+                    ret, frame = self._read_frame_with_retry(capture, attempts=6, delay=0.1)
+                except Exception as exc:
+                    print(f"[SETTINGS][CAMERA] Error reading frame: {exc}")
+                    ret, frame = False, None
+
+                if not ret or frame is None or not frame.size:
+                    capture.release()
+                    selected_cam["capture"] = None
+                    if force:
+                        preview_label.setText("⚠️ Unable to read frame")
+                    return
+
+                try:
+                    target_size = self._get_preview_dimensions()
+                    formatted = self._format_preview_frame(frame, target_size)
+                    self._update_preview_label(preview_label, formatted)
+                except Exception as exc:
+                    print(f"[SETTINGS][CAMERA] Preview processing failed: {exc}")
+                    if force:
+                        preview_label.setText("⚠️ Preview error")
 
             preview_timer = QTimer(dialog)
             preview_timer.timeout.connect(update_preview)
@@ -364,6 +383,57 @@ class CameraPanelMixin:
                 CameraStreamHub.reset(camera_name)
             except Exception:
                 pass
+
+    def _get_preview_dimensions(self) -> Tuple[int, int]:
+        """Return a safe preview size derived from the UI controls."""
+        width = getattr(self, "cam_width_spin", None)
+        height = getattr(self, "cam_height_spin", None)
+        target_w = max(160, int(width.value())) if width else 640
+        target_h = max(120, int(height.value())) if height else 480
+        return target_w, target_h
+
+    def _format_preview_frame(self, frame, target_size: Tuple[int, int]):
+        """Resize ``frame`` to ``target_size`` while preserving aspect ratio."""
+        if cv2 is None:
+            return frame
+
+        target_w, target_h = target_size
+        src_h, src_w = frame.shape[:2]
+        if not src_w or not src_h:
+            return frame
+
+        src_ratio = src_w / src_h
+        target_ratio = target_w / target_h
+
+        if abs(src_ratio - target_ratio) < 0.01:
+            return cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
+
+        if src_ratio > target_ratio:
+            new_w = target_w
+            new_h = max(1, int(round(target_w / src_ratio)))
+            resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            pad = max(0, target_h - new_h)
+            top = pad // 2
+            bottom = pad - top
+            return cv2.copyMakeBorder(resized, top, bottom, 0, 0, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+
+        new_h = target_h
+        new_w = max(1, int(round(target_h * src_ratio)))
+        resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        pad = max(0, target_w - new_w)
+        left = pad // 2
+        right = pad - left
+        return cv2.copyMakeBorder(resized, 0, 0, left, right, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+
+    def _update_preview_label(self, preview_label: QLabel, frame) -> None:
+        """Render ``frame`` (BGR) onto ``preview_label``."""
+        if cv2 is None:
+            return
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb_frame.shape
+        bytes_per_line = ch * w
+        qt_image = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        preview_label.setPixmap(QPixmap.fromImage(qt_image))
 
     def _candidate_camera_sources(self):
         candidates = []

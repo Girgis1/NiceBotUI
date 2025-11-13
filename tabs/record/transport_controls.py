@@ -6,6 +6,8 @@ from typing import Any, Dict, List
 
 from PySide6.QtCore import QTimer
 
+from utils.logging_utils import log_exception
+
 
 class TransportControlsMixin:
     """Provides live recording and playback helpers for RecordTab."""
@@ -22,6 +24,7 @@ class TransportControlsMixin:
                         return
                     self._live_record_connected_locally = True
             except Exception as exc:
+                log_exception("RecordTab: live recording connect failed", exc)
                 self.status_label.setText(f"❌ Live record error: {exc}")
                 self.live_record_btn.setChecked(False)
                 return
@@ -62,8 +65,8 @@ class TransportControlsMixin:
         if self._live_record_connected_locally:
             try:
                 self.motor_controller.disconnect()
-            except Exception:
-                pass
+            except Exception as exc:
+                log_exception("RecordTab: live recording disconnect failed", exc, level="warning")
         self._live_record_connected_locally = False
 
         point_count = len(self.live_recorded_data)
@@ -137,10 +140,8 @@ class TransportControlsMixin:
             print(f"[LIVE RECORD] Point {point_count}: t={timestamp:.3f}s, Δ={max_change} units")
 
         except Exception as exc:
+            log_exception("RecordTab: capture_live_position failed", exc, stack=True)
             print(f"[LIVE RECORD] ❌ ERROR: {exc}")
-            import traceback
-
-            traceback.print_exc()
             self.stop_live_recording()
             self.status_label.setText(f"❌ Recording error: {exc}")
 
@@ -182,6 +183,7 @@ class TransportControlsMixin:
                 self.play_btn.setChecked(False)
                 return
         except Exception as exc:
+            log_exception("RecordTab: playback connect failed", exc)
             self.status_label.setText(f"❌ Playback error: {exc}")
             self.play_btn.setChecked(False)
             return
@@ -226,8 +228,8 @@ class TransportControlsMixin:
                 print("[PLAYBACK] Disconnecting...")
                 try:
                     self.motor_controller.disconnect()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log_exception("RecordTab: playback disconnect failed", exc, level="warning")
                 self.stop_playback()
             return
 
@@ -247,15 +249,13 @@ class TransportControlsMixin:
             elif action['type'] == 'live_recording':
                 self._execute_live_recording(action, is_last)
         except Exception as exc:
+            log_exception("RecordTab: playback step failed", exc, stack=True)
             print(f"[PLAYBACK] ❌ ERROR: {exc}")
-            import traceback
-
-            traceback.print_exc()
             self.status_label.setText(f"❌ Playback error: {exc}")
             try:
                 self.motor_controller.disconnect()
-            except Exception:
-                pass
+            except Exception as disconnect_exc:
+                log_exception("RecordTab: disconnect after playback failure failed", disconnect_exc, level="warning")
             self.stop_playback()
 
     def _execute_single_position(self, action: Dict[str, Any], is_last: bool):

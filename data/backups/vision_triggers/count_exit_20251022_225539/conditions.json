@@ -1,9 +1,0 @@
-{
-  "condition_type": "count",
-  "rules": {
-    "zone": "output_bin",
-    "count": 10,
-    "operator": ">=",
-    "cumulative": true
-  }
-}

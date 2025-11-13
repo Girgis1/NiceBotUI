@@ -14,6 +14,7 @@ from typing import Dict, List, Optional
 from PySide6.QtCore import QObject, Signal
 
 from utils.camera_support import prepare_camera_source
+from utils.logging_utils import log_exception
 
 try:  # Optional dependency for coordinating shared camera access
     from utils.camera_hub import CameraStreamHub
@@ -112,7 +113,8 @@ class DeviceManager(QObject):
 
         try:
             import serial.tools.list_ports
-        except Exception:
+        except Exception as exc:
+            log_exception("DeviceManager: serial tools unavailable", exc, level="warning")
             return {}
 
         ports: Dict[str, str] = {}
@@ -254,8 +256,9 @@ class DeviceManager(QObject):
             robot_infos = self._discover_robot()
             results["robot"] = robot_infos
             robot_count = sum(1 for info in robot_infos if info.get("port"))
-        except Exception as e:
-            error_msg = f"Robot discovery error: {e}"
+        except Exception as exc:
+            log_exception("DeviceManager: robot discovery failed", exc)
+            error_msg = f"Robot discovery error: {exc}"
             results["errors"].append(error_msg)
             self._set_overall_robot_status("empty")
             robot_infos = []
@@ -271,8 +274,9 @@ class DeviceManager(QObject):
                 camera_assignments = self._match_cameras_to_config(cameras_info)
             else:
                 self._mark_cameras_missing()
-        except Exception as e:
-            error_msg = f"Camera discovery error: {e}"
+        except Exception as exc:
+            log_exception("DeviceManager: camera discovery failed", exc)
+            error_msg = f"Camera discovery error: {exc}"
             results["errors"].append(error_msg)
             self._mark_cameras_missing()
         
@@ -353,6 +357,7 @@ class DeviceManager(QObject):
                 if self._set_overall_robot_status(new_status):
                     status_changed = True
             except Exception as exc:  # pragma: no cover - defensive
+                log_exception("DeviceManager: legacy robot status check failed", exc, level="warning")
                 if self._set_overall_robot_status("empty"):
                     status_changed = True
                 self.discovery_log.emit(f"Device check error (robot): {exc}")
@@ -412,14 +417,15 @@ class DeviceManager(QObject):
                     buffer_prop = getattr(cv2, "CAP_PROP_BUFFERSIZE", None)
                     if buffer_prop is not None:
                         cap.set(buffer_prop, 1)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log_exception("DeviceManager: camera buffer tuning failed", exc, level="debug")
                 cap.release()
                 return "online"
             if cap is not None:
                 cap.release()
             return "offline"
-        except Exception:
+        except Exception as exc:
+            log_exception("DeviceManager: OpenCV camera probe failed", exc, level="warning")
             # Fall back to filesystem check for path-based sources
             if isinstance(source, str) and Path(source).exists():
                 return "online"
@@ -469,7 +475,7 @@ class DeviceManager(QObject):
         try:
             import serial.tools.list_ports
         except Exception as exc:
-            print(f"[DEVICE_MANAGER] Robot scan error: {exc}")
+            log_exception("DeviceManager: robot scan unavailable", exc, level="warning")
             return None
 
         configured_port = self.config.get("robot", {}).get("port", "/dev/ttyACM0")
@@ -572,8 +578,8 @@ class DeviceManager(QObject):
 
             return found_cameras
 
-        except Exception as e:
-            print(f"[DEVICE_MANAGER] Camera scan error: {e}")
+        except Exception as exc:
+            log_exception("DeviceManager: camera scan error", exc)
             return []
 
     def scan_available_cameras(self) -> List[Dict]:

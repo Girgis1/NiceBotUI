@@ -6,6 +6,7 @@ Allows recording sequences of motor positions for playback
 import sys
 from pathlib import Path
 from functools import partial
+from typing import Optional
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
@@ -20,6 +21,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from widgets.action_table import ActionTableWidget
 from utils.actions_manager import ActionsManager
+from utils.config_compat import (
+    format_arm_label,
+    get_active_arm_index,
+    iter_arm_configs,
+    set_active_arm_index,
+)
 from utils.motor_controller import MotorController
 
 from .record_store import RecordStoreMixin
@@ -42,8 +49,9 @@ class RecordTab(
         super().__init__(parent)
         self.config = config
         self.actions_manager = ActionsManager()
-        # Use first robot arm (arm_index=0) for recording
-        self.motor_controller = MotorController(config, arm_index=0)
+        self.active_arm_index = get_active_arm_index(self.config, arm_type="robot")
+        self.arm_selector: Optional[QComboBox] = None
+        self.motor_controller = MotorController(config, arm_index=self.active_arm_index)
         
         self.current_action_name = "NewAction01"
         self.is_playing = False
@@ -134,6 +142,49 @@ class RecordTab(
         """)
         self.action_combo.currentTextChanged.connect(self.on_action_changed)
         top_bar.addWidget(self.action_combo, stretch=3)
+
+        self.arm_selector_label = QLabel("ARM:")
+        self.arm_selector_label.setStyleSheet("color: #ffffff; font-size: 13px; font-weight: bold; padding-left: 8px;")
+        top_bar.addWidget(self.arm_selector_label)
+
+        self.arm_selector = QComboBox()
+        self.arm_selector.setMinimumHeight(50)
+        self.arm_selector.setStyleSheet("""
+            QComboBox {
+                background-color: #404040;
+                color: #ffffff;
+                border: 2px solid #505050;
+                border-radius: 6px;
+                padding: 4px 28px 4px 10px;
+                font-size: 14px;
+                min-width: 140px;
+            }
+            QComboBox:hover {
+                border-color: #4CAF50;
+            }
+            QComboBox::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: center right;
+                width: 26px;
+                border: none;
+                padding-right: 4px;
+            }
+            QComboBox::down-arrow {
+                width: 0;
+                height: 0;
+                border-style: solid;
+                border-width: 7px 5px 0 5px;
+                border-color: #ffffff transparent transparent transparent;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #404040;
+                color: #ffffff;
+                selection-background-color: #4CAF50;
+                font-size: 13px;
+            }
+        """)
+        self.arm_selector.currentIndexChanged.connect(self._on_arm_selector_changed)
+        top_bar.addWidget(self.arm_selector, stretch=1)
         
         # New action button
         self.new_action_btn = QPushButton("➕")
@@ -181,6 +232,7 @@ class RecordTab(
         top_bar.addWidget(self.save_btn)
         
         layout.addLayout(top_bar)
+        self._refresh_arm_selector()
         
         # Control bar: SET, PLAY/STOP, Loop, Delay buttons
         control_bar = QHBoxLayout()
@@ -400,6 +452,77 @@ class RecordTab(
         teleop_panel.setMaximumWidth(256)
         teleop_panel.setMinimumWidth(220)
         main_layout.addWidget(teleop_panel, stretch=1)
+
+    def _refresh_arm_selector(self) -> None:
+        if not self.arm_selector:
+            return
+
+        options = [
+            (idx, format_arm_label(idx, arm))
+            for idx, arm in iter_arm_configs(self.config, arm_type="robot", enabled_only=True)
+        ]
+        self.arm_selector.blockSignals(True)
+        self.arm_selector.clear()
+        for idx, label in options:
+            self.arm_selector.addItem(label, idx)
+
+        if options:
+            active = get_active_arm_index(self.config, preferred=self.active_arm_index, arm_type="robot")
+            self.active_arm_index = active
+            combo_index = next((i for i, option in enumerate(options) if option[0] == active), 0)
+            self.arm_selector.setCurrentIndex(combo_index)
+
+        self.arm_selector.blockSignals(False)
+        visible = bool(options)
+        self.arm_selector.setVisible(visible)
+        if hasattr(self, "arm_selector_label"):
+            self.arm_selector_label.setVisible(visible)
+        self.arm_selector.setEnabled(visible and len(options) > 1)
+
+    def _on_arm_selector_changed(self, combo_index: int) -> None:
+        if not self.arm_selector or combo_index < 0:
+            return
+        arm_index = self.arm_selector.itemData(combo_index)
+        if arm_index is None:
+            return
+        self._apply_arm_selection(int(arm_index))
+
+    def _apply_arm_selection(self, arm_index: int) -> None:
+        resolved = set_active_arm_index(self.config, arm_index, arm_type="robot")
+        if resolved == self.active_arm_index:
+            return
+        self.active_arm_index = resolved
+        self._rebuild_motor_controller()
+        if hasattr(self, "status_label"):
+            label = self.arm_selector.currentText() if self.arm_selector else f"Arm {resolved + 1}"
+            self.status_label.setText(f"🎯 Recording arm set to {label}")
+            self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+        self._notify_arm_change()
+
+    def _rebuild_motor_controller(self) -> None:
+        existing = getattr(self, "motor_controller", None)
+        if existing:
+            try:
+                existing.disconnect()
+            except Exception:
+                pass
+        try:
+            self.motor_controller = MotorController(self.config, arm_index=self.active_arm_index)
+        except Exception as exc:
+            print(f"[RECORD] ⚠️ Motor controller init failed for arm {self.active_arm_index}: {exc}")
+
+    def _notify_arm_change(self) -> None:
+        window = self.window()
+        if hasattr(window, "dashboard_tab") and hasattr(window.dashboard_tab, "handle_external_arm_change"):
+            try:
+                window.dashboard_tab.handle_external_arm_change(self.active_arm_index)
+            except Exception:
+                pass
+        if hasattr(window, "save_config"):
+            try:
+                window.save_config()
+            except Exception:
+                pass
 
     def _create_teleop_panel(self) -> QWidget:
         """Create keypad teleoperation panel - 5 row layout for 600px height."""

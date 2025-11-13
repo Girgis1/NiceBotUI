@@ -15,7 +15,7 @@ New format:
     config["robot"]["arms"][0]["home_positions"] = [...]
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 
 def is_multi_arm_config(config: Dict[str, Any]) -> bool:
@@ -52,6 +52,88 @@ def get_enabled_arms(config: Dict[str, Any], arm_type: str = "robot") -> List[Di
         return [cfg]
     
     return []
+
+
+def _get_arm_array(config: Dict[str, Any], arm_type: str = "robot") -> List[Dict[str, Any]]:
+    """Return the canonical list of arm configs for the requested type."""
+    cfg = config.get(arm_type, {})
+    arms = cfg.get("arms")
+    if isinstance(arms, list) and arms:
+        return arms
+    if "port" in cfg:
+        return [cfg]
+    return []
+
+
+def iter_arm_configs(
+    config: Dict[str, Any],
+    arm_type: str = "robot",
+    *,
+    enabled_only: bool = False,
+) -> Iterator[Tuple[int, Dict[str, Any]]]:
+    """Yield ``(index, arm_config)`` pairs for the requested arm group."""
+    for idx, arm in enumerate(_get_arm_array(config, arm_type)):
+        if enabled_only and not arm.get("enabled", True):
+            continue
+        yield idx, arm
+
+
+def get_active_arm_index(
+    config: Dict[str, Any],
+    preferred: Optional[int] = None,
+    arm_type: str = "robot",
+) -> int:
+    """Resolve the active arm index using config hints and fallbacks."""
+    arms = _get_arm_array(config, arm_type)
+    if not arms:
+        return 0
+
+    def _is_valid(idx: Optional[int]) -> bool:
+        return isinstance(idx, int) and 0 <= idx < len(arms) and arms[idx].get("enabled", True)
+
+    candidates: List[Optional[int]] = [preferred]
+
+    state = config.get("dashboard_state", {})
+    state_key = "active_robot_arm_index" if arm_type == "robot" else "active_teleop_arm_index"
+    candidates.append(state.get(state_key))
+
+    cfg_hint = config.get(arm_type, {}).get("active_arm_index")
+    candidates.append(cfg_hint)
+
+    for candidate in candidates:
+        if _is_valid(candidate):
+            return int(candidate)  # type: ignore[arg-type]
+
+    for idx, arm in enumerate(arms):
+        if arm.get("enabled", True):
+            return idx
+    return 0
+
+
+def set_active_arm_index(
+    config: Dict[str, Any],
+    arm_index: int,
+    arm_type: str = "robot",
+) -> int:
+    """Clamp and persist the active arm index in config/dash state."""
+    resolved = get_active_arm_index(config, preferred=arm_index, arm_type=arm_type)
+    cfg = config.setdefault(arm_type, {})
+    cfg["active_arm_index"] = resolved
+
+    state = config.setdefault("dashboard_state", {})
+    state_key = "active_robot_arm_index" if arm_type == "robot" else "active_teleop_arm_index"
+    state[state_key] = resolved
+    return resolved
+
+
+def format_arm_label(index: int, arm_cfg: Dict[str, Any]) -> str:
+    """Return a user-friendly label for the arm selection widgets."""
+    arm_id = arm_cfg.get("arm_id", index + 1)
+    name = arm_cfg.get("name") or f"Arm {arm_id}"
+    port = arm_cfg.get("port")
+    if port:
+        return f"{name} ({port})"
+    return name
 
 
 def get_arm_config(config: Dict[str, Any], arm_index: int = 0, arm_type: str = "robot") -> Optional[Dict[str, Any]]:
@@ -342,4 +424,3 @@ def ensure_multi_arm_config(config: Dict[str, Any]) -> Dict[str, Any]:
         Configuration in multi-arm format
     """
     return migrate_to_multi_arm(config)
-

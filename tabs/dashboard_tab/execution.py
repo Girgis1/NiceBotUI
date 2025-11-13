@@ -310,6 +310,9 @@ class DashboardExecutionMixin:
         """Start ExecutionWorker for recordings and sequences"""
         merged_options = dict(options or {})
         merged_options["speed_multiplier"] = self.master_speed
+        arm_index = getattr(self, "active_robot_arm_index", None)
+        if isinstance(arm_index, int):
+            merged_options["arm_index"] = arm_index
 
         # Create and start execution worker
         self.execution_worker = ExecutionWorker(

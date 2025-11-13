@@ -265,14 +265,8 @@ class CameraStream:
                 capture = None
 
                 try:
-                    if system_name == "Windows":
-                        capture = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
-                        if not capture or not capture.isOpened():
-                            if capture:
-                                capture.release()
-                            capture = cv2.VideoCapture(idx)
-                    else:
-                        capture = cv2.VideoCapture(idx)
+                    # Linux/Jetson camera capture (no Windows support)
+                    capture = cv2.VideoCapture(idx)
 
                     available = bool(capture and capture.isOpened())
                 except Exception:

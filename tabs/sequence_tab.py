@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from utils.sequences_manager import SequencesManager
 from utils.actions_manager import ActionsManager
+from utils.logging_utils import log_exception
 
 # Vision designer dialog (new modular UI)
 try:
@@ -461,8 +462,8 @@ class SequenceTab(QWidget):
                     print("[SEQUENCE] ✓ Refreshed dashboard dropdown")
                     break
                 parent = parent.parent()
-        except Exception as e:
-            print(f"[WARNING] Could not refresh parent: {e}")
+        except Exception as exc:
+            log_exception("SequenceTab: failed to notify parent", exc, level="warning")
     
     def on_sequence_changed(self, name: str):
         """Handle sequence selection change"""
@@ -827,8 +828,8 @@ class SequenceTab(QWidget):
         if hasattr(dialog, "state_changed"):
             try:
                 dialog.state_changed.disconnect(self._handle_designer_state_changed)
-            except Exception:
-                pass
+            except Exception as exc:
+                log_exception("SequenceTab: failed to disconnect vision designer signal", exc, level="debug")
         if result == QDialog.Accepted:
             updated_step = dialog.get_step_data()
             if updated_step:
@@ -894,7 +895,7 @@ class SequenceTab(QWidget):
         try:
             dashboard.record_vision_status(state, detail, payload)
         except Exception as exc:
-            print(f"[SEQUENCE][WARN] Failed to update vision status: {exc}")
+            log_exception("SequenceTab: failed to update vision status", exc, level="warning")
 
     def _get_dashboard_tab(self):
         parent = self.parent()

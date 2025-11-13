@@ -8,6 +8,9 @@ from typing import Optional
 
 from PySide6.QtCore import Qt
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from utils.config_compat import get_active_arm_index, set_active_arm_index
+
 
 class DashboardStateMixin:
     """Mixin providing state management utilities for :class:`DashboardTab`."""
@@ -41,6 +44,10 @@ class DashboardStateMixin:
         control_cfg = self.config.setdefault("control", {})
         control_cfg["speed_multiplier"] = self.master_speed
         control_cfg["loop_enabled"] = self.loop_enabled
+
+        saved_arm = state.get("active_robot_arm_index")
+        self.active_robot_arm_index = get_active_arm_index(self.config, preferred=saved_arm, arm_type="robot")
+        state["active_robot_arm_index"] = self.active_robot_arm_index
 
     def _restore_run_selection(self) -> bool:
         """Attempt to re-select the last run item; return ``True`` if successful."""
@@ -76,6 +83,10 @@ class DashboardStateMixin:
         control_cfg = self.config.setdefault("control", {})
         control_cfg["speed_multiplier"] = self.master_speed
         control_cfg["loop_enabled"] = self.loop_enabled
+
+        active_arm = getattr(self, "active_robot_arm_index", None)
+        if isinstance(active_arm, int):
+            set_active_arm_index(self.config, active_arm, arm_type="robot")
 
         window = self.window()
         if hasattr(window, "save_config"):
@@ -200,6 +211,9 @@ class DashboardStateMixin:
             self.update_camera_previews(force=True)
         elif not self.camera_order:
             self.single_camera_preview.update_preview(None, "No camera configured.")
+
+        if hasattr(self, "_refresh_arm_selector"):
+            self._refresh_arm_selector()
 
         self._update_status_summaries()
         restored = self._restore_run_selection()
