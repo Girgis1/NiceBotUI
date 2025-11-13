@@ -29,6 +29,7 @@ from utils.config_compat import (
     set_active_arm_index,
 )
 from utils.motor_controller import MotorController
+from utils.app_state import AppStateStore
 from utils.logging_utils import log_exception
 
 from .record_store import RecordStoreMixin
@@ -51,9 +52,12 @@ class RecordTab(
         super().__init__(parent)
         self.config = config
         self.actions_manager = ActionsManager()
+        self.state_store = AppStateStore.instance()
         self.active_arm_index = get_active_arm_index(self.config, arm_type="robot")
         self.arm_selector: Optional[QComboBox] = None
         self.motor_controller = MotorController(config, arm_index=self.active_arm_index)
+        self._robot_capable = True
+        self._robot_available = True
         
         self.current_action_name = "NewAction01"
         self.is_playing = False
@@ -85,6 +89,8 @@ class RecordTab(
 
         self.init_ui()
         self.refresh_action_list()
+        self._apply_app_state_snapshot()
+        self.state_store.state_changed.connect(self._on_app_state_changed)
     
     def init_ui(self):
         """Initialize UI with teleop panel on right side (1/4 width)"""
@@ -530,6 +536,46 @@ class RecordTab(
             except Exception as exc:
                 log_exception("RecordTab: save_config after arm change failed", exc, level="warning")
 
+    # ------------------------------------------------------------------
+    # Capability-aware degradation
+
+    def _apply_app_state_snapshot(self) -> None:
+        snapshot = self.state_store.snapshot()
+        if "capabilities.robot.followers" in snapshot:
+            self._robot_capable = bool(snapshot["capabilities.robot.followers"])
+        robot_status = snapshot.get("robot.status")
+        if robot_status is not None:
+            self._robot_available = robot_status != "empty"
+        self._update_robot_capability_ui()
+
+    def _on_app_state_changed(self, key: str, value) -> None:
+        if key == "capabilities.robot.followers":
+            self._robot_capable = bool(value)
+            self._update_robot_capability_ui()
+        elif key == "robot.status":
+            self._robot_available = value != "empty"
+            self._update_robot_capability_ui()
+
+    def _update_robot_capability_ui(self) -> None:
+        can_use = self._robot_capable and self._robot_available
+
+        if hasattr(self, "play_btn") and self.play_btn:
+            self.play_btn.setEnabled(can_use or self.is_playing)
+        if hasattr(self, "live_record_btn") and self.live_record_btn:
+            self.live_record_btn.setEnabled(can_use and not self.is_live_recording)
+        if hasattr(self, "set_btn") and self.set_btn:
+            self.set_btn.setEnabled(can_use)
+        if hasattr(self, "save_btn") and self.save_btn:
+            self.save_btn.setEnabled(can_use)
+        if hasattr(self, "teleop_launch_btn") and self.teleop_launch_btn:
+            self.teleop_launch_btn.setEnabled(can_use and (self.teleop_process is None or self.teleop_process.state() == QProcess.NotRunning))
+        teleop_panel = getattr(self, "teleop_panel", None)
+        if teleop_panel is not None:
+            teleop_panel.setEnabled(can_use)
+
+        if not can_use and not self.is_playing and not self.is_live_recording:
+            self.status_label.setText("⚠️ Robot unavailable — connect hardware to record or play actions.")
+
     def _launch_bimanual_teleop(self) -> None:
         if self.teleop_process and self.teleop_process.state() != QProcess.NotRunning:
             self.status_label.setText("⏳ Teleop already running…")
@@ -593,6 +639,7 @@ class RecordTab(
         """Create keypad teleoperation panel - 5 row layout for 600px height."""
 
         teleop_panel = QFrame()
+        self.teleop_panel = teleop_panel
         teleop_panel.setStyleSheet("""
             QFrame {
                 background-color: #1f1f1f;

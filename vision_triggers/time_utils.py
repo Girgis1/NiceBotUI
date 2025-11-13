@@ -8,6 +8,8 @@ from typing import Optional
 
 import pytz
 
+from utils.logging_utils import log_exception
+
 
 def _load_timezone(name: Optional[str]):
     """Return a tzinfo for *name* if it is a valid timezone identifier."""
@@ -15,7 +17,8 @@ def _load_timezone(name: Optional[str]):
         return None
     try:
         return pytz.timezone(name)
-    except Exception:
+    except Exception as exc:
+        log_exception(f"Vision time utils: invalid timezone '{name}'", exc, level="debug")
         return None
 
 
@@ -43,7 +46,8 @@ def get_timezone(preferred: Optional[str] = None):
             zone_name = getattr(local_tz, "zone", None)
             fallback = _load_timezone(zone_name)
             return fallback or local_tz
-    except Exception:
+    except Exception as exc:
+        log_exception("Vision time utils: failed to get local timezone", exc, level="debug")
         pass
 
     return pytz.UTC

@@ -13,6 +13,8 @@ import numpy as np
 from typing import List, Dict, Tuple, Optional
 from collections import deque
 
+from utils.logging_utils import log_exception
+
 try:
     from .base import BaseDetector, DetectionResult
     from ..zone import Zone
@@ -84,8 +86,8 @@ class PresenceDetector(BaseDetector):
             print("[PRESENCE] ✓ Detector initialized")
             return True
         
-        except Exception as e:
-            print(f"[PRESENCE] Error initializing: {e}")
+        except Exception as exc:
+            log_exception("PresenceDetector: initialization error", exc)
             return False
     
     def detect(self, frame: np.ndarray, zones: List[Dict]) -> List[DetectionResult]:
@@ -163,8 +165,8 @@ class PresenceDetector(BaseDetector):
             
             self.last_detection_count = len(all_boxes)
             
-        except Exception as e:
-            print(f"[PRESENCE] Detection error: {e}")
+        except Exception as exc:
+            log_exception("PresenceDetector: detection error", exc, level="warning")
             # Return empty results on error
             for zone_dict in zones:
                 zone = Zone.from_dict(zone_dict) if not isinstance(zone_dict, Zone) else zone_dict
@@ -333,4 +335,3 @@ if __name__ == "__main__":
     print("   ✓ Reset and cleanup complete\n")
     
     print("✓ Presence detector tests complete!")
-
