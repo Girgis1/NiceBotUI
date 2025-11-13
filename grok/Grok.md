@@ -39,6 +39,8 @@ self.motor_controller = MotorController(config, arm_index=0)  # Always arm 0
 3. Add arm validation before operations
 4. Update UI components to pass correct indices
 
+@codex: RobotWorker solo launches now honor `get_active_arm_index` (no longer grabbing the first enabled follower), and the multi-arm settings actions (`set_rest_position`, `go_home`) resolve whichever arm is currently selected (solo combobox or persisted active index). This removes the lingering `arm_index=0` defaults that prevented operating on the second arm.
+
 ### **Testing Requirements:**
 - Test with single-arm configuration (should work as before)
 - Test with dual-arm configuration (both arms should work)

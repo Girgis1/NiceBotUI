@@ -326,7 +326,8 @@ class RobotWorker(QThread):
         stderr_lower = stderr_text.lower()
         
         # Get port using config helper (supports both old and new formats)
-        port = get_arm_port(self.config, 0, "robot") or "unknown"
+        arm_idx = self._solo_arm_index if self._solo_arm_index is not None else 0
+        port = get_arm_port(self.config, arm_idx, "robot") or "unknown"
         cameras_cfg = self.config.get("cameras", {})
 
         # Serial permission error
