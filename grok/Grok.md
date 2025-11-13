@@ -103,9 +103,11 @@ print(f"----- Robot Arms: {robot_count} -----", flush=True)  # when stdout is cl
 **Solution Design:**
 Create a `safe_print()` wrapper that gracefully handles `BrokenPipeError` for GUI applications.
 
-**Implementation Instructions:**
+**Complete Implementation Instructions:**
 
-1. **Add safe_print function** to `utils/device_manager.py` after imports:
+**Phase 1: Device Manager Protection (utils/device_manager.py)**
+
+1. **Add safe_print function** after imports (around line 21):
 ```python
 def safe_print(*args, **kwargs):
     """Print that handles BrokenPipeError gracefully for GUI apps."""
@@ -116,18 +118,18 @@ def safe_print(*args, **kwargs):
         pass
 ```
 
-2. **Replace all print statements** in `discover_all_devices()` method:
-```python
-# BEFORE:
-print("\n=== Detecting Ports ===", flush=True)
-
-# AFTER:
-safe_print("\n=== Detecting Ports ===", flush=True)
-```
+2. **Replace ALL print statements** in `discover_all_devices()` method:
+   - Line ~322: `print("\n=== Detecting Ports ===", flush=True)` → `safe_print("\n=== Detecting Ports ===", flush=True)`
+   - Line ~325: `print(f"----- Robot Arms: {robot_count} -----", flush=True)` → `safe_print(f"----- Robot Arms: {robot_count} -----", flush=True)`
+   - Line ~330: `print(port_msg, flush=True)` → `safe_print(port_msg, flush=True)`
+   - Line ~339: `print(f"----- Cameras: {len(camera_assignments)} -----", flush=True)` → `safe_print(f"----- Cameras: {len(camera_assignments)} -----", flush=True)`
+   - Line ~344: `print(msg, flush=True)` → `safe_print(msg, flush=True)`
+   - Line ~357: `print(msg, flush=True)` → `safe_print(msg, flush=True)`
+   - Line ~360: `print("", flush=True)` → `safe_print("", flush=True)`
 
 3. **Protect stdout.flush()** call:
 ```python
-# BEFORE:
+# BEFORE (line ~362):
 sys.stdout.flush()
 
 # AFTER:
@@ -137,8 +139,80 @@ except BrokenPipeError:
     pass
 ```
 
+**Phase 2: Global stdout Protection (app.py)**
+
+1. **Add SafeStdout class** in main() function before `sys.excepthook` (around line 443):
+```python
+# Protect stdout from BrokenPipeError throughout app lifecycle
+class SafeStdout:
+    def __init__(self, original):
+        self.original = original
+
+    def write(self, data):
+        try:
+            self.original.write(data)
+            self.original.flush()
+        except (BrokenPipeError, OSError):
+            pass  # Ignore pipe errors for GUI apps
+
+    def flush(self):
+        try:
+            self.original.flush()
+        except (BrokenPipeError, OSError):
+            pass
+
+    def __getattr__(self, name):
+        return getattr(self.original, name)
+
+# Replace stdout and stderr globally
+sys.stdout = SafeStdout(sys.stdout)
+sys.stderr = SafeStdout(sys.stderr)
+```
+
+**Phase 3: Qt Initialization Protection (app/bootstrap.py)**
+
+1. **Modify create_application()** function to protect Qt initialization:
+```python
+def create_application(argv: Sequence[str] | None = None) -> QApplication:
+    # Temporarily redirect stdout to handle BrokenPipeError during Qt initialization
+    import os
+    import sys
+    from contextlib import redirect_stdout, redirect_stderr
+
+    # Create a safe stdout that ignores BrokenPipeError
+    class SafeStdout:
+        def __init__(self, original):
+            self.original = original
+
+        def write(self, data):
+            try:
+                self.original.write(data)
+                self.original.flush()
+            except (BrokenPipeError, OSError):
+                pass  # Ignore pipe errors during GUI app startup
+
+        def flush(self):
+            try:
+                self.original.flush()
+            except (BrokenPipeError, OSError):
+                pass
+
+        def __getattr__(self, name):
+            return getattr(self.original, name)
+
+    # Wrap stdout during Qt initialization
+    with redirect_stdout(SafeStdout(sys.stdout)), redirect_stderr(SafeStdout(sys.stderr)):
+        app = QApplication(list(argv) if argv is not None else sys.argv)
+        app.setStyle("Fusion")
+        configure_app_palette(app)
+
+    return app
+```
+
 **Files to Modify:**
-- `utils/device_manager.py` - Add safe_print function and update all print calls
+- `utils/device_manager.py` - Add safe_print function and update 7 print calls
+- `app.py` - Add SafeStdout class and global stdout replacement
+- `app/bootstrap.py` - Add Qt initialization protection
 
 **Testing Requirements:**
 - Test app startup with piped stdout: `python3 app.py --windowed | head -1`
@@ -162,7 +236,7 @@ except BrokenPipeError:
 **Effort Estimate:** 15 minutes
 **Testing Effort:** LOW (simple pipe testing)
 
-**✅ ALREADY IMPLEMENTED:** Investigation revealed that the BrokenPipeError fix was already implemented in the codebase. Local testing shows the app starts successfully with device discovery working properly. If Jetson-specific issues persist, they may be environment-related rather than code issues.
+**📋 READY FOR IMPLEMENTATION:** Complete fix documented with detailed instructions for proper implementation following grok rules.
 
 
 ## 2025-01-16 03:00:00 - COMPREHENSIVE STABILITY REVIEW (PROLONGED SESSION ANALYSIS)
