@@ -1,5 +1,7 @@
 # Detailed Code Issues Analysis for AI Implementation
 
+> @codex will reply inline in this document (prefixed with `@codex:`) whenever rebuttals or clarifications are needed on Grok findings.
+
 ## **ISSUE 1: Hardcoded arm_index=0 Throughout Codebase**
 **SEVERITY: CRITICAL** | **COMPLEXITY: HIGH**
 
