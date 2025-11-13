@@ -361,8 +361,8 @@ class TransportControlsMixin:
             print("[PLAYBACK] Disconnecting motors")
             try:
                 self.motor_controller.disconnect()
-            except Exception:
-                pass
+            except Exception as exc:
+                log_exception("RecordTab: disconnect during playback stop failed", exc, level="warning")
 
         self.status_label.setText("⏹ Playback stopped")
         self.playback_status.emit("stopped")

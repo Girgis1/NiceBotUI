@@ -506,25 +506,28 @@ class RecordTab(
         if existing:
             try:
                 existing.disconnect()
-            except Exception:
-                pass
+            except Exception as exc:
+                log_exception("RecordTab: failed to disconnect previous motor controller", exc, level="warning")
         try:
             self.motor_controller = MotorController(self.config, arm_index=self.active_arm_index)
         except Exception as exc:
-            print(f"[RECORD] ⚠️ Motor controller init failed for arm {self.active_arm_index}: {exc}")
+            log_exception(f"RecordTab: motor controller init failed for arm {self.active_arm_index}", exc, level="error")
+            if hasattr(self, "status_label"):
+                self.status_label.setText(f"❌ Failed to initialize arm {self.active_arm_index + 1}: {exc}")
+            self.motor_controller = None
 
     def _notify_arm_change(self) -> None:
         window = self.window()
         if hasattr(window, "dashboard_tab") and hasattr(window.dashboard_tab, "handle_external_arm_change"):
             try:
                 window.dashboard_tab.handle_external_arm_change(self.active_arm_index)
-            except Exception:
-                pass
+            except Exception as exc:
+                log_exception("RecordTab: dashboard arm change notification failed", exc, level="warning")
         if hasattr(window, "save_config"):
             try:
                 window.save_config()
-            except Exception:
-                pass
+            except Exception as exc:
+                log_exception("RecordTab: save_config after arm change failed", exc, level="warning")
 
     def _launch_bimanual_teleop(self) -> None:
         if self.teleop_process and self.teleop_process.state() != QProcess.NotRunning:

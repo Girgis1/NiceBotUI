@@ -11,6 +11,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont
 
+from utils.logging_utils import log_exception
+
 
 class DiagnosticsTab(QWidget):
     """Real-time motor diagnostics with compact table view"""
@@ -230,8 +232,9 @@ class DiagnosticsTab(QWidget):
             
             self.status_changed.emit(f"✓ Connected to Arm {self.current_arm_index + 1}")
             
-        except Exception as e:
-            self.status_changed.emit(f"❌ Connection error: {str(e)}")
+        except Exception as exc:
+            log_exception("DiagnosticsTab: connect failed", exc)
+            self.status_changed.emit(f"❌ Connection error: {exc}")
             self.motor_controller = None
     
     def disconnect_motors(self):
@@ -239,8 +242,12 @@ class DiagnosticsTab(QWidget):
         self.refresh_timer.stop()
         
         if self.motor_controller:
-            self.motor_controller.disconnect()
-            self.motor_controller = None
+            try:
+                self.motor_controller.disconnect()
+            except Exception as exc:
+                log_exception("DiagnosticsTab: disconnect failed", exc, level="warning")
+            finally:
+                self.motor_controller = None
         
         self.is_connected = False
         
@@ -274,15 +281,16 @@ class DiagnosticsTab(QWidget):
                         'moving': int(bus.read("Moving", name, normalize=False))
                     }
                     motor_data.append(data)
-                except Exception as e:
-                    print(f"Error reading motor {idx + 1}: {e}")
+                except Exception as exc:
+                    log_exception(f"DiagnosticsTab: Failed to read motor {idx + 1}", exc, level="warning")
                     motor_data.append(None)
             
             # Update table
             self.update_table(motor_data)
             
-        except Exception as e:
-            self.status_changed.emit(f"❌ Error reading data: {str(e)}")
+        except Exception as exc:
+            log_exception("DiagnosticsTab: refresh_data failed", exc, level="error")
+            self.status_changed.emit(f"❌ Error reading data: {exc}")
     
     def update_table(self, motor_data: list):
         """Update table with motor data and color coding"""
@@ -356,4 +364,3 @@ class DiagnosticsTab(QWidget):
         self.refresh_timer.stop()
         if self.motor_controller:
             self.motor_controller.disconnect()
-
