@@ -24,9 +24,10 @@ except ImportError:
 
 # Import config compatibility layer
 from utils.config_compat import (
-    get_arm_port, get_home_positions, get_home_velocity, 
+    get_arm_port, get_home_positions, get_home_velocity,
     set_home_positions, ensure_multi_arm_config
 )
+from utils.logging_utils import log_exception
 
 CONFIG_PATH = Path(__file__).parent / "config.json"
 
@@ -71,8 +72,8 @@ def create_motor_bus(port):
         bus.connect()
         print(f"✓ Connected to {len(motors)} motors")
         return bus
-    except Exception as e:
-        print(f"✗ Failed to connect: {e}")
+    except Exception as exc:
+        log_exception("HomePos: failed to connect to motor bus", exc)
         raise
 
 
@@ -110,10 +111,9 @@ def emergency_catch_and_hold(arm_index: int = 0):
         bus.disconnect()
         print(f"✓ Emergency catch complete - arm held at {current_positions}")
         return True, current_positions
-    except Exception as e:
-        print(f"✗ Failed to catch arm: {e}")
-        import traceback
-        traceback.print_exc()
+    except Exception as exc:
+        log_exception("HomePos: emergency catch failed", exc, stack=True)
+        print(f"✗ Failed to catch arm: {exc}")
         return False, None
 
 
@@ -198,10 +198,9 @@ def go_to_rest(disable_torque=None, arm_index: int = 0):
         print("✓ Move complete")
         return True
         
-    except Exception as e:
-        print(f"✗ Error: {e}")
-        import traceback
-        traceback.print_exc()
+    except Exception as exc:
+        log_exception("HomePos: go_to_rest failed", exc, stack=True)
+        print(f"✗ Error: {exc}")
         return False
 
 
@@ -237,10 +236,9 @@ def read_current_position(arm_index: int = 0):
         
         return position_list
         
-    except Exception as e:
-        print(f"✗ Error reading positions: {e}")
-        import traceback
-        traceback.print_exc()
+    except Exception as exc:
+        log_exception("HomePos: failed to read positions", exc, stack=True)
+        print(f"✗ Error reading positions: {exc}")
         return None
 
 
@@ -252,11 +250,16 @@ def save_current_as_home(arm_index: int = 0):
     """
     positions = read_current_position(arm_index)
     if positions:
-        cfg = read_config()
-        set_home_positions(cfg, positions, arm_index)
-        write_config(cfg)
-        print(f"\n✓ Saved current position as home for arm {arm_index}: {positions}")
-        return True
+        try:
+            cfg = read_config()
+            set_home_positions(cfg, positions, arm_index)
+            write_config(cfg)
+            print(f"\n✓ Saved current position as home for arm {arm_index}: {positions}")
+            return True
+        except Exception as exc:
+            log_exception("HomePos: failed to save home positions", exc)
+            print(f"✗ Failed to save home positions: {exc}")
+            return False
     return False
 
 

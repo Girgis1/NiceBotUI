@@ -26,6 +26,8 @@ from datetime import datetime
 from typing import Optional, List, Dict
 import pytz
 
+from utils.logging_utils import log_exception
+
 try:
     from .composite_sequence import CompositeSequence
 except ImportError:
@@ -161,16 +163,14 @@ class SequencesManager:
             
             # Save manifest
             success = composite.save_manifest()
-            
             if success:
                 print(f"[SEQUENCES] ✓ Saved composite sequence: {name} ({len(steps)} steps)")
-            
+            else:
+                log_exception(f"SequencesManager: save manifest returned False for {name}", RuntimeError("save_manifest failed"))
             return success
             
-        except Exception as e:
-            print(f"[ERROR] Failed to save sequence {name}: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception as exc:
+            log_exception(f"SequencesManager: failed to save sequence {name}", exc, level="error", stack=True)
             return False
     
     def load_sequence(self, name: str) -> Optional[Dict]:
@@ -228,10 +228,8 @@ class SequencesManager:
                 }
             }
             
-        except Exception as e:
-            print(f"[ERROR] Failed to load sequence {name}: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception as exc:
+            log_exception(f"SequencesManager: failed to load sequence {name}", exc, level="error", stack=True)
             return None
     
     def delete_sequence(self, name: str) -> bool:
@@ -252,8 +250,8 @@ class SequencesManager:
             
             return success
             
-        except Exception as e:
-            print(f"[ERROR] Failed to delete sequence {name}: {e}")
+        except Exception as exc:
+            log_exception(f"SequencesManager: failed to delete sequence {name}", exc)
             return False
     
     def list_sequences(self) -> List[str]:
@@ -270,14 +268,14 @@ class SequencesManager:
                             with open(manifest_path, 'r') as f:
                                 data = json.load(f)
                                 names.append(data.get("name", item.name))
-                        except:
-                            # Fallback to folder name if manifest is corrupted
+                        except Exception as exc:
+                            log_exception(f"SequencesManager: manifest parse failed ({item.name})", exc, level="warning")
                             names.append(item.name.replace('_', ' ').title())
             
             return sorted(names)
             
-        except Exception as e:
-            print(f"[ERROR] Failed to list sequences: {e}")
+        except Exception as exc:
+            log_exception("SequencesManager: failed to list sequences", exc)
             return []
     
     def sequence_exists(self, name: str) -> bool:
@@ -295,6 +293,6 @@ class SequencesManager:
             
             return composite.get_info()
             
-        except Exception as e:
-            print(f"[ERROR] Failed to get sequence info for {name}: {e}")
+        except Exception as exc:
+            log_exception(f"SequencesManager: failed to get sequence info for {name}", exc)
             return None
