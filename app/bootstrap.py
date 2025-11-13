@@ -47,7 +47,36 @@ def should_use_fullscreen(args: argparse.Namespace) -> bool:
 
 
 def create_application(argv: Sequence[str] | None = None) -> QApplication:
-    app = QApplication(list(argv) if argv is not None else sys.argv)
-    app.setStyle("Fusion")
-    configure_app_palette(app)
+    # Temporarily redirect stdout to handle BrokenPipeError during Qt initialization
+    import os
+    import sys
+    from contextlib import redirect_stdout, redirect_stderr
+
+    # Create a safe stdout that ignores BrokenPipeError
+    class SafeStdout:
+        def __init__(self, original):
+            self.original = original
+
+        def write(self, data):
+            try:
+                self.original.write(data)
+                self.original.flush()
+            except (BrokenPipeError, OSError):
+                pass  # Ignore pipe errors during GUI app startup
+
+        def flush(self):
+            try:
+                self.original.flush()
+            except (BrokenPipeError, OSError):
+                pass
+
+        def __getattr__(self, name):
+            return getattr(self.original, name)
+
+    # Wrap stdout during Qt initialization
+    with redirect_stdout(SafeStdout(sys.stdout)), redirect_stderr(SafeStdout(sys.stderr)):
+        app = QApplication(list(argv) if argv is not None else sys.argv)
+        app.setStyle("Fusion")
+        configure_app_palette(app)
+
     return app

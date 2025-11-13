@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QStackedWidget, QPushButton, QButtonGroup, QMessageBox
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QThread, QObject, Signal
 from PySide6.QtGui import QShortcut, QKeySequence
 
 from tabs.dashboard_tab import DashboardTab
@@ -64,9 +64,55 @@ class MainWindow(QMainWindow):
             self.resize(1024, 600)
     
     def discover_devices_on_startup(self):
-        """Run device discovery and update all UI elements"""
-        # This will print to terminal and emit signals
-        self.device_manager.discover_all_devices()
+        """Run device discovery in a worker thread so UI stays responsive."""
+        if getattr(self, "_discovery_thread", None):
+            # Discovery already running
+            return
+
+        class _DiscoveryWorker(QObject):
+            finished = Signal(dict)
+            error = Signal(str)
+
+            def __init__(self, manager: DeviceManager):
+                super().__init__()
+                self.manager = manager
+
+            def run(self) -> None:
+                try:
+                    result = self.manager.discover_all_devices()
+                    self.finished.emit(result)
+                except Exception as exc:  # pragma: no cover - defensive
+                    self.error.emit(str(exc))
+
+        self._discovery_worker = _DiscoveryWorker(self.device_manager)
+        self._discovery_thread = QThread(self)
+        self._discovery_worker.moveToThread(self._discovery_thread)
+        self._discovery_thread.started.connect(self._discovery_worker.run)
+        self._discovery_worker.finished.connect(self._on_discovery_finished)
+        self._discovery_worker.error.connect(self._on_discovery_error)
+        # Ensure thread resources cleaned up
+        self._discovery_worker.finished.connect(self._cleanup_discovery_thread)
+        self._discovery_worker.error.connect(self._cleanup_discovery_thread)
+        self._discovery_thread.start()
+
+    def _cleanup_discovery_thread(self, *_) -> None:
+        thread = getattr(self, "_discovery_thread", None)
+        worker = getattr(self, "_discovery_worker", None)
+        if worker:
+            worker.deleteLater()
+        if thread:
+            thread.quit()
+            thread.wait()
+            thread.deleteLater()
+        self._discovery_thread = None
+        self._discovery_worker = None
+
+    def _on_discovery_finished(self, result: dict) -> None:  # pragma: no cover - UI callback
+        # Nothing extra for now; hook available for future UI updates
+        _ = result
+
+    def _on_discovery_error(self, message: str) -> None:  # pragma: no cover - UI callback
+        QMessageBox.warning(self, "Device Discovery", f"Device discovery error: {message}")
     
     def showEvent(self, event):
         """Called when window is shown - run device discovery here"""
@@ -397,6 +443,31 @@ def exception_hook(exctype, value, traceback_obj):
 def main():
     """Main entry point."""
     import traceback
+
+    # Protect stdout from BrokenPipeError throughout app lifecycle
+    class SafeStdout:
+        def __init__(self, original):
+            self.original = original
+
+        def write(self, data):
+            try:
+                self.original.write(data)
+                self.original.flush()
+            except (BrokenPipeError, OSError):
+                pass  # Ignore pipe errors for GUI apps
+
+        def flush(self):
+            try:
+                self.original.flush()
+            except (BrokenPipeError, OSError):
+                pass
+
+        def __getattr__(self, name):
+            return getattr(self.original, name)
+
+    # Replace stdout and stderr globally
+    sys.stdout = SafeStdout(sys.stdout)
+    sys.stderr = SafeStdout(sys.stderr)
 
     sys.excepthook = exception_hook
     args = parse_args()
