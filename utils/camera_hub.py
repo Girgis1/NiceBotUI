@@ -29,6 +29,7 @@ except ImportError:  # pragma: no cover
     cv2 = None
     np = None
 
+from utils.camera_backend import open_capture
 from utils.camera_support import CameraSource, prepare_camera_source
 from utils.logging_utils import log_exception
 
@@ -128,19 +129,6 @@ class CameraStream:
     # ------------------------------------------------------------------
     # Internal helpers
 
-    def _backend_flag(self) -> Optional[int]:
-        if cv2 is None:
-            return None
-
-        mapping = {
-            "gstreamer": getattr(cv2, "CAP_GSTREAMER", None),
-            "v4l2": getattr(cv2, "CAP_V4L2", None),
-            "ffmpeg": getattr(cv2, "CAP_FFMPEG", None),
-        }
-        backend = (self.backend_name or "").lower()
-        flag = mapping.get(backend)
-        return flag if isinstance(flag, int) else None
-
     def _open_capture(self) -> bool:
         if cv2 is None:  # pragma: no cover
             return False
@@ -153,16 +141,13 @@ class CameraStream:
                 pass
             self._capture = None
 
-        backend_flag = self._backend_flag()
-        if backend_flag is not None:
-            cap = cv2.VideoCapture(self.source, backend_flag)
-        else:
-            cap = cv2.VideoCapture(self.source)
+        backend, cap = open_capture(self.source, preferred_backend=self.backend_name)
         if not cap or not cap.isOpened():
             if cap:
                 cap.release()
             self._capture = None
             return False
+        self.backend_name = backend
 
         # Apply requested settings when available
         if self.target_width:

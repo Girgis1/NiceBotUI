@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from PySide6.QtCore import QObject, Signal
 
+from utils.camera_backend import open_capture
 from utils.camera_support import prepare_camera_source
 from utils.logging_utils import log_exception
 
@@ -376,21 +377,6 @@ class DeviceManager(QObject):
 
         return status_changed
 
-    def _backend_flag(self, backend_name: Optional[str]) -> Optional[int]:
-        try:
-            import cv2  # type: ignore
-        except ImportError:
-            return None
-
-        mapping = {
-            "gstreamer": getattr(cv2, "CAP_GSTREAMER", None),
-            "v4l2": getattr(cv2, "CAP_V4L2", None),
-            "ffmpeg": getattr(cv2, "CAP_FFMPEG", None),
-        }
-        backend = (backend_name or "").lower()
-        flag = mapping.get(backend)
-        return flag if isinstance(flag, int) else None
-
     def _probe_camera_status(self, camera_cfg) -> str:
         """Check whether a configured camera source appears online."""
 
@@ -405,12 +391,7 @@ class DeviceManager(QObject):
         # Try OpenCV if available for a reliable check
         try:
             import cv2  # type: ignore
-
-            backend_flag = self._backend_flag(backend)
-            if backend_flag is not None:
-                cap = cv2.VideoCapture(source, backend_flag)
-            else:
-                cap = cv2.VideoCapture(source)
+            backend_name, cap = open_capture(source, preferred_backend=backend)
 
             if cap is not None and cap.isOpened():
                 try:
@@ -506,21 +487,7 @@ class DeviceManager(QObject):
             import cv2
             import sys
 
-            backend_flag = getattr(cv2, "CAP_V4L2", None)
-            backend_order = []
-            if backend_flag is not None:
-                backend_order.append(("v4l2", backend_flag))
-            backend_order.append(("default", None))
-
             found_cameras: List[Dict] = []
-
-            def _open_capture(index: int, backend_value):
-                try:
-                    if backend_value is None:
-                        return cv2.VideoCapture(index)
-                    return cv2.VideoCapture(index, backend_value)
-                except Exception:
-                    return None
 
             def _read_resolution(capture) -> Optional[tuple[int, int]]:
                 if capture is None or not capture.isOpened():
@@ -536,14 +503,6 @@ class DeviceManager(QObject):
                     return width, height
                 return None
 
-            def _release_capture(capture) -> None:
-                if capture is None:
-                    return
-                try:
-                    capture.release()
-                except Exception:
-                    pass
-
             # Scan /dev/video* devices (0-9). Skip indices without device nodes to avoid noisy OpenCV warnings.
             is_linux = sys.platform.startswith("linux")
             pause_ctx = CameraStreamHub.paused() if CameraStreamHub else nullcontext()
@@ -554,27 +513,26 @@ class DeviceManager(QObject):
                         if not video_path.exists():
                             continue
 
-                    for backend_name, backend_value in backend_order:
-                        cap = _open_capture(i, backend_value)
-                        try:
-                            if not cap or not cap.isOpened():
-                                continue
-                            resolution = _read_resolution(cap)
-                            if resolution:
-                                width, height = resolution
-                                found_cameras.append(
-                                    {
-                                        "index": i,
-                                        "path": f"/dev/video{i}",
-                                        "resolution": f"{width}x{height}",
-                                        "width": width,
-                                        "height": height,
-                                        "backend": backend_name,
-                                    }
-                                )
-                                break
-                        finally:
-                            _release_capture(cap)
+                    backend_name, cap = open_capture(i)
+                    try:
+                        if not cap or not cap.isOpened():
+                            continue
+                        resolution = _read_resolution(cap)
+                        if resolution:
+                            width, height = resolution
+                            found_cameras.append(
+                                {
+                                    "index": i,
+                                    "path": f"/dev/video{i}",
+                                    "resolution": f"{width}x{height}",
+                                    "width": width,
+                                    "height": height,
+                                    "backend": backend_name or "default",
+                                }
+                            )
+                    finally:
+                        if cap:
+                            cap.release()
 
             return found_cameras
 

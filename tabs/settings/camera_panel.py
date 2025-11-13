@@ -29,6 +29,8 @@ try:  # Optional dependency used for live previews
 except ImportError:  # pragma: no cover - optional dependency
     cv2 = None
 
+from utils.camera_backend import open_capture
+
 try:  # Optional dependency used to coordinate shared camera access
     from utils.camera_hub import CameraStreamHub
 except Exception:  # pragma: no cover - avoid hard dependency in limited builds
@@ -492,38 +494,8 @@ class CameraPanelMixin:
         if cv2 is None:
             return None, None
 
-        backend_flag = getattr(cv2, "CAP_V4L2", None)
-        backend_sequence = []
-
-        def add_backend(name: Optional[str]):
-            if not name:
-                return
-            if name == "v4l2" and backend_flag is None:
-                return
-            if name not in backend_sequence:
-                backend_sequence.append(name)
-
-        add_backend(preferred_backend)
-        add_backend("v4l2")
-        add_backend("default")
-
-        for backend in backend_sequence:
-            cap = None
-            try:
-                if backend == "v4l2" and backend_flag is not None:
-                    cap = cv2.VideoCapture(source, backend_flag)
-                else:
-                    cap = cv2.VideoCapture(source)
-                if not cap or not cap.isOpened():
-                    if cap:
-                        cap.release()
-                    continue
-                time.sleep(0.1)
-                return backend, cap
-            except Exception:
-                if cap:
-                    cap.release()
-        return None, None
+        backend, cap = open_capture(source, preferred_backend=preferred_backend)
+        return backend or "default", cap
 
     def _read_frame_with_retry(self, capture, attempts: int = 3, delay: float = 0.05):
         if cv2 is None or capture is None:

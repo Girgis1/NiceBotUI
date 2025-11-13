@@ -46,6 +46,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from utils.camera_backend import open_capture
+
 try:  # Optional dependency used to coordinate shared camera ownership
     from utils.camera_hub import CameraStreamHub
 except Exception:  # pragma: no cover - avoid circular failures in headless builds
@@ -219,16 +221,17 @@ class CameraStream:
                 index_or_path = cam_cfg.get("index_or_path", cam_cfg.get("index", 0))
                 index: Optional[int] = None
                 path: Optional[str] = None
-                capture: Optional[cv2.VideoCapture] = None
+                capture = None
                 available = False
 
                 try:
+                    backend_hint = cam_cfg.get("backend")
                     if isinstance(index_or_path, int):
                         index = index_or_path
-                        capture = cv2.VideoCapture(index)
+                        _, capture = open_capture(index, preferred_backend=backend_hint)
                     else:
                         path = str(index_or_path)
-                        capture = cv2.VideoCapture(path)
+                        _, capture = open_capture(path, preferred_backend=backend_hint)
                     available = bool(capture and capture.isOpened())
                 except Exception:
                     available = False
@@ -265,8 +268,7 @@ class CameraStream:
                 capture = None
 
                 try:
-                    # Linux/Jetson camera capture (no Windows support)
-                    capture = cv2.VideoCapture(idx)
+                    _, capture = open_capture(idx)
 
                     available = bool(capture and capture.isOpened())
                 except Exception:
@@ -302,7 +304,7 @@ class CameraStream:
                 return
 
             capture_target = source.path if source.path is not None else source.index
-            cap = cv2.VideoCapture(capture_target)
+            _, cap = open_capture(capture_target)
             if not cap or not cap.isOpened():
                 self.cap = None
                 self._resume_hub_if_needed()
