@@ -19,12 +19,20 @@ from utils.teleop_preflight import TeleopPreflight
 # LeRobot imports for programmatic teleop
 try:
     import lerobot
-    import lerobot.teleoperators
-    import lerobot.robots
+    import lerobot.teleoperators.so100_leader
+    import lerobot.teleoperators.so101_leader
+    import lerobot.teleoperators.bi_so100_leader
+    import lerobot.robots.so100_follower
+    import lerobot.robots.so101_follower
+    import lerobot.robots.bi_so100_follower
     LEROBOT_AVAILABLE = True
 except ImportError:
     LEROBOT_AVAILABLE = False
     lerobot = None
+
+PROGRAMMATIC_TELEOP_ENABLED = (
+    os.environ.get("ENABLE_PROGRAMMATIC_TELEOP", "0") == "1" and LEROBOT_AVAILABLE
+)
 
 
 JETSON_FLAG = Path("/etc/nv_tegra_release")
@@ -164,11 +172,11 @@ class ProgrammaticTeleopWorker(QThread):
             raise ValueError(f"Missing ports for {self.arm_target} arm teleop")
 
         # Create teleoperator
-        teleop_config = lerobot.teleoperators.so100_leader.So100LeaderConfig(
+        teleop_config = lerobot.teleoperators.so100_leader.SO100LeaderConfig(
             port=teleop_port,
             id=f"{self.arm_target}_leader"
         )
-        teleop = lerobot.teleoperators.so100_leader.So100Leader(teleop_config)
+        teleop = lerobot.teleoperators.so100_leader.SO100Leader(teleop_config)
 
         # Create robot
         robot_config = lerobot.robots.so101_follower.So101FollowerConfig(
@@ -203,18 +211,18 @@ class ProgrammaticTeleopWorker(QThread):
 
         # Create separate teleoperator instances for mixed types
         # Left leader: SO100
-        left_teleop_config = lerobot.teleoperators.so100_leader.So100LeaderConfig(
+        left_teleop_config = lerobot.teleoperators.so100_leader.SO100LeaderConfig(
             port=teleop_ports[0],  # Left leader (SO100)
             id="left_leader_so100"
         )
-        left_teleop = lerobot.teleoperators.so100_leader.So100Leader(left_teleop_config)
+        left_teleop = lerobot.teleoperators.so100_leader.SO100Leader(left_teleop_config)
 
         # Right leader: SO101
-        right_teleop_config = lerobot.teleoperators.so101_leader.So101LeaderConfig(
+        right_teleop_config = lerobot.teleoperators.so101_leader.SO101LeaderConfig(
             port=teleop_ports[1],  # Right leader (SO101)
             id="right_leader_so101"
         )
-        right_teleop = lerobot.teleoperators.so101_leader.So101Leader(right_teleop_config)
+        right_teleop = lerobot.teleoperators.so101_leader.SO101Leader(right_teleop_config)
 
         # For bimanual with mixed types, we need to create a composite teleop interface
         # This is a simplified approach - in practice, lerobot's bimanual teleop
@@ -389,11 +397,12 @@ class TeleopController(QObject):
             self._emit_error("Teleop preflight failed — check serial connections and try again.")
             return False
 
-        # Try programmatic approach first, fall back to script if needed
-        if LEROBOT_AVAILABLE:
+        # Programmatic teleop optional (disabled unless explicitly enabled)
+        if PROGRAMMATIC_TELEOP_ENABLED:
             return self._start_programmatic(arm_mode)
-        else:
-            return self._start_script_based(arm_mode)
+
+        safe_print("[TeleopController] Programmatic teleop disabled; using script path.")
+        return self._start_script_based(arm_mode)
 
     def _start_programmatic(self, arm_mode: str) -> bool:
         """Start teleop using programmatic lerobot API."""
@@ -436,6 +445,9 @@ class TeleopController(QObject):
         args = ["-lc", shlex.quote(command)]
         self.process.setArguments(args)
         self.process.setWorkingDirectory(str(script.parent))
+        env = QProcessEnvironment.systemEnvironment()
+        env.insert("AUTO_ACCEPT_CALIBRATION", "1")
+        self.process.setProcessEnvironment(env)
         self.process.readyReadStandardOutput.connect(self._handle_stdout)
         self.process.readyReadStandardError.connect(self._handle_stderr)
         self.process.finished.connect(self._handle_finished)

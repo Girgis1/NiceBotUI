@@ -384,17 +384,18 @@ class SO101CalibrationDialog(QDialog):
     # ----------------------------------------------------------------- Actions
     def _on_primary_clicked(self):
         if self._active_process:
-            if self._awaiting_center:
-                self._append_log("[UI] Sending ENTER to confirm center position...\n")
-                try:
-                    self._active_process.write(b"\n")
-                    self._active_process.waitForBytesWritten(50)
-                except Exception as exc:
-                    self._append_log(f"[UI] Failed to send ENTER: {exc}\n")
-                    return
+            awaiting_center = self._awaiting_center
+            action_label = "confirm center position" if awaiting_center else "advance calibration"
+            self._append_log(f"[UI] Sending ENTER to {action_label}...\n")
+            try:
+                self._active_process.write(b"\n")
+                self._active_process.waitForBytesWritten(50)
+            except Exception as exc:
+                self._append_log(f"[UI] Failed to send ENTER: {exc}\n")
+                return
+            if awaiting_center:
                 self._awaiting_center = False
                 self.primary_btn.setText("Next")
-                self.primary_btn.setEnabled(False)
             return
 
         if self._stage == "config":
@@ -561,6 +562,9 @@ class SO101CalibrationDialog(QDialog):
         self._motor_snapshot_mode = True
         self._motor_lines.clear()
         self._set_log_fullscreen(True)
+        if not self._awaiting_center and self._stage == "running":
+            self.primary_btn.setEnabled(True)
+            self.primary_btn.setText("Save")
         self._render_motor_snapshot()
 
     def _disable_motor_snapshot_mode(self):
