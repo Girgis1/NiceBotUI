@@ -1557,6 +1557,279 @@ class TeleopTelemetryClient:
 
 ---
 
+## **2025-01-16 22:30:00 - TELEOP SYSTEM STABILITY REVIEW - ISSUES IDENTIFIED**
+
+**Review Scope:** Complete analysis of record tab teleop system for bugs and stability issues.
+
+**Components Reviewed:**
+- TeleopController class and signal handling
+- ProgrammaticTeleopWorker thread implementation
+- TeleopPreflight motor parameter reset system
+- Record tab teleop integration and UI state management
+- Qt signal/slot connections and thread safety
+
+### **🚨 CRITICAL ISSUES IDENTIFIED**
+
+#### **1. Thread Safety & Signal Race Conditions**
+**Problem:** Multiple potential race conditions in teleop worker signal handling.
+
+**Issues Found:**
+- **Signal emission during thread shutdown:** `log_message.emit()` called after thread may be terminating
+- **Qt object lifetime:** Worker emits signals after `finished.emit()`, but Qt objects may be destroyed
+- **Cross-thread signal connections:** Signals emitted from worker thread to main thread without proper synchronization
+
+**Risk:** UI freezes, crashes, or undefined behavior during teleop shutdown.
+
+**Current Code (Problematic):**
+```python
+def run(self):
+    try:
+        # ... teleop loop ...
+        while self.running:
+            # ... teleop logic ...
+            self.log_message.emit(f"Teleop error: {e}")  # ❌ May emit after thread termination
+            break
+    finally:
+        self.finished.emit()  # ❌ Signals emitted after thread cleanup
+```
+
+#### **2. Resource Leak in TeleopPreflight**
+**Problem:** Motor bus connections not guaranteed to close on failure.
+
+**Issues Found:**
+- **Exception handling gap:** If `create_motor_bus()` succeeds but motor writes fail, bus stays open
+- **No timeout on bus operations:** Infinite hangs possible if hardware unresponsive
+- **Resource accumulation:** Multiple failed preflight attempts can accumulate open bus connections
+
+**Risk:** Serial port exhaustion, system instability after multiple teleop attempts.
+
+**Current Code (Problematic):**
+```python
+def _reset_port(self, port: str) -> bool:
+    try:
+        bus = create_motor_bus(port)  # ✅ Bus created
+        # ... motor operations ...
+    except Exception as exc:
+        # ❌ Bus not explicitly closed on failure
+        return False
+    # ✅ Bus closed in normal case
+```
+
+#### **3. Teleop Mode State Inconsistency**
+**Problem:** Global teleop mode state can become inconsistent with actual teleop status.
+
+**Issues Found:**
+- **Mode exit without verification:** `_handle_teleop_mode_exit()` called regardless of actual teleop state
+- **State store desynchronization:** `teleop.mode` state may not match `teleop.running`
+- **UI state drift:** Button text and status labels may not reflect actual teleop state
+
+**Risk:** Confusing UI state, speed limiters left disabled, user confusion.
+
+#### **4. Exception Handling Gaps**
+**Problem:** Incomplete exception handling in critical teleop paths.
+
+**Issues Found:**
+- **Qt signal emissions can throw:** `emit()` calls not wrapped in try/catch
+- **Thread termination exceptions:** Worker thread exceptions not properly logged
+- **Mixed-type teleop assumptions:** Bimanual combined action format not validated
+
+**Risk:** Silent failures, unlogged errors, undefined teleop behavior.
+
+### **⚠️ MODERATE ISSUES IDENTIFIED**
+
+#### **5. Memory Leak in Teleop Worker**
+**Problem:** Worker instances may not be properly garbage collected.
+
+**Issues Found:**
+- **Worker reference retention:** `self._worker = None` but object may still be referenced
+- **Qt parent/child relationships:** Worker not properly parented to controller
+- **Signal connection cleanup:** Lambda connections may prevent garbage collection
+
+**Risk:** Memory accumulation over multiple teleop sessions.
+
+#### **6. Live Recording During Teleop - Incomplete Implementation**
+**Problem:** Telemetry system referenced but not fully implemented.
+
+**Issues Found:**
+- **Missing telemetry client:** TeleopTelemetryClient referenced but not implemented in UI
+- **Position fallback logic:** `_read_motor_positions_safe()` returns empty list during teleop
+- **SET position capture:** No telemetry-based position capture during active teleop
+
+**Risk:** Live recording and SET features disabled during teleop, poor user experience.
+
+### **🔧 STABILITY IMPROVEMENTS NEEDED**
+
+#### **Immediate Fixes Required:**
+
+**1. Thread-Safe Signal Emission:**
+```python
+def run(self):
+    try:
+        self.running = True
+        # ... teleop setup ...
+        
+        while self.running and not self.isInterruptionRequested():
+            try:
+                # ... teleop loop ...
+            except Exception as e:
+                if self.running:
+                    # Use queued connection for thread safety
+                    QMetaObject.invokeMethod(
+                        self, "_emit_thread_safe_log", 
+                        Qt.QueuedConnection,
+                        Q_ARG(str, f"Teleop error: {e}")
+                    )
+                    break
+        
+        # Cleanup before final signals
+        self._cleanup()
+        
+    except Exception as e:
+        QMetaObject.invokeMethod(
+            self, "_emit_thread_safe_error",
+            Qt.QueuedConnection, 
+            Q_ARG(str, str(e))
+        )
+    finally:
+        # Final cleanup signal
+        self.finished.emit()
+```
+
+**2. Resource Leak Prevention:**
+```python
+def _reset_port(self, port: str) -> bool:
+    bus = None
+    try:
+        bus = create_motor_bus(port)
+        # Set timeout on bus operations
+        bus.timeout = 2.0  # 2 second timeout
+        
+        # ... motor operations ...
+        return True
+        
+    except Exception as exc:
+        safe_print(f"[TeleopPreflight] Port {port} reset failed: {exc}")
+        return False
+        
+    finally:
+        # Guaranteed cleanup
+        if bus:
+            try:
+                bus.disconnect()
+            except Exception:
+                pass  # Ignore cleanup errors
+```
+
+**3. Teleop Mode State Synchronization:**
+```python
+def _handle_worker_finished(self) -> None:
+    """Handle completion of programmatic teleop worker."""
+    # Ensure clean state transition
+    was_running = self._worker is not None
+    
+    if self._worker:
+        # Disconnect all signals first
+        self._worker.log_message.disconnect()
+        self._worker.error.disconnect() 
+        self._worker.finished.disconnect()
+        self._worker = None
+    
+    # Update state consistently
+    self._set_running(False)
+    self._emit_status("Teleop session finished.")
+    
+    # Exit teleop mode only if we were actually running
+    if was_running:
+        restored = self._mode.exit()
+        if restored is not None:
+            self._state_store.set_state("control.speed_multiplier", restored)
+```
+
+#### **Advanced Improvements Recommended:**
+
+**4. Telemetry Integration for Live Recording:**
+```python
+class TeleopTelemetryClient(QObject):
+    """Client for receiving teleop position data via UNIX socket."""
+    
+    positions_received = Signal(dict)  # Emits position data
+    
+    def __init__(self, socket_path="/tmp/teleop_positions.sock"):
+        super().__init__()
+        self.socket_path = socket_path
+        self.sock = None
+        self.running = False
+        
+    def connect(self):
+        # Connect to telemetry server socket
+        # Read position data and emit signals
+        pass
+        
+    def get_latest_positions(self, arm_index: int) -> List[int]:
+        # Return latest positions for specified arm
+        pass
+```
+
+**5. Enhanced Error Recovery:**
+```python
+def _start_programmatic(self, arm_mode: str) -> bool:
+    """Start teleop with comprehensive error recovery."""
+    try:
+        # Validate lerobot availability
+        if not LEROBOT_AVAILABLE:
+            return self._start_script_based(arm_mode)
+            
+        # Create worker with error boundaries
+        self._worker = ProgrammaticTeleopWorker(self.config, arm_mode)
+        
+        # Connect signals with error handling
+        self._worker.finished.connect(self._handle_worker_finished, Qt.DirectConnection)
+        self._worker.error.connect(self._handle_worker_error, Qt.DirectConnection)
+        
+        # Add watchdog timer for hangs
+        self._teleop_watchdog = QTimer(self)
+        self._teleop_watchdog.setSingleShot(True)
+        self._teleop_watchdog.timeout.connect(self._handle_teleop_timeout)
+        self._teleop_watchdog.setInterval(30000)  # 30 second timeout
+        
+        self._worker.start()
+        self._teleop_watchdog.start()
+        
+        return True
+        
+    except Exception as e:
+        safe_print(f"[TeleopController] Failed to start programmatic teleop: {e}")
+        return self._start_script_based(arm_mode)
+```
+
+### **📊 TESTING PROTOCOL NEEDED**
+
+**Critical Test Cases:**
+1. **Rapid start/stop cycles** - 10+ teleop sessions without restart
+2. **Network interruption simulation** - Disconnect/reconnect hardware during teleop  
+3. **Mixed hardware failures** - One arm fails, other continues
+4. **Memory leak verification** - Long-running teleop sessions with heap monitoring
+5. **Qt event loop stress** - Heavy UI interaction during teleop
+
+### **🎯 SUMMARY & PRIORITIES**
+
+**🚨 CRITICAL (Fix Immediately):**
+1. Thread safety in signal emissions
+2. Resource leak prevention in preflight
+3. Teleop mode state synchronization
+
+**⚠️ HIGH PRIORITY (Fix Soon):**
+4. Memory leak prevention
+5. Live recording telemetry implementation
+
+**🔧 MEDIUM PRIORITY (Enhance):**
+6. Enhanced error recovery and timeouts
+7. Comprehensive testing suite
+
+**Status:** 🔍 **ISSUES IDENTIFIED** - Comprehensive stability improvements needed for production deployment.
+
+---
+
 ## 2025-01-16 04:15:00 - BrokenPipeError Fix (JETSON STARTUP CRASH)
 
 ## 2025-01-14 19:00:00 - COMPREHENSIVE TELEOP INTEGRATION PLAN (LONG-TERM SOLUTION)
