@@ -68,7 +68,8 @@ class RecordStoreMixin:
                 if step_type == "live_recording":
                     recorded_data = component_data.get("recorded_data", [])
                     if recorded_data:
-                        self.table.add_live_recording(step_name, recorded_data, step_speed)
+                        meta = component_data.get("metadata")
+                        self.table.add_live_recording(step_name, recorded_data, step_speed, metadata=meta)
                         print(f"[LOAD] ✓ Added live recording: {step_name} ({len(recorded_data)} points)")
                         self.position_counter += 1
 
@@ -78,7 +79,7 @@ class RecordStoreMixin:
                         pos_name = pos_data.get("name", step_name)
                         motor_positions = pos_data.get("motor_positions", [])
                         velocity = pos_data.get("velocity", 600)
-                        self.table.add_single_position(pos_name, motor_positions, velocity)
+                        self.table.add_single_position(pos_name, motor_positions, velocity, metadata=pos_data.get("metadata"))
                         self.position_counter += 1
                     print(f"[LOAD] ✓ Added position set: {step_name} ({len(positions)} positions)")
 
@@ -88,7 +89,7 @@ class RecordStoreMixin:
             print(f"[LOAD] Live recording has {len(recorded_data)} points in file")
             if recorded_data:
                 name = action_data.get("name", f"Recording {self.position_counter}")
-                self.table.add_live_recording(name, recorded_data, speed)
+                self.table.add_live_recording(name, recorded_data, speed, metadata=action_data.get("metadata"))
                 print(f"[LOAD] ✓ Added live recording to table: {name}")
                 self.position_counter += 1
 
@@ -99,7 +100,7 @@ class RecordStoreMixin:
                 pos_name = pos_data.get("name", f"Position {self.position_counter}")
                 motor_positions = pos_data.get("motor_positions", [])
                 velocity = pos_data.get("velocity", 600)
-                self.table.add_single_position(pos_name, motor_positions, velocity)
+                self.table.add_single_position(pos_name, motor_positions, velocity, metadata=pos_data.get("metadata"))
                 self.position_counter += 1
 
         print(f"[LOAD] ✓ Loaded recording with {self.position_counter - 1} item(s) in table")
@@ -107,21 +108,43 @@ class RecordStoreMixin:
     def record_position(self):
         """Record one single position action."""
         try:
+            if getattr(self, "_is_teleop_active", lambda: False)():
+                self.status_label.setText("⚠️ Stop teleop before capturing a position.")
+                return
             print("[RECORD] Reading motor positions...")
             self.status_label.setText("Reading motor positions...")
-            positions = self.motor_controller.read_positions()
+            capture_fn = getattr(self, "_capture_positions_for_target", None)
+            if callable(capture_fn):
+                captures = capture_fn()
+            else:
+                positions = getattr(self, "_read_motor_positions_safe", lambda prefer_bus=False: [])(prefer_bus=False)
+                captures = [(getattr(self, "active_arm_index", 0), positions)] if positions else []
 
-            if not positions or len(positions) != 6:
-                print(f"[RECORD] ❌ Failed to read positions: {positions}")
+            if not captures:
+                print("[RECORD] ❌ Failed to read positions for selected arm(s)")
                 self.status_label.setText("❌ Failed to read motor positions")
                 return
 
-            print(f"[RECORD] ✓ Read positions: {positions}")
             name = f"Position {self.position_counter}"
             velocity = self.default_velocity
-
-            self.table.add_single_position(name, positions, velocity)
-            self.position_counter += 1
+            metadata_builder = getattr(self, "_build_teleop_metadata", None)
+            recorded_names = []
+            for arm_index, positions in captures:
+                print(f"[RECORD] ✓ Read positions for arm {arm_index}: {positions}")
+                tag = getattr(self, "_arm_tag_for_index", lambda idx: f"A{idx+1}")(arm_index)
+                display_name = f"{name} ({tag})" if tag else name
+                metadata = metadata_builder() if callable(metadata_builder) else {}
+                if isinstance(metadata, dict):
+                    metadata = dict(metadata)
+                metadata = metadata or {}
+                metadata.update({
+                    "arm_selection": getattr(self, "teleop_target", "both"),
+                    "arm_index": arm_index,
+                    "arm_tag": tag,
+                })
+                self.table.add_single_position(display_name, positions, velocity, metadata=metadata)
+                self.position_counter += 1
+                recorded_names.append(display_name)
 
             try:
                 if self.motor_controller.bus:
@@ -131,8 +154,10 @@ class RecordStoreMixin:
             except Exception as exc:  # pragma: no cover - hardware specific
                 print(f"[RECORD] ⚠️ Could not ensure torque: {exc}")
 
-            self.status_label.setText(f"✓ Recorded {name} @ vel {velocity}")
-            print(f"[RECORD] Added single position action: {name} with velocity {velocity}")
+            if recorded_names:
+                summary = ", ".join(recorded_names)
+                self.status_label.setText(f"✓ Recorded {summary} @ vel {velocity}")
+                print(f"[RECORD] Added position action(s): {summary} with velocity {velocity}")
 
         except Exception as exc:  # pragma: no cover - hardware specific
             self.status_label.setText(f"❌ Error: {exc}")
@@ -214,6 +239,8 @@ class RecordStoreMixin:
                     "recorded_data": recorded_data,
                     "mode": current_mode,
                 }
+                if action.get("metadata"):
+                    action_data["metadata"] = action["metadata"]
                 print(f"[SAVE] Saving single live_recording with {len(recorded_data)} points (mode: {current_mode})")
 
             elif action['type'] == 'position':
@@ -230,26 +257,39 @@ class RecordStoreMixin:
                     ],
                     "mode": current_mode,
                 }
+                if action.get("metadata"):
+                    action_data["positions"][0]["metadata"] = action["metadata"]
                 print(f"[SAVE] Saving single position (mode: {current_mode})")
 
         else:
             steps: List[Dict[str, Any]] = []
             for action in actions:
                 if action['type'] == 'live_recording':
+                    component_data = {
+                        "recorded_data": action.get("recorded_data", [])
+                    }
+                    if action.get("metadata"):
+                        component_data["metadata"] = action["metadata"]
                     step = {
                         "type": "live_recording",
                         "name": action['name'],
                         "speed": action.get("speed", 100),
                         "enabled": True,
                         "delay_after": 0.0,
-                        "component_data": {
-                            "recorded_data": action.get("recorded_data", [])
-                        },
+                        "component_data": component_data,
                     }
                     steps.append(step)
                     print(f"[SAVE] Adding live recording step: {action['name']}")
 
                 elif action['type'] == 'position':
+                    position_entry = {
+                        "name": action['name'],
+                        "motor_positions": action['positions'],
+                        "velocity": 600,
+                        "wait_for_completion": True,
+                    }
+                    if action.get("metadata"):
+                        position_entry["metadata"] = action["metadata"]
                     step = {
                         "type": "position_set",
                         "name": action['name'],
@@ -257,14 +297,7 @@ class RecordStoreMixin:
                         "enabled": True,
                         "delay_after": 0.0,
                         "component_data": {
-                            "positions": [
-                                {
-                                    "name": action['name'],
-                                    "motor_positions": action['positions'],
-                                    "velocity": 600,
-                                    "wait_for_completion": True,
-                                }
-                            ]
+                            "positions": [position_entry]
                         },
                     }
                     steps.append(step)

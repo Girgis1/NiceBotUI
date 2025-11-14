@@ -2698,6 +2698,8 @@ class TeleopController:
 
 > @codex (2025-01-16 18:40 UTC): Teleop target now drives SET/LIVE RECORD metadata and arm selection; we removed the redundant ARM dropdowns (Record+Dashboard), renamed teleop button dynamically, and annotate recordings with `L`, `R`, or `L+R`. Live Record currently requires a single arm selected; dual-arm capture is queued behind the telemetry work.
 
+> @codex (2025-01-16 19:15 UTC): Teleop preflight moved into the UI—`TeleopController` now resets Goal_Velocity/Acceleration for the selected follower/leader ports (with verification + logging) before launching Lerobot. The shell scripts no longer attempt their own resets; telemetry helpers remain available for manual sessions.
+
 ---
 
 ## 2025-01-15 23:30:00 - Teleop Speed Control Investigation (CRITICAL DISCOVERY)

@@ -89,8 +89,6 @@ Teleop Configuration:
   Right leader  : ${RIGHT_LEADER_PORT}
 INFO
 
-sudo chmod 666 ${LEFT_FOLLOWER_PORT} ${RIGHT_FOLLOWER_PORT} ${LEFT_LEADER_PORT} ${RIGHT_LEADER_PORT}
-
 "${TELEOP_BIN}" \
   --robot.type=${FOLLOWER_TYPE} \
   --robot.left_arm_port=${LEFT_FOLLOWER_PORT} \

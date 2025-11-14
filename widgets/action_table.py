@@ -3,6 +3,8 @@ Action Table Widget - Industrial precision action management
 Each row is ONE complete action (single position OR live recording)
 """
 
+from __future__ import annotations
+
 from PySide6.QtWidgets import QPushButton, QTableWidgetItem
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
@@ -34,7 +36,13 @@ class ActionTableWidget(DraggableTableWidget):
         header.resizeSection(2, 100)  # Speed column
         header.resizeSection(3, 80)   # Delete button
     
-    def add_single_position(self, name: str, positions: list[int], velocity: int = 600):
+    def add_single_position(
+        self,
+        name: str,
+        positions: list[int],
+        velocity: int = 600,
+        metadata: dict | None = None,
+    ):
         """Add ONE single position action
         
         Args:
@@ -53,7 +61,8 @@ class ActionTableWidget(DraggableTableWidget):
         name_item.setData(Qt.UserRole + 1, {
             'type': 'position',
             'positions': positions,
-            'velocity': velocity  # Store as velocity for positions
+            'velocity': velocity,  # Store as velocity for positions
+            'metadata': metadata or {},
         })
         self.setItem(row, 0, name_item)
         
@@ -73,7 +82,13 @@ class ActionTableWidget(DraggableTableWidget):
         # Column 3: Delete button
         self._add_delete_button(row)
     
-    def add_live_recording(self, name: str, recorded_data: list[dict], speed: int = 100):
+    def add_live_recording(
+        self,
+        name: str,
+        recorded_data: list[dict],
+        speed: int = 100,
+        metadata: dict | None = None,
+    ):
         """Add ONE complete live recording action
         
         Args:
@@ -93,7 +108,8 @@ class ActionTableWidget(DraggableTableWidget):
             'type': 'live_recording',
             'recorded_data': recorded_data,
             'speed': speed,
-            'point_count': len(recorded_data)
+            'point_count': len(recorded_data),
+            'metadata': metadata or {},
         })
         self.setItem(row, 0, name_item)
         
@@ -208,6 +224,10 @@ class ActionTableWidget(DraggableTableWidget):
                 action['recorded_data'] = action_data['recorded_data']
                 action['point_count'] = action_data['point_count']
                 action['speed'] = value  # Use as speed % for live recordings
+            
+            metadata = action_data.get('metadata') or {}
+            if metadata:
+                action['metadata'] = metadata
             
             actions.append(action)
         

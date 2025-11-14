@@ -79,8 +79,15 @@ class DeviceManager(QObject):
             self._state_store.set_state(f"cameras.{camera_name}", status)
 
         capabilities = detect_capabilities(self.config)
-        self._state_store.set_state("capabilities.robot.followers", capabilities["robot"]["followers"]) 
-        self._state_store.set_state("capabilities.robot.leaders", capabilities["robot"]["leaders"]) 
+        self._state_store.set_state("capabilities.robot.followers", capabilities["robot"]["followers"])
+        self._state_store.set_state("capabilities.robot.leaders", capabilities["robot"]["leaders"])
+
+        teleop_caps = capabilities.get("teleop", {})
+        if teleop_caps:
+            self._state_store.set_state("capabilities.teleop.available", teleop_caps.get("available", False))
+            self._state_store.set_state("capabilities.teleop.followers", teleop_caps.get("followers", False))
+            self._state_store.set_state("capabilities.teleop.leaders", teleop_caps.get("leaders", False))
+
         for cam_name, available in capabilities["cameras"].items():
             self._state_store.set_state(f"capabilities.camera.{cam_name}", available)
 

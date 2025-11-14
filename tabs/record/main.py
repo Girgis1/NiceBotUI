@@ -4,33 +4,34 @@ Allows recording sequences of motor positions for playback
 """
 
 import sys
-import shutil
+import time
 from pathlib import Path
 from functools import partial
 from typing import Optional
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QComboBox, QInputDialog, QMessageBox, QLineEdit, QSlider,
-    QGridLayout, QFrame
+    QInputDialog, QMessageBox, QLineEdit, QSlider,
+    QGridLayout, QFrame, QComboBox
 )
-from PySide6.QtCore import Qt, QTimer, Signal, QProcess
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import contextlib
+
 from widgets.action_table import ActionTableWidget
 from utils.actions_manager import ActionsManager
 from utils.config_compat import (
-    format_arm_label,
     get_active_arm_index,
-    iter_arm_configs,
     set_active_arm_index,
 )
 from utils.motor_controller import MotorController
 from utils.app_state import AppStateStore
 from utils.logging_utils import log_exception
+from utils.teleop_controller import TeleopController, TeleopMode
 
 from .record_store import RecordStoreMixin
 from .transport_controls import TransportControlsMixin
@@ -54,10 +55,14 @@ class RecordTab(
         self.actions_manager = ActionsManager()
         self.state_store = AppStateStore.instance()
         self.active_arm_index = get_active_arm_index(self.config, arm_type="robot")
-        self.arm_selector: Optional[QComboBox] = None
         self.motor_controller = MotorController(config, arm_index=self.active_arm_index)
+        self.teleop_controller = TeleopController(config)
+        self.teleop_mode = TeleopMode.instance()
         self._robot_capable = True
         self._robot_available = True
+        self._teleop_capable = False
+        self.teleop_target = "both"
+        self._teleop_log: list[str] = []
         
         self.current_action_name = "NewAction01"
         self.is_playing = False
@@ -75,6 +80,7 @@ class RecordTab(
         self.live_recorded_data = []  # Store {positions, timestamp, velocity}
         self.live_record_start_time = None
         self._live_record_connected_locally = False
+        self._live_record_arm_index = self.active_arm_index
 
         # Touch teleop state
         self.teleop_step = 10
@@ -85,7 +91,11 @@ class RecordTab(
         self.teleop_hold_timer = QTimer()
         self.teleop_hold_timer.setInterval(180)
         self.teleop_hold_timer.timeout.connect(self._apply_active_teleop_step)
-        self.teleop_process: QProcess | None = None
+        self.teleop_controller.status_changed.connect(self._on_teleop_status_message)
+        self.teleop_controller.log_message.connect(self._append_teleop_log)
+        self.teleop_controller.running_changed.connect(self._on_teleop_running_changed)
+        self.teleop_controller.error_occurred.connect(self._on_teleop_error)
+        self.teleop_mode.changed.connect(self._on_teleop_mode_changed)
 
         self.init_ui()
         self.refresh_action_list()
@@ -152,49 +162,6 @@ class RecordTab(
         self.action_combo.currentTextChanged.connect(self.on_action_changed)
         top_bar.addWidget(self.action_combo, stretch=3)
 
-        self.arm_selector_label = QLabel("ARM:")
-        self.arm_selector_label.setStyleSheet("color: #ffffff; font-size: 13px; font-weight: bold; padding-left: 8px;")
-        top_bar.addWidget(self.arm_selector_label)
-
-        self.arm_selector = QComboBox()
-        self.arm_selector.setMinimumHeight(50)
-        self.arm_selector.setStyleSheet("""
-            QComboBox {
-                background-color: #404040;
-                color: #ffffff;
-                border: 2px solid #505050;
-                border-radius: 6px;
-                padding: 4px 28px 4px 10px;
-                font-size: 14px;
-                min-width: 140px;
-            }
-            QComboBox:hover {
-                border-color: #4CAF50;
-            }
-            QComboBox::drop-down {
-                subcontrol-origin: padding;
-                subcontrol-position: center right;
-                width: 26px;
-                border: none;
-                padding-right: 4px;
-            }
-            QComboBox::down-arrow {
-                width: 0;
-                height: 0;
-                border-style: solid;
-                border-width: 7px 5px 0 5px;
-                border-color: #ffffff transparent transparent transparent;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #404040;
-                color: #ffffff;
-                selection-background-color: #4CAF50;
-                font-size: 13px;
-            }
-        """)
-        self.arm_selector.currentIndexChanged.connect(self._on_arm_selector_changed)
-        top_bar.addWidget(self.arm_selector, stretch=1)
-        
         # New action button
         self.new_action_btn = QPushButton("➕")
         self.new_action_btn.setMinimumHeight(45)
@@ -241,7 +208,6 @@ class RecordTab(
         top_bar.addWidget(self.save_btn)
         
         layout.addLayout(top_bar)
-        self._refresh_arm_selector()
         
         # Control bar: SET, PLAY/STOP, Loop, Delay buttons
         control_bar = QHBoxLayout()
@@ -461,40 +427,7 @@ class RecordTab(
         teleop_panel.setMaximumWidth(256)
         teleop_panel.setMinimumWidth(220)
         main_layout.addWidget(teleop_panel, stretch=1)
-
-    def _refresh_arm_selector(self) -> None:
-        if not self.arm_selector:
-            return
-
-        options = [
-            (idx, format_arm_label(idx, arm))
-            for idx, arm in iter_arm_configs(self.config, arm_type="robot", enabled_only=True)
-        ]
-        self.arm_selector.blockSignals(True)
-        self.arm_selector.clear()
-        for idx, label in options:
-            self.arm_selector.addItem(label, idx)
-
-        if options:
-            active = get_active_arm_index(self.config, preferred=self.active_arm_index, arm_type="robot")
-            self.active_arm_index = active
-            combo_index = next((i for i, option in enumerate(options) if option[0] == active), 0)
-            self.arm_selector.setCurrentIndex(combo_index)
-
-        self.arm_selector.blockSignals(False)
-        visible = bool(options)
-        self.arm_selector.setVisible(visible)
-        if hasattr(self, "arm_selector_label"):
-            self.arm_selector_label.setVisible(visible)
-        self.arm_selector.setEnabled(visible and len(options) > 1)
-
-    def _on_arm_selector_changed(self, combo_index: int) -> None:
-        if not self.arm_selector or combo_index < 0:
-            return
-        arm_index = self.arm_selector.itemData(combo_index)
-        if arm_index is None:
-            return
-        self._apply_arm_selection(int(arm_index))
+        self._sync_active_arm_to_target()
 
     def _apply_arm_selection(self, arm_index: int) -> None:
         resolved = set_active_arm_index(self.config, arm_index, arm_type="robot")
@@ -503,8 +436,8 @@ class RecordTab(
         self.active_arm_index = resolved
         self._rebuild_motor_controller()
         if hasattr(self, "status_label"):
-            label = self.arm_selector.currentText() if self.arm_selector else f"Arm {resolved + 1}"
-            self.status_label.setText(f"🎯 Recording arm set to {label}")
+            tag = self._arm_tag_for_index(resolved)
+            self.status_label.setText(f"🎯 Recording arm set to {tag}")
             self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
         self._notify_arm_change()
 
@@ -543,6 +476,8 @@ class RecordTab(
         snapshot = self.state_store.snapshot()
         if "capabilities.robot.followers" in snapshot:
             self._robot_capable = bool(snapshot["capabilities.robot.followers"])
+        if "capabilities.teleop.available" in snapshot:
+            self._teleop_capable = bool(snapshot["capabilities.teleop.available"])
         robot_status = snapshot.get("robot.status")
         if robot_status is not None:
             self._robot_available = robot_status != "empty"
@@ -551,6 +486,9 @@ class RecordTab(
     def _on_app_state_changed(self, key: str, value) -> None:
         if key == "capabilities.robot.followers":
             self._robot_capable = bool(value)
+            self._update_robot_capability_ui()
+        elif key == "capabilities.teleop.available":
+            self._teleop_capable = bool(value)
             self._update_robot_capability_ui()
         elif key == "robot.status":
             self._robot_available = value != "empty"
@@ -567,73 +505,212 @@ class RecordTab(
             self.set_btn.setEnabled(can_use)
         if hasattr(self, "save_btn") and self.save_btn:
             self.save_btn.setEnabled(can_use)
+        teleop_running = self.teleop_controller.is_running()
+        teleop_ready = can_use and self._teleop_capable
         if hasattr(self, "teleop_launch_btn") and self.teleop_launch_btn:
-            self.teleop_launch_btn.setEnabled(can_use and (self.teleop_process is None or self.teleop_process.state() == QProcess.NotRunning))
+            self.teleop_launch_btn.setEnabled(teleop_ready or teleop_running)
         teleop_panel = getattr(self, "teleop_panel", None)
         if teleop_panel is not None:
-            teleop_panel.setEnabled(can_use)
+            teleop_panel.setEnabled(can_use or teleop_running)
+        capability_label = getattr(self, "teleop_capability_label", None)
+        if capability_label:
+            if teleop_ready or teleop_running:
+                capability_label.hide()
+            else:
+                capability_label.setText("⚠️ Connect leader controllers to enable Teleop.")
+                capability_label.show()
 
         if not can_use and not self.is_playing and not self.is_live_recording:
             self.status_label.setText("⚠️ Robot unavailable — connect hardware to record or play actions.")
 
-    def _launch_bimanual_teleop(self) -> None:
-        if self.teleop_process and self.teleop_process.state() != QProcess.NotRunning:
-            self.status_label.setText("⏳ Teleop already running…")
+    # ------------------------------------------------------------------
+    # Arm selection helpers
+
+    def _robot_arms(self) -> list:
+        return (self.config.get("robot", {}) or {}).get("arms", []) or []
+
+    def _arm_tag_for_index(self, arm_index: int) -> str:
+        arms = self._robot_arms()
+        if arm_index < len(arms):
+            name = (arms[arm_index].get("name") or arms[arm_index].get("id") or "").lower()
+            if "left" in name:
+                return "L"
+            if "right" in name:
+                return "R"
+        if arm_index == 0:
+            return "L"
+        if arm_index == 1:
+            return "R"
+        return f"A{arm_index + 1}"
+
+    def _target_arm_indices(self) -> list[int]:
+        count = len(self._robot_arms())
+        if count == 0:
+            return []
+        if self.teleop_target == "left":
+            return [0]
+        if self.teleop_target == "right" and count > 1:
+            return [1]
+        if self.teleop_target == "both" and count > 1:
+            return [0, 1]
+        return [0]
+
+    def _primary_arm_index(self) -> int:
+        indices = self._target_arm_indices()
+        return indices[0] if indices else 0
+
+    def _sync_active_arm_to_target(self) -> None:
+        primary = self._primary_arm_index()
+        if primary != self.active_arm_index:
+            self._apply_arm_selection(primary)
+
+    def _handle_teleop_button(self) -> None:
+        if self.teleop_controller.is_running():
+            self.teleop_controller.stop()
             return
 
-        script_path = Path(__file__).resolve().parents[2] / "run_bimanual_teleop.sh"
-        if not script_path.exists():
-            self.status_label.setText(f"❌ Teleop script missing: {script_path}")
+        if not self._teleop_capable:
+            self.status_label.setText("⚠️ Teleop leaders unavailable — connect controllers to start teleop.")
             return
 
-        if not Path("/etc/nv_tegra_release").exists():
-            self.status_label.setText("⚠️ Teleop available only on the Jetson device.")
+        self._enter_teleop_mode()
+        if not self.teleop_controller.start(self.teleop_target):
+            self._handle_teleop_mode_exit(update_button=False)
             return
 
-        terminal = shutil.which("gnome-terminal") or shutil.which("xterm")
-        if terminal:
-            if "gnome-terminal" in terminal:
-                args = ["--", "bash", "-lc", "./run_bimanual_teleop.sh; read -p 'Press Enter to close…'"]
-            else:
-                args = ["-hold", "-e", "./run_bimanual_teleop.sh"]
-            started = QProcess.startDetached(terminal, args, str(script_path.parent))
-            if started:
-                self.status_label.setText("🟠 Teleop launching in external terminal…")
-            else:
-                self.status_label.setText("❌ Failed to launch teleop terminal.")
+        self.status_label.setText("🚀 Teleop launching…")
+
+    def _enter_teleop_mode(self) -> None:
+        if self.teleop_mode.active:
             return
+        self.teleop_mode.enter(self.motor_controller.speed_multiplier)
+        self.teleop_status_label.setText("⚠️ Teleop mode active - speed limiters disabled")
 
-        self.status_label.setText("🚀 Launching bimanual teleop…")
-        self.teleop_launch_btn.setEnabled(False)
+    def _handle_teleop_mode_exit(self, *, update_button: bool = True) -> None:
+        restored = self.teleop_mode.exit()
+        if restored is not None:
+            self._restore_speed_multiplier(restored)
+        self.teleop_status_label.clear()
 
-        process = QProcess(self)
-        process.setProgram("bash")
-        process.setArguments(["-lc", "./run_bimanual_teleop.sh"])
-        process.setWorkingDirectory(str(script_path.parent))
-        process.readyReadStandardOutput.connect(lambda: self._handle_teleop_output(process.readAllStandardOutput(), False))
-        process.readyReadStandardError.connect(lambda: self._handle_teleop_output(process.readAllStandardError(), True))
-        process.finished.connect(self._handle_teleop_finished)
-        process.start()
-        self.teleop_process = process
+    def _teleop_target_display(self, short: bool = False) -> str:
+        mapping = {
+            "both": ("Both Arms", "Both"),
+            "left": ("Left Arm", "Left"),
+            "right": ("Right Arm", "Right"),
+        }
+        long_label, short_label = mapping.get(self.teleop_target, ("Both Arms", "Both"))
+        return short_label if short else long_label
 
-    def _handle_teleop_output(self, data, is_error: bool) -> None:
-        try:
-            text = bytes(data).decode("utf-8", errors="ignore").strip()
-        except Exception as exc:
-            log_exception("RecordTab: teleop output decode failed", exc, level="debug")
-            text = ""
-        if not text:
-            return
-        prefix = "⚠️" if is_error else "🟠"
-        self.status_label.setText(f"{prefix} {text}")
+    def _cycle_teleop_target(self, delta: int) -> None:
+        options = ["both", "left", "right"]
+        idx = options.index(self.teleop_target)
+        self.teleop_target = options[(idx + delta) % len(options)]
+        self._update_teleop_target_label()
+        self._sync_active_arm_to_target()
 
-    def _handle_teleop_finished(self, exit_code: int, status: QProcess.ExitStatus) -> None:
-        if exit_code == 0 and status == QProcess.NormalExit:
-            self.status_label.setText("✅ Teleop session finished.")
+    def _update_teleop_target_label(self) -> None:
+        if hasattr(self, "teleop_target_label"):
+            self.teleop_target_label.setText(self._teleop_target_display())
+        if hasattr(self, "teleop_launch_btn") and not self.teleop_controller.is_running():
+            self.teleop_launch_btn.setText(f"Start Teleop ({self._teleop_target_display(short=True)})")
+
+    def _is_teleop_active(self) -> bool:
+        return self.teleop_controller.is_running()
+
+    def _read_motor_positions_safe(self, *, prefer_bus: bool = True) -> list[int]:
+        """Best-effort motor position read that plays nicely with teleop sessions."""
+
+        if self._is_teleop_active():
+            return []
+        positions = self._read_positions_for_arm(self.active_arm_index, prefer_bus=prefer_bus)
+        return positions or []
+
+    def _build_teleop_metadata(self) -> Optional[dict]:
+        """Describe the current teleop session / arm selection for recordings."""
+
+        teleop_cfg = self.config.get("teleop", {}) or {}
+        arms = teleop_cfg.get("arms", []) or []
+        mode = teleop_cfg.get("mode") or ("bimanual" if len(arms) > 1 else "solo")
+        fps = teleop_cfg.get("fps", 50)
+        metadata = {
+            "teleop": {
+                "active": self._is_teleop_active(),
+                "mode": mode,
+                "fps": fps,
+                "timestamp": time.time(),
+            },
+            "arm_selection": self.teleop_target,
+        }
+        return metadata
+
+    def _restore_speed_multiplier(self, multiplier: float) -> None:
+        control_cfg = self.config.setdefault("control", {})
+        control_cfg["speed_multiplier"] = multiplier
+        self.motor_controller.speed_multiplier = multiplier
+
+    def _read_positions_for_arm(self, arm_index: int, *, prefer_bus: bool = True) -> list[int] | None:
+        controller = None
+        temporary = False
+        if self.motor_controller and arm_index == self.active_arm_index:
+            controller = self.motor_controller
         else:
-            self.status_label.setText("⚠️ Teleop script exited unexpectedly.")
-        self.teleop_launch_btn.setEnabled(True)
-        self.teleop_process = None
+            try:
+                controller = MotorController(self.config, arm_index=arm_index)
+                temporary = True
+            except Exception as exc:
+                log_exception(f"RecordTab: failed to init motor controller for arm {arm_index}", exc, level="warning")
+                return None
+
+        try:
+            if prefer_bus and controller.bus:
+                positions = controller.read_positions_from_bus()
+                if positions:
+                    return positions
+            return controller.read_positions()
+        finally:
+            if temporary and controller:
+                with contextlib.suppress(Exception):
+                    controller.disconnect()
+
+    def _capture_positions_for_target(self) -> list[tuple[int, list[int]]]:
+        results: list[tuple[int, list[int]]] = []
+        for arm_index in self._target_arm_indices():
+            positions = self._read_positions_for_arm(arm_index, prefer_bus=False)
+            if positions and len(positions) == 6:
+                results.append((arm_index, positions))
+        return results
+
+    def _on_teleop_status_message(self, message: str) -> None:
+        if message:
+            self.status_label.setText(message)
+
+    def _append_teleop_log(self, message: str) -> None:
+        if not message:
+            return
+        self._teleop_log.append(message)
+        if len(self._teleop_log) > 10:
+            self._teleop_log.pop(0)
+        if hasattr(self, "teleop_log_label"):
+            self.teleop_log_label.setText(self._teleop_log[-1])
+
+    def _on_teleop_running_changed(self, running: bool) -> None:
+        if running:
+            self.teleop_launch_btn.setText("Stop Teleop")
+        else:
+            self.teleop_launch_btn.setText(f"Start Teleop ({self._teleop_target_display(short=True)})")
+        self.teleop_launch_btn.setEnabled(self._robot_capable or running)
+        if not running:
+            self._handle_teleop_mode_exit()
+            self.status_label.setText("✅ Teleop session finished.")
+        self._update_robot_capability_ui()
+
+    def _on_teleop_error(self, message: str) -> None:
+        if message:
+            self.status_label.setText(f"❌ {message}")
+
+    def _on_teleop_mode_changed(self, active: bool) -> None:
+        if not active and hasattr(self, "teleop_status_label"):
+            self.teleop_status_label.clear()
 
     def _create_teleop_panel(self) -> QWidget:
         """Create keypad teleoperation panel - 5 row layout for 600px height."""
@@ -846,7 +923,46 @@ class RecordTab(
 
         panel_layout.addStretch()
 
-        teleop_btn = QPushButton("Teleop")
+        # Teleop target selector
+        selector_layout = QHBoxLayout()
+        selector_layout.setSpacing(6)
+        self.teleop_target_prev = QPushButton("◀")
+        self.teleop_target_prev.setFixedWidth(32)
+        self.teleop_target_prev.clicked.connect(lambda: self._cycle_teleop_target(-1))
+        selector_layout.addWidget(self.teleop_target_prev)
+
+        self.teleop_target_label = QLabel("Both Arms")
+        self.teleop_target_label.setAlignment(Qt.AlignCenter)
+        self.teleop_target_label.setStyleSheet("""
+            QLabel {
+                color: #ffffff;
+                font-size: 13px;
+                font-weight: bold;
+                border: 1px solid #3a3a3a;
+                border-radius: 4px;
+                padding: 4px 8px;
+            }
+        """)
+        selector_layout.addWidget(self.teleop_target_label, 1)
+
+        self.teleop_target_next = QPushButton("▶")
+        self.teleop_target_next.setFixedWidth(32)
+        self.teleop_target_next.clicked.connect(lambda: self._cycle_teleop_target(1))
+        selector_layout.addWidget(self.teleop_target_next)
+        panel_layout.addLayout(selector_layout)
+        self._update_teleop_target_label()
+
+        self.teleop_status_label = QLabel("")
+        self.teleop_status_label.setStyleSheet("color: #FFB300; font-size: 11px; padding: 2px;")
+        panel_layout.addWidget(self.teleop_status_label)
+
+        self.teleop_capability_label = QLabel("")
+        self.teleop_capability_label.setStyleSheet("color: #FF7043; font-size: 10px; padding: 2px;")
+        self.teleop_capability_label.setWordWrap(True)
+        self.teleop_capability_label.hide()
+        panel_layout.addWidget(self.teleop_capability_label)
+
+        teleop_btn = QPushButton("Start Teleop")
         teleop_btn.setMinimumHeight(64)
         teleop_btn.setStyleSheet("""
             QPushButton {
@@ -869,9 +985,23 @@ class RecordTab(
                 color: #424242;
             }
         """)
-        teleop_btn.clicked.connect(self._launch_bimanual_teleop)
+        teleop_btn.clicked.connect(self._handle_teleop_button)
         panel_layout.addWidget(teleop_btn)
         self.teleop_launch_btn = teleop_btn
+
+        self.teleop_log_label = QLabel("No teleop output yet.")
+        self.teleop_log_label.setWordWrap(True)
+        self.teleop_log_label.setStyleSheet("""
+            QLabel {
+                color: #B0BEC5;
+                background-color: #1f1f1f;
+                border: 1px solid #2c2c2c;
+                border-radius: 4px;
+                font-size: 10px;
+                padding: 6px;
+            }
+        """)
+        panel_layout.addWidget(self.teleop_log_label)
 
         return teleop_panel
 

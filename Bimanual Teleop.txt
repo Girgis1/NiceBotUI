@@ -1,8 +1,41 @@
+One-time serial access setup (Jetson / Ubuntu):
+```
+cd ~/NiceBotUI
+sudo cp udev/99-so100.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger
+sudo usermod -aG dialout $USER
+```
+Log out/in (or reboot) after running the above so group changes apply.  
+After this, teleop scripts run passwordlessly and the UI no longer needs sudo.
+
+NiceBotUI now performs the Goal_Velocity/Acceleration reset in-app (before teleop launches), so the shell scripts no longer need to chmod/patch devices. Use the CLI helpers below only when running lerobot manually outside the UI.
+
+Single-arm teleop scripts mirror HuggingFace’s originals:
+```
+# Left arm only
+TARGET_ARM=left ./run_single_teleop.sh
+
+# Right arm only
+TARGET_ARM=right ./run_single_teleop.sh
+```
+
+Manual velocity toggle (useful when running lerobot CLI directly):
+```
+# Max speed for follower + leader arms
+python tools/goal_velocity_toggle.py --arm-type both --mode max
+
+# Restore limited speed (example 1200)
+python tools/goal_velocity_toggle.py --arm-type followers --mode custom --velocity 1200 --acceleration 200
+
+# Inspect Goal_Velocity across all ports
+python tools/diagnose_motor_velocity.py --scope both
+
+# Read/set a single motor on a given port
+python tools/test_motor_velocity_reset.py /dev/ttyACM0 --motor wrist_flex --velocity 4000
+```
+
 cd ~/NiceBotUI
 source .venv/bin/activate
-
-sudo chmod 666 /dev/ttyACM0
-sudo chmod 666 /dev/ttyACM1
 
 lerobot-find-port
 

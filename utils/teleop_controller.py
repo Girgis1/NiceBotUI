@@ -14,6 +14,7 @@ from utils.app_state import AppStateStore
 from utils.config_compat import get_arm_port
 from utils.logging_utils import log_exception
 from utils.safe_print import safe_print
+from utils.teleop_preflight import TeleopPreflight
 
 # LeRobot imports for programmatic teleop
 try:
@@ -313,6 +314,7 @@ class TeleopController(QObject):
         self._state_store = AppStateStore.instance()
         self._state_store.set_state("teleop.running", False)
         self._state_store.set_state("teleop.status", "idle")
+        self._preflight = TeleopPreflight(config)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -381,6 +383,10 @@ class TeleopController(QObject):
         arm_mode = arm_mode if arm_mode in ("left", "right", "both") else "both"
 
         if not self._check_permissions():
+            return False
+
+        if not self._preflight.prepare(arm_mode):
+            self._emit_error("Teleop preflight failed — check serial connections and try again.")
             return False
 
         # Try programmatic approach first, fall back to script if needed

@@ -27,9 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.app_state import AppStateStore
 from utils.camera_hub import CameraStreamHub
 from utils.config_compat import (
-    format_arm_label,
     get_active_arm_index,
-    iter_arm_configs,
     set_active_arm_index,
 )
 from .widgets import CameraDetailDialog, CameraPreviewWidget, CircularProgress, StatusIndicator
@@ -287,51 +285,6 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
         self.run_label.setStyleSheet("color: #ffffff; font-size: 19px; font-weight: bold;")
         run_layout.addWidget(self.run_label)
 
-        self.arm_label = QLabel("ARM:")
-        self.arm_label.setStyleSheet("color: #ffffff; font-size: 17px; font-weight: bold;")
-        run_layout.addWidget(self.arm_label)
-
-        self.arm_selector = QComboBox()
-        self.arm_selector.setMinimumHeight(70)
-        self.arm_selector.setMaximumHeight(70)
-        self.arm_selector.setStyleSheet("""
-            QComboBox {
-                background-color: #404040;
-                color: #ffffff;
-                border: 2px solid #505050;
-                border-radius: 6px;
-                padding: 4px 30px 4px 12px;
-                font-size: 17px;
-                font-weight: bold;
-                min-width: 150px;
-            }
-            QComboBox:hover {
-                border-color: #4CAF50;
-            }
-            QComboBox::drop-down {
-                subcontrol-origin: padding;
-                subcontrol-position: center right;
-                width: 32px;
-                border: none;
-                padding-right: 6px;
-            }
-            QComboBox::down-arrow {
-                width: 0;
-                height: 0;
-                border-style: solid;
-                border-width: 7px 5px 0 5px;
-                border-color: #ffffff transparent transparent transparent;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #404040;
-                color: #ffffff;
-                selection-background-color: #4CAF50;
-                font-size: 15px;
-            }
-        """)
-        self.arm_selector.currentIndexChanged.connect(self._on_arm_selector_changed)
-        run_layout.addWidget(self.arm_selector, stretch=1)
-        
         # Main selector (Models, Sequences, Actions)
         self.run_combo = QComboBox()
         self.run_combo.setMinimumHeight(85)
@@ -626,47 +579,17 @@ class DashboardTab(QWidget, DashboardStateMixin, DashboardCameraMixin, Dashboard
         self.on_speed_slider_changed(initial_speed)
 
     def _refresh_arm_selector(self) -> None:
-        if not self.arm_selector:
-            return
-
-        options = [(idx, format_arm_label(idx, arm)) for idx, arm in iter_arm_configs(self.config, enabled_only=True)]
-        self.arm_selector.blockSignals(True)
-        self.arm_selector.clear()
-        for idx, label in options:
-            self.arm_selector.addItem(label, idx)
-
-        has_options = bool(options)
-        if has_options:
-            active = get_active_arm_index(self.config, preferred=getattr(self, "active_robot_arm_index", None))
-            self.active_robot_arm_index = active
-            combo_index = next((i for i, option in enumerate(options) if option[0] == active), 0)
-            self.arm_selector.setCurrentIndex(combo_index)
-
-        self.arm_selector.blockSignals(False)
-        self.arm_selector.setVisible(has_options)
-        if hasattr(self, "arm_label"):
-            self.arm_label.setVisible(has_options)
-        self.arm_selector.setEnabled(has_options and len(options) > 1)
-
-    def _on_arm_selector_changed(self, combo_index: int) -> None:
-        if not self.arm_selector or combo_index < 0:
-            return
-        arm_index = self.arm_selector.itemData(combo_index)
-        if arm_index is None:
-            return
-
-        resolved = set_active_arm_index(self.config, int(arm_index), arm_type="robot")
-        if resolved == getattr(self, "active_robot_arm_index", None):
-            return
-
-        self.active_robot_arm_index = resolved
-        self._persist_dashboard_state()
+        self.active_robot_arm_index = get_active_arm_index(
+            self.config,
+            preferred=getattr(self, "active_robot_arm_index", None),
+            arm_type="robot",
+        )
 
     def handle_external_arm_change(self, preferred: Optional[int] = None) -> None:
         new_index = get_active_arm_index(self.config, preferred=preferred, arm_type="robot")
         if new_index != getattr(self, "active_robot_arm_index", None):
             self.active_robot_arm_index = new_index
-        self._refresh_arm_selector()
+        self._persist_dashboard_state()
 
     # ------------------------------------------------------------------
     # Status indicator helpers
