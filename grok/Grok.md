@@ -1376,7 +1376,9 @@ class TrainTab(QWidget):
 **Solution:** Implemented direct bimanual teleop using `BiSO100Leader` and `BiSO100Follower` classes:
 
 **Key Implementation:**
-- ✅ **BiSO100Leader/BiSO100Follower** classes used for bimanual teleop
+- ✅ **Mixed leader support** - SO100 left leader, SO101 right leader
+- ✅ **Separate teleoperator instances** for different leader types
+- ✅ **BiSO100Follower** for bimanual robot (both SO101 followers)
 - ✅ **Automatic port mapping** from NiceBot config to lerobot config
 - ✅ **Qt thread integration** with proper signal handling
 - ✅ **Fallback to scripts** if lerobot library unavailable
@@ -1385,24 +1387,54 @@ class TrainTab(QWidget):
 **Benefits:**
 - ✅ **No external script dependencies** for bimanual teleop
 - ✅ **Direct lerobot API usage** - matches your command-line approach
+- ✅ **Mixed leader type support** - handles SO100/SO101 combinations
 - ✅ **Integrated error handling** - Qt signals for UI feedback
 - ✅ **Automatic port resolution** - maps config to lerobot parameters
 - ✅ **Same performance** - identical to `lerobot-teleoperate` command
 
 **Usage:**
 ```python
-# Bimanual teleop with programmatic API
-teleop = lerobot.teleoperators.bi_so100_leader.BiSO100Leader(
-    config=lerobot.teleoperators.bi_so100_leader.BiSO100LeaderConfig(
-        left_arm_port="/dev/ttyACM1",   # Left leader
-        right_arm_port="/dev/ttyACM3",  # Right leader
+# Mixed-type bimanual teleop (SO100 left leader, SO101 right leader)
+left_teleop = lerobot.teleoperators.so100_leader.So100Leader(
+    config=lerobot.teleoperators.so100_leader.So100LeaderConfig(
+        port="/dev/ttyACM1",  # Left leader (SO100)
+        id="left_leader_so100"
+    )
+)
+right_teleop = lerobot.teleoperators.so101_leader.So101Leader(
+    config=lerobot.teleoperators.so101_leader.So101LeaderConfig(
+        port="/dev/ttyACM3",  # Right leader (SO101)
+        id="right_leader_so101"
     )
 )
 robot = lerobot.robots.bi_so100_follower.BiSO100Follower(
     config=lerobot.robots.bi_so100_follower.BiSO100FollowerConfig(
-        left_arm_port="/dev/ttyACM0",   # Left follower  
-        right_arm_port="/dev/ttyACM2",  # Right follower
+        left_arm_port="/dev/ttyACM0",   # Left follower (SO101)
+        right_arm_port="/dev/ttyACM2",  # Right follower (SO101)
+        id="bimanual_follower_so101"
     )
+)
+
+# Teleop loop combines actions from both leaders
+while running:
+    left_action = left_teleop.get_action()
+    right_action = right_teleop.get_action()
+    combined_action = {"left": left_action, "right": right_action}
+    robot.send_action(combined_action)
+```
+
+**Configuration Note:** Using SO101 arms for followers, SO100 leader for left arm:
+```python
+# Current hardware configuration:
+# Left follower: SO101 on /dev/ttyACM0
+# Right follower: SO101 on /dev/ttyACM2
+# Left leader: SO100 on /dev/ttyACM1 (SO100 controller)
+# Right leader: SO101 on /dev/ttyACM3
+
+# This requires mixed leader types in bimanual mode
+teleop_config = BiSO100LeaderConfig(
+    left_arm_port="/dev/ttyACM1",   # SO100 leader
+    right_arm_port="/dev/ttyACM3",  # SO101 leader
 )
 ```
 

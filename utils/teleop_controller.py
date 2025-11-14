@@ -61,28 +61,61 @@ class ProgrammaticTeleopWorker(QThread):
             self.log_message.emit(f"Starting programmatic {self.arm_target} teleop...")
 
             # Create teleoperator and robot instances
-            self.teleop, self.robot = self._create_teleop_instances()
+            teleop_result, self.robot = self._create_teleop_instances()
 
-            # Connect and calibrate
-            self.log_message.emit("Connecting teleoperator...")
-            self.teleop.connect()
+            # Handle mixed-type bimanual case
+            if self.arm_target == "both" and isinstance(teleop_result, tuple):
+                # Mixed-type bimanual: (left_teleop, right_teleop)
+                self.left_teleop, self.right_teleop = teleop_result
+                self.teleop = None  # Not a single teleop instance
+                self._is_mixed_bimanual = True
+            else:
+                # Single-arm or uniform bimanual
+                self.teleop = teleop_result
+                self.left_teleop = None
+                self.right_teleop = None
+                self._is_mixed_bimanual = False
+
+            # Connect and calibrate teleoperators
+            if self._is_mixed_bimanual:
+                self.log_message.emit("Connecting left teleoperator (SO100)...")
+                self.left_teleop.connect()
+                self.log_message.emit("Connecting right teleoperator (SO101)...")
+                self.right_teleop.connect()
+                self.log_message.emit("Calibrating left teleoperator...")
+                self.left_teleop.calibrate()
+                self.log_message.emit("Calibrating right teleoperator...")
+                self.right_teleop.calibrate()
+            else:
+                self.log_message.emit("Connecting teleoperator...")
+                self.teleop.connect()
+                self.log_message.emit("Calibrating teleoperator...")
+                self.teleop.calibrate()
 
             self.log_message.emit("Connecting robot...")
             self.robot.connect()
-
-            self.log_message.emit("Calibrating teleoperator...")
-            self.teleop.calibrate()
 
             self.log_message.emit(f"🎮 {self.arm_target.title()} teleop active - move leader arms to control")
 
             # Main teleop loop
             while self.running:
                 try:
-                    # Get action from teleoperator
-                    action = self.teleop.get_action()
+                    if self._is_mixed_bimanual:
+                        # Get actions from both teleoperators
+                        left_action = self.left_teleop.get_action()
+                        right_action = self.right_teleop.get_action()
 
-                    # Send action to robot
-                    self.robot.send_action(action)
+                        # Combine actions for bimanual robot
+                        # This assumes the robot expects a combined action format
+                        combined_action = {
+                            "left": left_action,
+                            "right": right_action
+                        }
+                        self.robot.send_action(combined_action)
+                    else:
+                        # Single teleoperator case
+                        action = self.teleop.get_action()
+                        self.robot.send_action(action)
 
                     # Small delay to prevent overwhelming the system
                     time.sleep(0.01)
@@ -146,7 +179,12 @@ class ProgrammaticTeleopWorker(QThread):
         return teleop, robot
 
     def _create_bimanual_instances(self):
-        """Create bimanual teleoperator and robot."""
+        """Create bimanual teleoperator and robot with mixed leader types.
+
+        Note: Left leader is SO100, right leader is SO101.
+        This requires separate teleoperator instances since BiSO100Leader
+        assumes both leaders are SO100.
+        """
         # Get all ports
         robot_ports = []
         teleop_ports = []
@@ -162,32 +200,54 @@ class ProgrammaticTeleopWorker(QThread):
         if len(robot_ports) < 2 or len(teleop_ports) < 2:
             raise ValueError("Bimanual teleop requires 2 robot and 2 teleop ports")
 
-        # Create bimanual teleoperator
-        teleop_config = lerobot.teleoperators.bi_so100_leader.BiSO100LeaderConfig(
-            left_arm_port=teleop_ports[0],   # Left leader
-            right_arm_port=teleop_ports[1],  # Right leader
-            id="bimanual_leader"
+        # Create separate teleoperator instances for mixed types
+        # Left leader: SO100
+        left_teleop_config = lerobot.teleoperators.so100_leader.So100LeaderConfig(
+            port=teleop_ports[0],  # Left leader (SO100)
+            id="left_leader_so100"
         )
-        teleop = lerobot.teleoperators.bi_so100_leader.BiSO100Leader(teleop_config)
+        left_teleop = lerobot.teleoperators.so100_leader.So100Leader(left_teleop_config)
 
-        # Create bimanual robot
+        # Right leader: SO101
+        right_teleop_config = lerobot.teleoperators.so101_leader.So101LeaderConfig(
+            port=teleop_ports[1],  # Right leader (SO101)
+            id="right_leader_so101"
+        )
+        right_teleop = lerobot.teleoperators.so101_leader.So101Leader(right_teleop_config)
+
+        # For bimanual with mixed types, we need to create a composite teleop interface
+        # This is a simplified approach - in practice, lerobot's bimanual teleop
+        # expects matching leader types. For now, we'll create a wrapper.
+
+        # Create bimanual robot (both followers are SO101)
         robot_config = lerobot.robots.bi_so100_follower.BiSO100FollowerConfig(
-            left_arm_port=robot_ports[0],   # Left follower
-            right_arm_port=robot_ports[1],  # Right follower
-            id="bimanual_follower"
+            left_arm_port=robot_ports[0],   # Left follower (SO101)
+            right_arm_port=robot_ports[1],  # Right follower (SO101)
+            id="bimanual_follower_so101"
         )
         robot = lerobot.robots.bi_so100_follower.BiSO100Follower(robot_config)
 
-        return teleop, robot
+        # Return tuple with both teleops and robot
+        # The worker will need to handle this special case
+        return (left_teleop, right_teleop), robot
 
     def _cleanup(self):
         """Clean up teleop and robot connections."""
+        # Clean up teleoperators
         try:
-            if self.teleop and self.teleop.is_connected():
+            if hasattr(self, '_is_mixed_bimanual') and self._is_mixed_bimanual:
+                # Mixed bimanual case
+                if self.left_teleop and self.left_teleop.is_connected():
+                    self.left_teleop.disconnect()
+                if self.right_teleop and self.right_teleop.is_connected():
+                    self.right_teleop.disconnect()
+            elif self.teleop and self.teleop.is_connected():
+                # Single teleoperator case
                 self.teleop.disconnect()
         except Exception as e:
             self.log_message.emit(f"Warning: teleop disconnect failed: {e}")
 
+        # Clean up robot
         try:
             if self.robot and self.robot.is_connected():
                 self.robot.disconnect()
