@@ -2158,6 +2158,63 @@ def _apply_calibration_result(self, arm_index: int, payload: Dict[str, str]):
 
 ---
 
+## **2025-01-16 23:45:00 - CALIBRATION ENTER KEY CONTROL ISSUE - CRITICAL UX BUG**
+
+**Issue:** Calibration dialog automatically sends ENTER key on button clicks, preventing user control.
+
+**Root Cause:** `_on_primary_clicked()` sends ENTER whenever `self._active_process` exists, regardless of user intent.
+
+**Problematic Code:**
+```python
+def _on_primary_clicked(self):
+    if self._active_process:  # ❌ Sends ENTER for ANY button click during process
+        self._append_log("[UI] Sending ENTER to current command...\n")
+        self._active_process.write(b"\n")  # ❌ Automatic ENTER
+        if self._awaiting_center:
+            self._awaiting_center = False
+            self.primary_btn.setText("Next")
+            self._enable_motor_snapshot_mode()
+        return
+    # ... rest of method
+```
+
+**Current Behavior:**
+- Button shows "Set" → Click sends ENTER (correct for center position)
+- Button shows "Next" → Click still sends ENTER (❌ wrong - should not auto-advance)
+- User loses control of calibration flow
+
+**Expected Behavior:**
+- Button shows "Set" → Click sends ENTER (center position confirmation)
+- Button shows "Next" → Click does nothing or advances UI only (no automatic ENTER)
+- Process should advance naturally through lerobot prompts
+
+**Fix Required:**
+```python
+def _on_primary_clicked(self):
+    if self._active_process:
+        # Only send ENTER when explicitly setting center position
+        if self._awaiting_center:
+            self._append_log("[UI] Sending ENTER to confirm center position...\n")
+            self._active_process.write(b"\n")
+            self._awaiting_center = False
+            self.primary_btn.setText("Next")
+            self._enable_motor_snapshot_mode()
+        # ❌ REMOVE: No automatic ENTER for other cases
+        return
+    
+    # Handle non-process button clicks (config stage, completion, etc.)
+    if self._stage == "config":
+        self._begin_calibration()
+    elif self._stage == "complete":
+        self.accept()
+```
+
+**Impact:** 🔴 **CRITICAL** - Makes calibration unusable, user cannot control process flow.
+
+**Status:** 🚨 **IMMEDIATE FIX REQUIRED** - Users cannot properly calibrate robots.
+
+---
+
 ## 2025-01-16 04:15:00 - BrokenPipeError Fix (JETSON STARTUP CRASH)
 
 ## 2025-01-14 19:00:00 - COMPREHENSIVE TELEOP INTEGRATION PLAN (LONG-TERM SOLUTION)
