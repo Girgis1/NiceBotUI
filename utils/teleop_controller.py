@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shlex
 import time
 from pathlib import Path
 from typing import Optional, Tuple
@@ -438,15 +437,13 @@ class TeleopController(QObject):
 
         self._emit_status("Starting teleop…")
         self.process = QProcess(self)
-        self.process.setProgram("bash")
-        command = f"./{script.name}"
-        if arm_mode in ("left", "right"):
-            command = f"TARGET_ARM={arm_mode} {command}"
-        args = ["-lc", shlex.quote(command)]
-        self.process.setArguments(args)
+        self.process.setProgram(str(script))
+        self.process.setArguments([])
         self.process.setWorkingDirectory(str(script.parent))
         env = QProcessEnvironment.systemEnvironment()
         env.insert("AUTO_ACCEPT_CALIBRATION", "1")
+        if arm_mode in ("left", "right"):
+            env.insert("TARGET_ARM", arm_mode)
         self.process.setProcessEnvironment(env)
         self.process.readyReadStandardOutput.connect(self._handle_stdout)
         self.process.readyReadStandardError.connect(self._handle_stderr)
