@@ -44,7 +44,7 @@ if [[ "${TARGET_ARM}" != "left" && "${TARGET_ARM}" != "right" ]]; then
 fi
 
 CONFIG_JSON="${PROJECT_ROOT}/config.json"
-assignments="$("${PYTHON_BIN}" - <<'PY' "${CONFIG_JSON}" "${TARGET_ARM}")"
+assignments="$("${PYTHON_BIN}" - "${CONFIG_JSON}" "${TARGET_ARM}" <<'PY'
 import json
 import pathlib
 import sys
@@ -82,6 +82,8 @@ PY
 )"
 eval "${assignments}"
 
+CALIB_ROOT="${HOME}/.cache/huggingface/lerobot/calibration"
+
 ensure_port_access() {
   local port="$1"
   if [[ -z "${port}" ]]; then
@@ -100,6 +102,45 @@ ensure_port_access() {
 
 ensure_port_access "${FOLLOWER_PORT}"
 ensure_port_access "${LEADER_PORT}"
+
+ensure_calibration_file() {
+  local category="$1"   # robots / teleoperators
+  local declared_type="$2"
+  local calib_id="$3"
+  local path="${CALIB_ROOT}/${category}/${declared_type}/${calib_id}.json"
+  if [[ -f "${path}" ]]; then
+    return 0
+  fi
+  local alt_type=""
+  if [[ "${declared_type}" == *"100"* ]]; then
+    alt_type="${declared_type/100/101}"
+  elif [[ "${declared_type}" == *"101"* ]]; then
+    alt_type="${declared_type/101/100}"
+  fi
+  if [[ -n "${alt_type}" ]]; then
+    local alt_path="${CALIB_ROOT}/${category}/${alt_type}/${calib_id}.json"
+    if [[ -f "${alt_path}" ]]; then
+      mkdir -p "$(dirname "${path}")"
+      ln -sf "${alt_path}" "${path}"
+      echo "⚠️ ${calib_id}: ${declared_type} calibration missing, using ${alt_type}" >&2
+      return 0
+    fi
+  fi
+  shopt -s nullglob
+  local matches=("${CALIB_ROOT}/${category}"/*/"${calib_id}.json")
+  shopt -u nullglob
+  if [[ ${#matches[@]} -gt 0 ]]; then
+    mkdir -p "$(dirname "${path}")"
+    ln -sf "${matches[0]}" "${path}"
+    echo "⚠️ ${calib_id}: auto-linked calibration from $(basename "$(dirname "${matches[0]}")")" >&2
+    return 0
+  fi
+  echo "❌ Missing calibration file for ${calib_id} under ${category}/${declared_type}. Run lerobot-calibrate first." >&2
+  exit 1
+}
+
+ensure_calibration_file "robots" "${FOLLOWER_TYPE}" "${FOLLOWER_ID}"
+ensure_calibration_file "teleoperators" "${LEADER_TYPE}" "${LEADER_ID}"
 
 cat <<INFO
 🎮 Starting ${TARGET_ARM^} Arm Teleoperation
