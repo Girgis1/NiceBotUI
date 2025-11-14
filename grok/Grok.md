@@ -1830,6 +1830,334 @@ def _start_programmatic(self, arm_mode: str) -> bool:
 
 ---
 
+## **2025-01-16 23:15:00 - CALIBRATION SYSTEM STABILITY REVIEW - CRITICAL ISSUES FOUND**
+
+**Review Scope:** Complete analysis of SO101 calibration system in settings tab for bugs and stability issues.
+
+**Components Reviewed:**
+- SO101CalibrationDialog class and UI management
+- QProcess handling for lerobot-calibrate execution
+- Modal dialog lifecycle and window management
+- Image loading and display functionality
+- Calibration result storage and config integration
+- Port discovery and validation
+
+### **🚨 CRITICAL ISSUES IDENTIFIED**
+
+#### **1. Process Management Race Conditions**
+**Problem:** Multiple QProcess instances can exist simultaneously, causing resource conflicts.
+
+**Issues Found:**
+- **No process exclusivity check:** `_run_port_discovery()` and `_begin_calibration()` can both start processes
+- **Process reference confusion:** `_active_process` can be overwritten by concurrent operations
+- **Lambda capture issues:** Process finished signals may reference stale process objects
+
+**Risk:** Multiple lerobot processes running simultaneously, calibration corruption, system resource exhaustion.
+
+**Current Code (Problematic):**
+```python
+def _run_port_discovery(self):
+    if self._active_process:  # ❌ This check is insufficient
+        return
+    # ... starts new process, overwrites self._active_process
+
+def _begin_calibration(self):
+    # ... also starts process, overwrites self._active_process
+    self._start_process(command, "calibrate")
+```
+
+#### **2. Modal Dialog Window Management Issues**
+**Problem:** Fullscreen modal dialog can cause windowing system conflicts.
+
+**Issues Found:**
+- **Frameless fullscreen modal:** `Qt.FramelessWindowHint` + `setFixedSize(screen_size)` breaks window management
+- **Parent window dependency:** `_match_host_window()` assumes parent window exists and is positioned correctly
+- **Screen geometry assumptions:** Uses `availableGeometry()` but doesn't handle multi-monitor setups
+- **Window focus issues:** Modal dialog may lose focus during calibration process
+
+**Risk:** Dialog appears behind other windows, becomes unresponsive, causes X11/Wayland conflicts.
+
+#### **3. QProcess Resource Leak in Port Discovery**
+**Problem:** Port discovery process output accumulates indefinitely.
+
+**Issues Found:**
+- **Output buffer growth:** `self._latest_aux_output += text` grows without bounds
+- **No cleanup on failure:** If port discovery fails, buffer retains partial output
+- **Memory accumulation:** Multiple port discovery attempts accumulate output
+
+**Risk:** Memory leaks during repeated port discovery, UI slowdown.
+
+**Current Code (Problematic):**
+```python
+def _run_port_discovery(self):
+    self._latest_aux_output = ""  # ✅ Reset at start
+    # ... but no cleanup if process fails or is interrupted
+
+def _on_process_output(self, process: QProcess, is_stderr: bool):
+    # ... accumulates text indefinitely
+    self._latest_aux_output += text  # ❌ No size limits
+```
+
+#### **4. Image Loading Thread Safety Issues**
+**Problem:** Pixmap scaling during resize events can cause thread conflicts.
+
+**Issues Found:**
+- **Resize event timing:** `resizeEvent()` calls `_update_center_pixmap()` during dialog construction
+- **Pixmap null checks:** `self.center_pixmap.isNull()` called before pixmap is initialized
+- **QPixmap operations:** GUI operations during dialog initialization may not be thread-safe
+
+**Risk:** Application crashes during dialog display, corrupted image display.
+
+**Current Code (Problematic):**
+```python
+def __init__(self):
+    # ... dialog setup ...
+    pixmap = QPixmap(str(self.calibration_image_path))
+    self.center_pixmap = pixmap  # May be null
+    self._update_center_pixmap()  # ❌ Called before proper initialization
+
+def resizeEvent(self, event):
+    super().resizeEvent(event)
+    self._update_center_pixmap()  # ❌ May be called during construction
+```
+
+### **⚠️ HIGH PRIORITY ISSUES**
+
+#### **5. Exception Handling Gaps in Process Management**
+**Problem:** Process failures not properly isolated or reported.
+
+**Issues Found:**
+- **Silent process failures:** `process.start()` failures not detected or reported
+- **Signal disconnection issues:** Lambda connections in `_start_process()` may cause memory leaks
+- **Error state recovery:** Failed processes leave dialog in inconsistent state
+
+**Risk:** Dialog becomes unusable after process failures, user confusion.
+
+#### **6. Configuration State Synchronization Issues**
+**Problem:** Calibration results may not properly sync with UI state.
+
+**Issues Found:**
+- **Config save timing:** `self.config_store.save()` called synchronously, may block UI
+- **UI update race:** `_sync_ui_arm_fields()` called before config is saved
+- **Error recovery:** Failed config saves don't rollback UI changes
+
+**Risk:** UI shows incorrect state after calibration, data inconsistency.
+
+### **🔧 STABILITY IMPROVEMENTS REQUIRED**
+
+#### **Immediate Critical Fixes:**
+
+**1. Process Exclusivity Enforcement:**
+```python
+def _can_start_process(self) -> bool:
+    """Check if it's safe to start a new process."""
+    if self._active_process and self._active_process.state() != QProcess.NotRunning:
+        return False
+    return self._stage in ("config", "running")  # Only allow in valid states
+
+def _run_port_discovery(self):
+    if not self._can_start_process():
+        self._append_log("[UI] Cannot start port discovery - process already running\n")
+        return
+    # ... safe to start process
+```
+
+**2. Window Management Safety:**
+```python
+def __init__(self, parent=None, **kwargs):
+    super().__init__(parent)
+    self.setModal(True)
+    # Remove: self.setWindowFlag(Qt.FramelessWindowHint, True)  # ❌ Problematic
+    self.setWindowTitle("SO101 Calibration")
+    # Use reasonable default size instead of screen size
+    self.resize(1024, 600)  # ✅ Fixed size, not fullscreen
+    # ... rest of init
+
+def _match_host_window(self):
+    """Center dialog on parent window instead of fullscreen."""
+    parent = self.parentWidget()
+    if parent:
+        parent_geom = parent.geometry()
+        self.move(
+            parent_geom.center().x() - self.width() // 2,
+            parent_geom.center().y() - self.height() // 2
+        )
+```
+
+**3. Resource Leak Prevention:**
+```python
+def _run_port_discovery(self):
+    # Limit output buffer size
+    self._latest_aux_output = ""
+    self._max_output_size = 1024 * 1024  # 1MB limit
+    
+    # ... start process
+
+def _on_process_output(self, process: QProcess, is_stderr: bool):
+    # ... existing code ...
+    # Prevent unlimited growth
+    if len(self._latest_aux_output) > self._max_output_size:
+        self._latest_aux_output = self._latest_aux_output[-self._max_output_size//2:]
+        self._append_log("[UI] Warning: Port discovery output truncated\n")
+```
+
+**4. Image Loading Safety:**
+```python
+def __init__(self, **kwargs):
+    # ... other init code ...
+    
+    # Initialize pixmap safely
+    self.center_pixmap = QPixmap()  # Start with null pixmap
+    self._load_center_image()
+    
+    # Don't call _update_center_pixmap() here - wait for showEvent
+
+def _load_center_image(self):
+    """Load center image safely."""
+    try:
+        if self.calibration_image_path.exists():
+            pixmap = QPixmap(str(self.calibration_image_path))
+            if not pixmap.isNull():
+                self.center_pixmap = pixmap
+                return
+        # Fallback to text if image fails
+        self.center_image_label.setText("Calibration reference image not available")
+    except Exception as e:
+        self.center_image_label.setText(f"Image load error: {e}")
+
+def showEvent(self, event):
+    super().showEvent(event)
+    self._match_host_window()
+    self._update_center_pixmap()  # ✅ Safe to call now
+```
+
+#### **Advanced Improvements:**
+
+**5. Process Lifecycle Management:**
+```python
+def _start_process(self, command: str, kind: str):
+    """Start process with comprehensive lifecycle management."""
+    if not self._can_start_process():
+        return
+    
+    try:
+        process = QProcess(self)
+        
+        # Connect signals before starting
+        process.readyReadStandardOutput.connect(
+            lambda: self._on_process_output(process, False)
+        )
+        process.readyReadStandardError.connect(
+            lambda: self._on_process_output(process, True)
+        )
+        process.finished.connect(
+            lambda code, status: self._on_process_finished(process, kind, code)
+        )
+        process.errorOccurred.connect(
+            lambda error: self._on_process_error(process, kind, error)
+        )
+        
+        process.setProgram("bash")
+        process.setArguments(["-lc", command])
+        
+        self._active_process = process
+        self._process_kind = kind
+        
+        if not process.start():
+            raise RuntimeError(f"Failed to start process: {command}")
+            
+        self._append_log(f"$ {command}\n")
+        
+    except Exception as e:
+        self._append_log(f"[UI] Failed to start {kind} process: {e}\n")
+        self._active_process = None
+        self._process_kind = None
+```
+
+**6. Configuration Synchronization Safety:**
+```python
+def _apply_calibration_result(self, arm_index: int, payload: Dict[str, str]):
+    """Apply calibration result with proper error handling and rollback."""
+    original_config = None
+    try:
+        # Create backup for rollback
+        original_config = deepcopy(self.config)
+        
+        # Apply changes
+        self._ensure_config_store()
+        arms = self.config.setdefault("robot", {}).setdefault("arms", [])
+        while len(arms) <= arm_index:
+            arms.append({})
+        arm_cfg = arms[arm_index]
+        
+        # Store original values for rollback
+        original_values = {
+            "port": arm_cfg.get("port"),
+            "id": arm_cfg.get("id"),
+            "robot_type": arm_cfg.get("robot_type"),
+            "arm_role": arm_cfg.get("arm_role")
+        }
+        
+        # Apply new values
+        arm_cfg.update({
+            "port": payload["port"],
+            "id": payload["robot_id"],
+            "robot_type": payload["robot_type"],
+            "arm_role": payload["arm_role"]
+        })
+        
+        # Save config
+        self.config_store.save()
+        
+        # Update UI
+        self._sync_ui_arm_fields(arm_index, payload)
+        
+        # Success message
+        self.status_label.setText(
+            f"✓ Calibration saved for Arm {arm_index + 1}: {payload['robot_id']} on {payload['port']}"
+        )
+        self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
+        self.config_changed.emit()
+        
+    except Exception as exc:
+        # Rollback on failure
+        if original_config:
+            self.config = original_config
+        
+        self.status_label.setText(f"❌ Failed to store calibration: {exc}")
+        self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
+        log_exception("Calibration result application failed", exc)
+```
+
+### **📊 TESTING PROTOCOL REQUIRED**
+
+**Critical Test Cases:**
+1. **Rapid dialog open/close cycles** - 20+ calibration dialogs without restart
+2. **Process interruption testing** - Kill lerobot processes during calibration
+3. **Multi-monitor window management** - Test on different screen configurations
+4. **Image loading failures** - Missing calibration images, corrupted files
+5. **Network filesystem issues** - Calibration directory on slow/network storage
+6. **Memory leak verification** - Long-running calibration sessions with heap monitoring
+
+### **🎯 SUMMARY & PRIORITIES**
+
+**🚨 CRITICAL (Fix Immediately - Blocks Production):**
+1. Process exclusivity enforcement (prevents multiple simultaneous processes)
+2. Window management safety (prevents dialog display issues)
+3. Resource leak prevention (prevents memory exhaustion)
+
+**⚠️ HIGH PRIORITY (Fix Soon - Affects UX):**
+4. Exception handling completeness (prevents silent failures)
+5. Configuration synchronization (prevents data inconsistency)
+
+**🔧 MEDIUM PRIORITY (Enhance - Improves Robustness):**
+6. Image loading thread safety (prevents crashes)
+7. Advanced process lifecycle management
+
+**Status:** 🚨 **CRITICAL ISSUES FOUND** - Calibration system requires immediate fixes before production use.
+
+---
+
 ## 2025-01-16 04:15:00 - BrokenPipeError Fix (JETSON STARTUP CRASH)
 
 ## 2025-01-14 19:00:00 - COMPREHENSIVE TELEOP INTEGRATION PLAN (LONG-TERM SOLUTION)
@@ -2971,7 +3299,7 @@ class TeleopController:
 
 > @codex (2025-01-16 18:40 UTC): Teleop target now drives SET/LIVE RECORD metadata and arm selection; we removed the redundant ARM dropdowns (Record+Dashboard), renamed teleop button dynamically, and annotate recordings with `L`, `R`, or `L+R`. Live Record currently requires a single arm selected; dual-arm capture is queued behind the telemetry work.
 
-> @codex (2025-01-16 19:15 UTC): Teleop preflight moved into the UI—`TeleopController` now resets Goal_Velocity/Acceleration for the selected follower/leader ports (with verification + logging) before launching Lerobot. The shell scripts no longer attempt their own resets; telemetry helpers remain available for manual sessions.
+> @codex (2025-01-16 19:15 UTC): Teleop preflight moved into the UI—`TeleopController` now resets Goal_Velocity/Acceleration for the selected follower/leader ports (with verification + logging) before launching Lerobot. The shell scripts no longer attempt their own resets; telemetry helpers remain available for manual sessions. Programmatic Lerobot integration stays disabled by default (set `ENABLE_PROGRAMMATIC_TELEOP=1` to experiment). Calibration prompts remain interactive everywhere (`AUTO_ACCEPT_CALIBRATION=0` unless you override it manually) so you can confirm the file before continuing.
 
 ---
 
