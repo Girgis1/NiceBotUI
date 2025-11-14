@@ -41,6 +41,9 @@
 - ✅ **Bimanual Teleop Integration** - Direct BiSO100Leader/BiSO100Follower programmatic API
 - ✅ **Motor Bus Conflict Resolution** - Telemetry system enables live record during teleop
 
+**Serial Port Conflict Fixes (ARCHIVED - January 2025):**
+- ✅ **Teleop-Diagnostics Serial Port Conflict** - Diagnostics tab polling (5Hz) conflicted with teleop on same Feetech motor buses, causing "Port is in use" errors and erratic arm behavior. Added teleop.running state monitoring to automatically pause diagnostics during teleop operations.
+
 ### **🚨 CRITICAL ISSUES REQUIRING IMMEDIATE ATTENTION:**
 
 
