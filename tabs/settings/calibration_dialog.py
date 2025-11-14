@@ -35,6 +35,15 @@ CENTER_PROMPT_TRIGGERS = (
     "set the arm in center",
 )
 
+JOINT_PROMPT_TRIGGERS = (
+    "move each joint",
+    "joint positions",
+    "min and max",
+    "record min/max",
+    "move to min",
+    "move to max",
+)
+
 
 def _normalize_port(port: str) -> str:
     port = (port or "").strip()
@@ -386,7 +395,6 @@ class SO101CalibrationDialog(QDialog):
                 self._awaiting_center = False
                 self.primary_btn.setText("Next")
                 self.primary_btn.setEnabled(False)
-                self._enable_motor_snapshot_mode()
             return
 
         if self._stage == "config":
@@ -457,6 +465,8 @@ class SO101CalibrationDialog(QDialog):
             lowered = text.lower()
             if not self._awaiting_center and any(trigger in lowered for trigger in CENTER_PROMPT_TRIGGERS):
                 self._show_center_prompt()
+            elif not self._motor_snapshot_mode and any(trigger in lowered for trigger in JOINT_PROMPT_TRIGGERS):
+                self._enable_motor_snapshot_mode()
         elif self._process_kind == "find-port":
             self._latest_aux_output += text
 
