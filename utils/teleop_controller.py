@@ -1,0 +1,445 @@
+"""Centralized teleop controller + mode manager."""
+
+from __future__ import annotations
+
+import os
+import shlex
+import time
+from pathlib import Path
+from typing import Optional, Tuple
+
+from PySide6.QtCore import QObject, Signal, QProcess, QThread
+
+from utils.app_state import AppStateStore
+from utils.config_compat import get_arm_port
+from utils.logging_utils import log_exception
+from utils.safe_print import safe_print
+
+# LeRobot imports for programmatic teleop
+try:
+    import lerobot
+    import lerobot.teleoperators
+    import lerobot.robots
+    LEROBOT_AVAILABLE = True
+except ImportError:
+    LEROBOT_AVAILABLE = False
+    lerobot = None
+
+
+JETSON_FLAG = Path("/etc/nv_tegra_release")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+class ProgrammaticTeleopWorker(QThread):
+    """Worker thread for programmatic lerobot teleop (single-arm and bimanual)."""
+
+    finished = Signal()
+    error = Signal(str)
+    log_message = Signal(str)
+
+    def __init__(self, config: dict, arm_target: str):
+        super().__init__()
+        self.config = config
+        self.arm_target = arm_target  # "left", "right", or "both"
+        self.running = False
+        self.teleop = None
+        self.robot = None
+
+    def stop(self):
+        """Stop the teleop session."""
+        self.running = False
+        self.wait(2000)  # Wait up to 2 seconds for clean shutdown
+
+    def run(self):
+        """Main teleop execution loop."""
+        if not LEROBOT_AVAILABLE:
+            self.error.emit("LeRobot library not available")
+            return
+
+        try:
+            self.running = True
+            self.log_message.emit(f"Starting programmatic {self.arm_target} teleop...")
+
+            # Create teleoperator and robot instances
+            self.teleop, self.robot = self._create_teleop_instances()
+
+            # Connect and calibrate
+            self.log_message.emit("Connecting teleoperator...")
+            self.teleop.connect()
+
+            self.log_message.emit("Connecting robot...")
+            self.robot.connect()
+
+            self.log_message.emit("Calibrating teleoperator...")
+            self.teleop.calibrate()
+
+            self.log_message.emit(f"🎮 {self.arm_target.title()} teleop active - move leader arms to control")
+
+            # Main teleop loop
+            while self.running:
+                try:
+                    # Get action from teleoperator
+                    action = self.teleop.get_action()
+
+                    # Send action to robot
+                    self.robot.send_action(action)
+
+                    # Small delay to prevent overwhelming the system
+                    time.sleep(0.01)
+
+                except Exception as e:
+                    if self.running:  # Only emit error if we're still supposed to be running
+                        self.log_message.emit(f"Teleop error: {e}")
+                        break
+
+            # Cleanup
+            self._cleanup()
+
+            if self.running:  # Normal completion
+                self.log_message.emit("✅ Teleop session completed")
+            else:  # Stopped by user
+                self.log_message.emit("🛑 Teleop stopped by user")
+
+        except Exception as e:
+            self.log_message.emit(f"❌ Teleop failed: {e}")
+            self.error.emit(str(e))
+        finally:
+            self.finished.emit()
+
+    def _create_teleop_instances(self) -> Tuple:
+        """Create the appropriate teleoperator and robot instances based on arm_target."""
+        robot_cfg = self.config.get("robot", {})
+        teleop_cfg = self.config.get("teleop", {})
+
+        if self.arm_target in ("left", "right"):
+            # Single-arm teleop
+            return self._create_single_arm_instances()
+        else:
+            # Bimanual teleop
+            return self._create_bimanual_instances()
+
+    def _create_single_arm_instances(self):
+        """Create single-arm teleoperator and robot."""
+        arm_index = 0 if self.arm_target == "left" else 1
+
+        # Get ports from config
+        robot_port = get_arm_port(self.config, arm_index, "robot")
+        teleop_port = get_arm_port(self.config, arm_index, "teleop")
+
+        if not robot_port or not teleop_port:
+            raise ValueError(f"Missing ports for {self.arm_target} arm teleop")
+
+        # Create teleoperator
+        teleop_config = lerobot.teleoperators.so100_leader.So100LeaderConfig(
+            port=teleop_port,
+            id=f"{self.arm_target}_leader"
+        )
+        teleop = lerobot.teleoperators.so100_leader.So100Leader(teleop_config)
+
+        # Create robot
+        robot_config = lerobot.robots.so101_follower.So101FollowerConfig(
+            port=robot_port,
+            id=f"{self.arm_target}_follower"
+        )
+        robot = lerobot.robots.so101_follower.So101Follower(robot_config)
+
+        return teleop, robot
+
+    def _create_bimanual_instances(self):
+        """Create bimanual teleoperator and robot."""
+        # Get all ports
+        robot_ports = []
+        teleop_ports = []
+
+        for i in range(2):  # Left (0) and Right (1)
+            robot_port = get_arm_port(self.config, i, "robot")
+            teleop_port = get_arm_port(self.config, i, "teleop")
+            if robot_port:
+                robot_ports.append(robot_port)
+            if teleop_port:
+                teleop_ports.append(teleop_port)
+
+        if len(robot_ports) < 2 or len(teleop_ports) < 2:
+            raise ValueError("Bimanual teleop requires 2 robot and 2 teleop ports")
+
+        # Create bimanual teleoperator
+        teleop_config = lerobot.teleoperators.bi_so100_leader.BiSO100LeaderConfig(
+            left_arm_port=teleop_ports[0],   # Left leader
+            right_arm_port=teleop_ports[1],  # Right leader
+            id="bimanual_leader"
+        )
+        teleop = lerobot.teleoperators.bi_so100_leader.BiSO100Leader(teleop_config)
+
+        # Create bimanual robot
+        robot_config = lerobot.robots.bi_so100_follower.BiSO100FollowerConfig(
+            left_arm_port=robot_ports[0],   # Left follower
+            right_arm_port=robot_ports[1],  # Right follower
+            id="bimanual_follower"
+        )
+        robot = lerobot.robots.bi_so100_follower.BiSO100Follower(robot_config)
+
+        return teleop, robot
+
+    def _cleanup(self):
+        """Clean up teleop and robot connections."""
+        try:
+            if self.teleop and self.teleop.is_connected():
+                self.teleop.disconnect()
+        except Exception as e:
+            self.log_message.emit(f"Warning: teleop disconnect failed: {e}")
+
+        try:
+            if self.robot and self.robot.is_connected():
+                self.robot.disconnect()
+        except Exception as e:
+            self.log_message.emit(f"Warning: robot disconnect failed: {e}")
+
+
+class TeleopMode(QObject):
+    """Global teleop mode state manager (speed override + status)."""
+
+    changed = Signal(bool)
+
+    _instance: Optional["TeleopMode"] = None
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._active = False
+        self._saved_multiplier: Optional[float] = None
+        self._state_store = AppStateStore.instance()
+
+    @classmethod
+    def instance(cls) -> "TeleopMode":
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    @property
+    def active(self) -> bool:
+        return self._active
+
+    def enter(self, current_multiplier: float) -> None:
+        if not self._active:
+            self._saved_multiplier = current_multiplier
+            self._active = True
+            self._state_store.set_state("teleop.mode", True)
+            self.changed.emit(True)
+
+    def exit(self) -> Optional[float]:
+        if not self._active:
+            return None
+        self._active = False
+        self._state_store.set_state("teleop.mode", False)
+        self.changed.emit(False)
+        saved = self._saved_multiplier
+        self._saved_multiplier = None
+        return saved
+
+
+class TeleopController(QObject):
+    """Wrapper around lerobot teleop scripts with proper Qt integration."""
+
+    status_changed = Signal(str)
+    log_message = Signal(str)
+    running_changed = Signal(bool)
+    error_occurred = Signal(str)
+
+    def __init__(self, config: dict):
+        super().__init__()
+        self.config = config
+        self.process: Optional[QProcess] = None
+        self._worker: Optional[ProgrammaticTeleopWorker] = None
+        self._mode = TeleopMode.instance()
+        self._state_store = AppStateStore.instance()
+        self._state_store.set_state("teleop.running", False)
+        self._state_store.set_state("teleop.status", "idle")
+
+    # ------------------------------------------------------------------
+    # Helpers
+
+    @staticmethod
+    def is_jetson() -> bool:
+        return JETSON_FLAG.exists()
+
+    def _script_path(self, arm_mode: str) -> Path:
+        if arm_mode in ("left", "right"):
+            return REPO_ROOT / "run_single_teleop.sh"
+        return REPO_ROOT / "run_bimanual_teleop.sh"
+
+    def _required_ports(self) -> list[str]:
+        ports: list[str] = []
+        robot_cfg = self.config.get("robot", {}) or {}
+        for idx, _ in enumerate(robot_cfg.get("arms", []) or []):
+            port = get_arm_port(self.config, idx, "robot")
+            if port:
+                ports.append(port)
+        teleop_cfg = self.config.get("teleop", {}) or {}
+        for idx, _ in enumerate(teleop_cfg.get("arms", []) or []):
+            port = get_arm_port(self.config, idx, "teleop")
+            if port:
+                ports.append(port)
+        return ports
+
+    def _check_permissions(self) -> bool:
+        missing = [port for port in self._required_ports() if port and not os.access(port, os.R_OK | os.W_OK)]
+        if missing:
+            msg = (
+                "Teleop requires read/write access to leader/follower serial ports.\n"
+                f"Fix permissions for: {', '.join(missing)} (udev rules recommended)."
+            )
+            self._emit_error(msg)
+            log_exception("TeleopController: missing port permissions", RuntimeError(msg))
+            return False
+        return True
+    def _emit_status(self, message: str) -> None:
+        """Emit status signal and share state globally."""
+
+        self.status_changed.emit(message)
+        self._state_store.set_state("teleop.status", message)
+
+    def _emit_error(self, message: str) -> None:
+        """Emit error signal and persist last error info."""
+
+        self.error_occurred.emit(message)
+        self._state_store.set_state("teleop.last_error", message)
+        self._state_store.set_state("teleop.status", message)
+
+    def _set_running(self, running: bool) -> None:
+        """Publish running state consistently."""
+
+        self.running_changed.emit(running)
+        self._state_store.set_state("teleop.running", running)
+
+    # ------------------------------------------------------------------
+    # Public API
+
+    def start(self, arm_mode: str = "both") -> bool:
+        if self._worker and self._worker.isRunning():
+            self._emit_status("Teleop already running.")
+            return False
+
+        arm_mode = arm_mode if arm_mode in ("left", "right", "both") else "both"
+
+        if not self._check_permissions():
+            return False
+
+        # Try programmatic approach first, fall back to script if needed
+        if LEROBOT_AVAILABLE:
+            return self._start_programmatic(arm_mode)
+        else:
+            return self._start_script_based(arm_mode)
+
+    def _start_programmatic(self, arm_mode: str) -> bool:
+        """Start teleop using programmatic lerobot API."""
+        self._emit_status(f"Starting programmatic {arm_mode} teleop…")
+
+        try:
+            self._worker = ProgrammaticTeleopWorker(self.config, arm_mode)
+            self._worker.log_message.connect(self.log_message)
+            self._worker.error.connect(self.error_occurred)
+            self._worker.finished.connect(self._handle_worker_finished)
+
+            self._worker.start()
+            self._set_running(True)
+            safe_print(f"[TeleopController] Programmatic {arm_mode} teleop started")
+            return True
+
+        except Exception as e:
+            safe_print(f"[TeleopController] Programmatic teleop failed, falling back to script: {e}")
+            return self._start_script_based(arm_mode)
+
+    def _start_script_based(self, arm_mode: str) -> bool:
+        """Fallback: Start teleop using external scripts."""
+        if not self.is_jetson():
+            msg = "Teleop available only on the Jetson device."
+            self._emit_error(msg)
+            return False
+
+        script = self._script_path(arm_mode)
+        if not script.exists():
+            msg = f"Teleop script missing: {script}"
+            self._emit_error(msg)
+            return False
+
+        self._emit_status("Starting teleop…")
+        self.process = QProcess(self)
+        self.process.setProgram("bash")
+        command = f"./{script.name}"
+        if arm_mode in ("left", "right"):
+            command = f"TARGET_ARM={arm_mode} {command}"
+        args = ["-lc", shlex.quote(command)]
+        self.process.setArguments(args)
+        self.process.setWorkingDirectory(str(script.parent))
+        self.process.readyReadStandardOutput.connect(self._handle_stdout)
+        self.process.readyReadStandardError.connect(self._handle_stderr)
+        self.process.finished.connect(self._handle_finished)
+        self.process.start()
+        self._set_running(True)
+        safe_print("[TeleopController] Script-based teleop process started")
+        return True
+
+    def stop(self) -> None:
+        # Stop programmatic worker if running
+        if self._worker and self._worker.isRunning():
+            self._emit_status("Stopping teleop…")
+            self._worker.stop()
+            self._worker = None
+            self._set_running(False)
+            safe_print("[TeleopController] Programmatic teleop stopped")
+            return
+
+        # Stop script-based process if running
+        if not self.process:
+            return
+        self._emit_status("Stopping teleop…")
+        if self.process.state() != QProcess.NotRunning:
+            self.process.terminate()
+            if not self.process.waitForFinished(5000):
+                self.process.kill()
+        self.process = None
+        self._set_running(False)
+        safe_print("[TeleopController] Script-based teleop stopped")
+
+    def is_running(self) -> bool:
+        # Check programmatic worker
+        if self._worker and self._worker.isRunning():
+            return True
+        # Check script-based process
+        return bool(self.process and self.process.state() != QProcess.NotRunning)
+
+    # ------------------------------------------------------------------
+    # Slots
+
+    def _handle_stdout(self) -> None:  # pragma: no cover - requires teleop hardware
+        if not self.process:
+            return
+        text = bytes(self.process.readAllStandardOutput()).decode("utf-8", errors="ignore").strip()
+        if text:
+            self.log_message.emit(text)
+
+    def _handle_stderr(self) -> None:  # pragma: no cover - requires teleop hardware
+        if not self.process:
+            return
+        text = bytes(self.process.readAllStandardError()).decode("utf-8", errors="ignore").strip()
+        if text:
+            self.log_message.emit(text)
+
+    def _handle_finished(self, exit_code: int, status: QProcess.ExitStatus) -> None:
+        msg = "Teleop session finished." if exit_code == 0 and status == QProcess.NormalExit else "Teleop exited unexpectedly."
+        self._emit_status(msg)
+        self._set_running(False)
+        self.process = None
+        # Auto-exit teleop mode when process ends
+        restored = self._mode.exit()
+        if restored is not None:
+            self._state_store.set_state("control.speed_multiplier", restored)
+
+    def _handle_worker_finished(self) -> None:
+        """Handle completion of programmatic teleop worker."""
+        self._emit_status("Teleop session finished.")
+        self._set_running(False)
+        self._worker = None
+        # Auto-exit teleop mode when worker ends
+        restored = self._mode.exit()
+        if restored is not None:
+            self._state_store.set_state("control.speed_multiplier", restored)

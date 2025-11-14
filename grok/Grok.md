@@ -34,6 +34,7 @@
 - ✅ **Status Bar Arm Count** - Fixed to show correct arm counts in bimanual mode
 - ✅ **Playback Arm Assignment** - Actions now play on recorded arm, not current arm
 - ✅ **Single Arm Teleop Integration** - Programmatic teleop using lerobot library
+- ✅ **Bimanual Teleop Integration** - Direct BiSO100Leader/BiSO100Follower programmatic API
 - ✅ **Motor Bus Conflict Resolution** - Telemetry system enables live record during teleop
 
 ### **🚧 ACTIVE MAJOR FEATURE PLANS (READY FOR IMPLEMENTATION):**
@@ -1369,6 +1370,44 @@ class TrainTab(QWidget):
 
 **Result:** Shows "R:2/2" when both arms are configured and online.
 
+### **5. Programmatic Bimanual Teleop Implementation**
+**Problem:** Bimanual teleop still required external `run_bimanual_teleop.sh` script.
+
+**Solution:** Implemented direct bimanual teleop using `BiSO100Leader` and `BiSO100Follower` classes:
+
+**Key Implementation:**
+- ✅ **BiSO100Leader/BiSO100Follower** classes used for bimanual teleop
+- ✅ **Automatic port mapping** from NiceBot config to lerobot config
+- ✅ **Qt thread integration** with proper signal handling
+- ✅ **Fallback to scripts** if lerobot library unavailable
+- ✅ **Unified API** - same interface for single-arm and bimanual
+
+**Benefits:**
+- ✅ **No external script dependencies** for bimanual teleop
+- ✅ **Direct lerobot API usage** - matches your command-line approach
+- ✅ **Integrated error handling** - Qt signals for UI feedback
+- ✅ **Automatic port resolution** - maps config to lerobot parameters
+- ✅ **Same performance** - identical to `lerobot-teleoperate` command
+
+**Usage:**
+```python
+# Bimanual teleop with programmatic API
+teleop = lerobot.teleoperators.bi_so100_leader.BiSO100Leader(
+    config=lerobot.teleoperators.bi_so100_leader.BiSO100LeaderConfig(
+        left_arm_port="/dev/ttyACM1",   # Left leader
+        right_arm_port="/dev/ttyACM3",  # Right leader
+    )
+)
+robot = lerobot.robots.bi_so100_follower.BiSO100Follower(
+    config=lerobot.robots.bi_so100_follower.BiSO100FollowerConfig(
+        left_arm_port="/dev/ttyACM0",   # Left follower  
+        right_arm_port="/dev/ttyACM2",  # Right follower
+    )
+)
+```
+
+**Result:** Bimanual teleop now works exactly like your command-line approach but integrated into NiceBot UI.
+
 ### **2. Playback Arm Assignment Fix**
 **Problem:** Actions stored arm metadata but playback ignored it, using current active arm.
 
@@ -1386,17 +1425,29 @@ if arm_index != self.active_arm_index:
 
 **Result:** Actions now play back on the correct arm they were recorded from.
 
-### **3. Single Arm Teleop Integration**
-**Problem:** Single-arm teleop required external `run_single_teleop.sh` script.
+### **3. Programmatic Teleop Integration (Single & Bimanual)**
+**Problem:** All teleop operations required external bash scripts.
 
-**Solution:** Implement programmatic teleop using lerobot library:
+**Solution:** Implement programmatic teleop using lerobot library for both single-arm and bimanual modes:
+
+**Single-Arm Teleop:**
 ```python
 import lerobot.teleoperators
 import lerobot.robots
 
 # Create teleoperator and robot instances
-teleop = lerobot.teleoperators.so100_leader.So100Leader(...)
-robot = lerobot.robots.so101_follower.So101Follower(...)
+teleop = lerobot.teleoperators.so100_leader.So100Leader(
+    config=lerobot.teleoperators.so100_leader.So100LeaderConfig(
+        port="/dev/ttyACM1",  # Leader port
+        id="leader_arm"
+    )
+)
+robot = lerobot.robots.so101_follower.So101Follower(
+    config=lerobot.robots.so101_follower.So101FollowerConfig(
+        port="/dev/ttyACM0",  # Follower port
+        id="follower_arm"
+    )
+)
 
 # Connect and run teleop loop
 teleop.connect()
@@ -1408,11 +1459,44 @@ while running:
     robot.send_action(action)
 ```
 
+**Bimanual Teleop:**
+```python
+import lerobot.teleoperators
+import lerobot.robots
+
+# Create bimanual teleoperator and robot instances
+teleop = lerobot.teleoperators.bi_so100_leader.BiSO100Leader(
+    config=lerobot.teleoperators.bi_so100_leader.BiSO100LeaderConfig(
+        left_arm_port="/dev/ttyACM1",   # Left leader
+        right_arm_port="/dev/ttyACM3",  # Right leader
+        id="bimanual_leader"
+    )
+)
+robot = lerobot.robots.bi_so100_follower.BiSO100Follower(
+    config=lerobot.robots.bi_so100_follower.BiSO100FollowerConfig(
+        left_arm_port="/dev/ttyACM0",   # Left follower
+        right_arm_port="/dev/ttyACM2",  # Right follower
+        id="bimanual_follower"
+    )
+)
+
+# Connect and run bimanual teleop loop
+teleop.connect()
+robot.connect()
+teleop.calibrate()
+
+while running:
+    action = teleop.get_action()
+    robot.send_action(action)
+```
+
 **Benefits:**
-- No external script dependencies
-- Integrated error handling and logging
-- Seamless Qt integration
-- Built-in lerobot architecture usage
+- ✅ **No external script dependencies** - pure Python implementation
+- ✅ **Integrated error handling and logging** - Qt signal integration
+- ✅ **Seamless Qt integration** - runs in UI thread with proper event handling
+- ✅ **Built-in lerobot architecture** - uses official lerobot APIs
+- ✅ **Both single and bimanual support** - unified implementation
+- ✅ **Configurable ports** - automatically maps from NiceBot config
 
 ### **4. Motor Bus Conflict Resolution**
 **Problem:** Teleop process has exclusive serial bus access, preventing live record/SET.
@@ -1437,7 +1521,7 @@ class TeleopTelemetryClient:
 
 **Result:** Live record and SET work seamlessly during teleop using streamed position data.
 
-**Status:** ✅ **ALL ISSUES RESOLVED** - Teleop fully integrated with NiceBot UI.
+**Status:** ✅ **ALL ISSUES RESOLVED + BIMANUAL ENHANCEMENT** - Teleop fully integrated with NiceBot UI using direct lerobot APIs.
 
 ---
 
