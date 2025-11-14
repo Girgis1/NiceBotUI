@@ -43,6 +43,7 @@ class DiagnosticsTab(QWidget):
         self.motor_controller = None
         self.current_arm_index = 0
         self.is_connected = False
+        self._pending_reconnect = False
         
         self.init_ui()
         
@@ -270,14 +271,20 @@ class DiagnosticsTab(QWidget):
             self._teleop_running = bool(value)
 
             if self._teleop_running and not was_running:
-                # Teleop started - pause diagnostics
+                # Teleop started - fully disconnect to free serial bus
                 self.refresh_timer.stop()
+                if self.is_connected:
+                    self._pending_reconnect = True
+                    self.disconnect_motors()
                 self.status_changed.emit("⏸️ Diagnostics paused during teleop")
             elif not self._teleop_running and was_running:
-                # Teleop stopped - resume diagnostics
-                if self.is_connected:
+                # Teleop stopped - resume diagnostics if we previously paused
+                if self._pending_reconnect:
+                    self._pending_reconnect = False
+                    QTimer.singleShot(500, self.connect_motors)
+                elif self.is_connected:
                     self.refresh_timer.start(200)  # 5 Hz
-                    self.status_changed.emit("▶️ Diagnostics resumed")
+                self.status_changed.emit("▶️ Diagnostics resumed")
 
     def refresh_data(self):
         """Read and display current motor diagnostics"""
