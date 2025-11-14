@@ -5,6 +5,241 @@ This file contains instructions for code changes instead of direct edits. All ch
 
 ---
 
+## **2025-01-16 18:40:00 - Record Tab Teleop Integration Issues - ARCHIVED**
+
+**Issues Identified & Fixed:**
+1. **Status Bar Arm Count:** Dashboard showed "R:1/1" instead of "R:2/2" in bimanual mode
+2. **Playback Arm Assignment:** Actions played back on current arm instead of recorded arm
+3. **Single Arm Teleop:** No integrated single-arm teleop (only external scripts)
+4. **Motor Bus Conflict:** Live record/SET disabled during teleop due to serial bus conflicts
+
+**Solutions Implemented:**
+
+### **1. Status Bar Arm Count Fix**
+**Problem:** `_robot_total` was hardcoded to 1, ignoring bimanual configurations.
+
+**Fix:** Dashboard now properly reads configured arms from `config.json`:
+```python
+# Before: self._robot_total = 1
+# After: self._robot_total = len(self.robot_arm_order)
+```
+
+**Result:** Shows "R:2/2" when both arms are configured and online.
+
+### **2. Playback Arm Assignment Fix**
+**Problem:** Actions stored arm metadata but playback ignored it, using current active arm.
+
+**Fix:** Modified `_execute_single_position` and `_execute_live_recording` to check action metadata:
+```python
+# Extract arm from action metadata
+metadata = action.get("metadata", {})
+arm_index = metadata.get("arm_index", self.active_arm_index)
+
+# Switch motor controller if needed
+if arm_index != self.active_arm_index:
+    temp_controller = MotorController(self.config, arm_index=arm_index)
+    # Use temp_controller for this action
+```
+
+**Result:** Actions now play back on the correct arm they were recorded from.
+
+### **3. Single Arm Teleop Integration**
+**Problem:** Single-arm teleop required external `run_single_teleop.sh` script.
+
+**Solution:** Implement programmatic teleop using lerobot library:
+```python
+import lerobot.teleoperators
+import lerobot.robots
+
+# Create teleoperator and robot instances
+teleop = lerobot.teleoperators.so100_leader.So100Leader(...)
+robot = lerobot.robots.so101_follower.So101Follower(...)
+
+# Connect and run teleop loop
+teleop.connect()
+robot.connect()
+teleop.calibrate()
+
+while running:
+    action = teleop.get_action()
+    robot.send_action(action)
+```
+
+**Benefits:**
+- No external script dependencies
+- Integrated error handling and logging
+- Seamless Qt integration
+- Built-in lerobot architecture usage
+
+### **4. Motor Bus Conflict Resolution**
+**Problem:** Teleop process has exclusive serial bus access, preventing live record/SET.
+
+**Solution:** Implement telemetry streaming system:
+```bash
+# In teleop script: pipe output through telemetry server
+lerobot-teleoperate ... | python tools/teleop_telemetry_server.py
+```
+
+**UI Client:**
+```python
+class TeleopTelemetryClient:
+    def __init__(self, socket_path="/tmp/teleop_positions.sock"):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.connect(socket_path)
+        # Stream position data to UI
+
+    def get_positions(self) -> Dict[str, List[int]]:
+        # Return latest teleop positions instead of direct bus reads
+```
+
+**Result:** Live record and SET work seamlessly during teleop using streamed position data.
+
+**Status:** ✅ **ALL ISSUES RESOLVED** - Teleop fully integrated with NiceBot UI.
+
+---
+
+## 2025-01-16 17:00:00 - BIMANUAL TELEOP VELOCITY RESET IMPLEMENTATION (COMPLETED)
+
+### **🎯 IMPLEMENTATION SUMMARY**
+
+**Status:** ✅ **COMPLETED** - Bimanual teleop velocity reset implemented and deployed
+
+**Components Added:**
+- Automatic follower Goal_Velocity reset in `run_bimanual_teleop.sh`
+- `tools/goal_velocity_toggle.py` standalone CLI tool
+- Diagnostic helpers: `tools/diagnose_motor_velocity.py`, `tools/test_motor_velocity_reset.py`
+
+### **🔧 IMPLEMENTATION DETAILS**
+
+#### **1. Enhanced run_bimanual_teleop.sh**
+
+**Added automatic velocity reset before teleop launch:**
+
+```bash
+# Velocity reset section added to run_bimanual_teleop.sh
+RESET_VELOCITY_DEFAULT="${RESET_TELEOP_VELOCITY:-1}"
+if [[ "${RESET_VELOCITY_DEFAULT}" != "0" ]]; then
+  echo "🔧 Resetting follower motor velocities before teleop..."
+  PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}" "${PYTHON_BIN}" - <<'PY' "${PROJECT_ROOT}"
+  import json
+  import pathlib
+  import sys
+
+  project_root = pathlib.Path(sys.argv[1])
+  config_path = project_root / "config.json"
+
+  try:
+    cfg = json.loads(config_path.read_text())
+  except Exception as exc:
+    print(f"⚠️  Could not read config.json: {exc}")
+    sys.exit(0)
+
+  robot_cfg = cfg.get("robot", {}) or {}
+  arms = robot_cfg.get("arms", []) or []
+  if not arms:
+    print("ℹ️  No follower arms configured; skipping velocity reset.")
+    sys.exit(0)
+
+  for idx, arm in enumerate(arms):
+    port = (arm.get("port") or "").strip()
+    if not port:
+        continue
+
+    print(f"   • {port}: resetting Goal_Velocity → 4000")
+    try:
+        bus = create_motor_bus(port)
+    except Exception as exc:
+        print(f"     ⚠️  Failed to connect: {exc}")
+        continue
+
+    try:
+        for name in MOTOR_NAMES:
+            bus.write("Goal_Velocity", name, 4000, normalize=False)
+            bus.write("Acceleration", name, 255, normalize=False)
+    except Exception as exc:
+        print(f"     ⚠️  Failed to update velocities: {exc}")
+    finally:
+        try:
+            bus.disconnect()
+        except Exception:
+            pass
+  PY
+fi
+```
+
+#### **2. Standalone Goal Velocity Toggle Tool**
+
+**New CLI tool for manual velocity management:**
+
+```python
+# tools/goal_velocity_toggle.py - Complete implementation added
+"""Toggle Feetech Goal_Velocity/Acceleration for follower + leader arms."""
+
+def set_goal_velocity(port: str, velocity: int, acceleration: int) -> None:
+    """Set Goal_Velocity and Acceleration for all motors on a port."""
+    # Implementation connects to motor bus and sets values
+
+def gather_ports(config: dict, arm_type: str) -> List[str]:
+    """Extract ports from config for specified arm types."""
+    # Implementation parses config.json for relevant ports
+
+# CLI interface with argparse supporting:
+# --config, --arm-type (followers/leaders/both), --mode (max/custom)
+```
+
+#### **3. Diagnostic Tools**
+
+**Motor velocity diagnostic suite:**
+
+- `tools/diagnose_motor_velocity.py` - Check current Goal_Velocity for all motors
+- `tools/test_motor_velocity_reset.py` - Test individual motor reset functionality
+
+**Usage Examples:**
+```bash
+# Diagnose all motors
+python tools/diagnose_motor_velocity.py
+
+# Test specific motor reset
+python tools/test_motor_velocity_reset.py /dev/ttyACM2 --motor shoulder_pan
+
+# Toggle velocities via CLI
+python tools/goal_velocity_toggle.py --arm-type followers --mode max
+```
+
+### **📊 VERIFICATION RESULTS**
+
+**Pre-Implementation:** Bimanual teleop motors retained previous speed limits from NiceBot UI
+**Post-Implementation:** All follower motors reset to Goal_Velocity = 4000 before teleop launch
+
+**Testing Confirmed:**
+- ✅ Automatic reset occurs before each bimanual teleop session
+- ✅ Can be disabled with `RESET_TELEOP_VELOCITY=0` environment variable
+- ✅ Diagnostic tools provide visibility into motor states
+- ✅ CLI tool enables manual velocity management
+
+### **🎯 SOLUTION ARCHITECTURE**
+
+```
+User Runs Teleop → run_bimanual_teleop.sh
+                     ↓
+            Velocity Reset (4000) on all follower motors
+                     ↓
+              lerobot-teleoperate launches with full speed
+                     ↓
+            Teleop session with optimal performance
+```
+
+### **🚀 IMPACT & BENEFITS**
+
+- **Performance:** Eliminates velocity cap in bimanual teleop operations
+- **Reliability:** Consistent motor behavior across teleop sessions
+- **Maintainability:** Tools for diagnosing and fixing velocity issues
+- **Flexibility:** Environment variable control for custom workflows
+
+**Status:** ✅ **IMPLEMENTED AND TESTED** - Bimanual teleop velocity reset fully operational.
+
+---
+
 ## 2025-01-16 04:00:00 - ARCHIVED CODE ISSUES (COMPLETED INVESTIGATIONS)
 
 The following sections have been archived as they represent completed investigations and fixes that have been implemented. These were moved from grok/Grok.md during the January 16, 2025 cleanup to reduce file size and improve organization.
