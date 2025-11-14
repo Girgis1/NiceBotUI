@@ -41,6 +41,10 @@ LEFT_FOLLOWER_PORT="${LEFT_FOLLOWER_PORT:-/dev/ttyACM0}"
 RIGHT_FOLLOWER_PORT="${RIGHT_FOLLOWER_PORT:-/dev/ttyACM2}"
 LEFT_LEADER_PORT="${LEFT_LEADER_PORT:-/dev/ttyACM1}"
 RIGHT_LEADER_PORT="${RIGHT_LEADER_PORT:-/dev/ttyACM3}"
+LEFT_FOLLOWER_ID="${LEFT_FOLLOWER_ID:-left_follower}"
+RIGHT_FOLLOWER_ID="${RIGHT_FOLLOWER_ID:-right_follower}"
+LEFT_LEADER_ID="${LEFT_LEADER_ID:-left_leader}"
+RIGHT_LEADER_ID="${RIGHT_LEADER_ID:-right_leader}"
 FOLLOWER_TYPE="bi_so101_follower"
 LEADER_TYPE="bi_so100_leader"
 TELEOP_FPS="${TELEOP_FPS:-50}"
@@ -55,11 +59,25 @@ arms = cfg.get('robot', {}).get('arms', [])
 print(arms[0].get('port', '${LEFT_FOLLOWER_PORT}') if len(arms) else '${LEFT_FOLLOWER_PORT}')
 PY
 )
+  LEFT_FOLLOWER_ID=$("${PYTHON_BIN}" - <<PY
+import json, pathlib
+cfg=json.load(pathlib.Path('${CONFIG_JSON}').open())
+arms = cfg.get('robot', {}).get('arms', [])
+print(arms[0].get('id', '${LEFT_FOLLOWER_ID}') if len(arms) else '${LEFT_FOLLOWER_ID}')
+PY
+)
   RIGHT_FOLLOWER_PORT=$("${PYTHON_BIN}" - <<PY
 import json, pathlib
 cfg=json.load(pathlib.Path('${CONFIG_JSON}').open())
 arms = cfg.get('robot', {}).get('arms', [])
 print(arms[1].get('port', '${RIGHT_FOLLOWER_PORT}') if len(arms) > 1 else '${RIGHT_FOLLOWER_PORT}')
+PY
+)
+  RIGHT_FOLLOWER_ID=$("${PYTHON_BIN}" - <<PY
+import json, pathlib
+cfg=json.load(pathlib.Path('${CONFIG_JSON}').open())
+arms = cfg.get('robot', {}).get('arms', [])
+print(arms[1].get('id', '${RIGHT_FOLLOWER_ID}') if len(arms) > 1 else '${RIGHT_FOLLOWER_ID}')
 PY
 )
   LEFT_LEADER_PORT=$("${PYTHON_BIN}" - <<PY
@@ -69,11 +87,25 @@ arms = cfg.get('teleop', {}).get('arms', [])
 print(arms[0].get('port', '${LEFT_LEADER_PORT}') if len(arms) else '${LEFT_LEADER_PORT}')
 PY
 )
+  LEFT_LEADER_ID=$("${PYTHON_BIN}" - <<PY
+import json, pathlib
+cfg=json.load(pathlib.Path('${CONFIG_JSON}').open())
+arms = cfg.get('teleop', {}).get('arms', [])
+print(arms[0].get('id', '${LEFT_LEADER_ID}') if len(arms) else '${LEFT_LEADER_ID}')
+PY
+)
   RIGHT_LEADER_PORT=$("${PYTHON_BIN}" - <<PY
 import json, pathlib
 cfg=json.load(pathlib.Path('${CONFIG_JSON}').open())
 arms = cfg.get('teleop', {}).get('arms', [])
 print(arms[1].get('port', '${RIGHT_LEADER_PORT}') if len(arms) > 1 else '${RIGHT_LEADER_PORT}')
+PY
+)
+  RIGHT_LEADER_ID=$("${PYTHON_BIN}" - <<PY
+import json, pathlib
+cfg=json.load(pathlib.Path('${CONFIG_JSON}').open())
+arms = cfg.get('teleop', {}).get('arms', [])
+print(arms[1].get('id', '${RIGHT_LEADER_ID}') if len(arms) > 1 else '${RIGHT_LEADER_ID}')
 PY
 )
 fi
@@ -82,11 +114,11 @@ cat <<INFO
 🤖 Starting Bimanual Teleoperation
 ==================================
 Robot Configuration:
-  Left follower : ${LEFT_FOLLOWER_PORT}
-  Right follower: ${RIGHT_FOLLOWER_PORT}
+  Left follower : ${LEFT_FOLLOWER_PORT} (${LEFT_FOLLOWER_ID})
+  Right follower: ${RIGHT_FOLLOWER_PORT} (${RIGHT_FOLLOWER_ID})
 Teleop Configuration:
-  Left leader   : ${LEFT_LEADER_PORT}
-  Right leader  : ${RIGHT_LEADER_PORT}
+  Left leader   : ${LEFT_LEADER_PORT} (${LEFT_LEADER_ID})
+  Right leader  : ${RIGHT_LEADER_PORT} (${RIGHT_LEADER_ID})
 INFO
 
 AUTO_ACCEPT_CALIBRATION="${AUTO_ACCEPT_CALIBRATION:-0}"
@@ -95,11 +127,13 @@ teleop_cmd=(
   --robot.type=${FOLLOWER_TYPE} \
   --robot.left_arm_port=${LEFT_FOLLOWER_PORT} \
   --robot.right_arm_port=${RIGHT_FOLLOWER_PORT} \
-  --robot.id=follower \
+  --robot.left_arm_id=${LEFT_FOLLOWER_ID} \
+  --robot.right_arm_id=${RIGHT_FOLLOWER_ID} \
   --teleop.type=${LEADER_TYPE} \
   --teleop.left_arm_port=${LEFT_LEADER_PORT} \
   --teleop.right_arm_port=${RIGHT_LEADER_PORT} \
-  --teleop.id=leader \
+  --teleop.left_arm_id=${LEFT_LEADER_ID} \
+  --teleop.right_arm_id=${RIGHT_LEADER_ID} \
   --display_data=false \
   --fps=${TELEOP_FPS}
 )

@@ -12,6 +12,7 @@ from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont
 
 from utils.logging_utils import log_exception
+from utils.app_state import AppStateStore
 
 
 class DiagnosticsTab(QWidget):
@@ -48,7 +49,12 @@ class DiagnosticsTab(QWidget):
         # Setup auto-refresh timer (0.2s = 5 Hz)
         self.refresh_timer = QTimer(self)
         self.refresh_timer.timeout.connect(self.refresh_data)
-        
+
+        # Connect to app state to pause diagnostics during teleop
+        self._state_store = AppStateStore.instance()
+        self._state_store.state_changed.connect(self._on_state_changed)
+        self._teleop_running = self._state_store.get("teleop.running", False)
+
         # Auto-connect on startup
         QTimer.singleShot(500, self.connect_motors)
         
@@ -224,8 +230,9 @@ class DiagnosticsTab(QWidget):
             
             self.is_connected = True
             
-            # Start auto-refresh at 200ms (0.2s = 5 Hz)
-            self.refresh_timer.start(200)
+            # Start auto-refresh at 200ms (0.2s = 5 Hz) unless teleop is running
+            if not self._teleop_running:
+                self.refresh_timer.start(200)
             
             # Do initial refresh
             self.refresh_data()
@@ -256,9 +263,25 @@ class DiagnosticsTab(QWidget):
         
         self.status_changed.emit(f"Disconnected from Arm {self.current_arm_index + 1}")
     
+    def _on_state_changed(self, key: str, value):
+        """Handle app state changes, particularly teleop.running"""
+        if key == "teleop.running":
+            was_running = self._teleop_running
+            self._teleop_running = bool(value)
+
+            if self._teleop_running and not was_running:
+                # Teleop started - pause diagnostics
+                self.refresh_timer.stop()
+                self.status_changed.emit("⏸️ Diagnostics paused during teleop")
+            elif not self._teleop_running and was_running:
+                # Teleop stopped - resume diagnostics
+                if self.is_connected:
+                    self.refresh_timer.start(200)  # 5 Hz
+                    self.status_changed.emit("▶️ Diagnostics resumed")
+
     def refresh_data(self):
         """Read and display current motor diagnostics"""
-        if not self.is_connected or not self.motor_controller:
+        if not self.is_connected or not self.motor_controller or self._teleop_running:
             return
         
         try:
