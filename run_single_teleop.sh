@@ -82,6 +82,25 @@ PY
 )"
 eval "${assignments}"
 
+ensure_port_access() {
+  local port="$1"
+  if [[ -z "${port}" ]]; then
+    echo "❌ Missing serial port assignment." >&2
+    exit 1
+  fi
+  if [[ ! -e "${port}" ]]; then
+    echo "❌ Serial device ${port} not found." >&2
+    exit 1
+  fi
+  if [[ ! -r "${port}" || ! -w "${port}" ]]; then
+    echo "❌ ${port} is not RW-accessible. Run 'sudo chmod 666 ${port}' or install the udev rule (udev/99-so100.rules)." >&2
+    exit 1
+  fi
+}
+
+ensure_port_access "${FOLLOWER_PORT}"
+ensure_port_access "${LEADER_PORT}"
+
 cat <<INFO
 🎮 Starting ${TARGET_ARM^} Arm Teleoperation
 ==================================
