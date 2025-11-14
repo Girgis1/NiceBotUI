@@ -26,6 +26,10 @@
 - ✅ **Camera Resource Conflicts** - Paused CameraStreamHub during discovery
 - ✅ **Camera Preview Implementation Bug** - CRITICAL FIX NEEDED
 
+**Calibration Fixes (ARCHIVED):**
+- ✅ **Calibration ENTER Key Bug** - Removed confusing "calibration in progress await" message, simplified button logic
+- ✅ **Calibration Button State Management** - Button properly disabled during process, only enabled for center confirmation
+
 **Teleop Investigations (ARCHIVED):**
 - ✅ **Record Tab Teleop Button** - Button functionality verified working
 - ✅ **Teleop Speed Control** - Root cause identified (motor velocity persistence)
@@ -39,10 +43,6 @@
 
 ### **🚨 CRITICAL ISSUES REQUIRING IMMEDIATE ATTENTION:**
 
-**🔴 CALIBRATION SYSTEM - ENTER KEY BUG (BLOCKS CALIBRATION):**
-- **Issue:** Dialog sends ENTER automatically on button clicks, skipping calibration steps
-- **Impact:** Makes robot calibration completely unusable
-- **Status:** 🚨 **REQUIRES IMMEDIATE FIX** - Users cannot calibrate robots
 
 **🔴 CALIBRATION SYSTEM - STABILITY ISSUES (BLOCKS PRODUCTION):**
 - **Process race conditions** allowing multiple simultaneous lerobot processes

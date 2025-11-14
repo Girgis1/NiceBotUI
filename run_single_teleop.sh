@@ -89,7 +89,9 @@ Follower Port: ${FOLLOWER_PORT}
 Leader Port  : ${LEADER_PORT}
 INFO
 
-"${TELEOP_BIN}" \
+AUTO_ACCEPT_CALIBRATION="${AUTO_ACCEPT_CALIBRATION:-0}"
+teleop_cmd=(
+  "${TELEOP_BIN}"
   --robot.type=${FOLLOWER_TYPE} \
   --robot.port=${FOLLOWER_PORT} \
   --robot.id=${FOLLOWER_ID} \
@@ -98,3 +100,10 @@ INFO
   --teleop.id=${LEADER_ID} \
   --display_data=false \
   --fps=${TELEOP_FPS}
+)
+
+if [[ "${AUTO_ACCEPT_CALIBRATION}" == "1" ]]; then
+  printf '\n' | "${teleop_cmd[@]}"
+else
+  "${teleop_cmd[@]}"
+fi

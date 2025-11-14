@@ -34,6 +34,8 @@ python tools/diagnose_motor_velocity.py --scope both
 python tools/test_motor_velocity_reset.py /dev/ttyACM0 --motor wrist_flex --velocity 4000
 ```
 
+Calibration prompts: Lerobot prints “Press Enter to use the provided calibration file…” the first time each session. By default the scripts leave this interactive (`AUTO_ACCEPT_CALIBRATION=0`), so you can inspect or recalibrate manually. NiceBotUI sets `AUTO_ACCEPT_CALIBRATION=1` automatically when launching teleop so the saved calibration is used, but you can override it if you need to step through the prompt yourself.
+
 cd ~/NiceBotUI
 source .venv/bin/activate
 

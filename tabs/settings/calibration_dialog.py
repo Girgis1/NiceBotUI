@@ -375,11 +375,17 @@ class SO101CalibrationDialog(QDialog):
     # ----------------------------------------------------------------- Actions
     def _on_primary_clicked(self):
         if self._active_process:
-            self._append_log("[UI] Sending ENTER to current command...\n")
-            self._active_process.write(b"\n")
             if self._awaiting_center:
+                self._append_log("[UI] Sending ENTER to confirm center position...\n")
+                try:
+                    self._active_process.write(b"\n")
+                    self._active_process.waitForBytesWritten(50)
+                except Exception as exc:
+                    self._append_log(f"[UI] Failed to send ENTER: {exc}\n")
+                    return
                 self._awaiting_center = False
                 self.primary_btn.setText("Next")
+                self.primary_btn.setEnabled(False)
                 self._enable_motor_snapshot_mode()
             return
 
@@ -403,6 +409,7 @@ class SO101CalibrationDialog(QDialog):
 
         self._stage = "running"
         self._disable_motor_snapshot_mode()
+        self.primary_btn.setEnabled(False)  # Disable button during calibration process
         self.cancel_btn.setText("Stop")
         self.robot_type_combo.setEnabled(False)
         self.arm_role_combo.setEnabled(False)

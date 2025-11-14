@@ -89,7 +89,9 @@ Teleop Configuration:
   Right leader  : ${RIGHT_LEADER_PORT}
 INFO
 
-"${TELEOP_BIN}" \
+AUTO_ACCEPT_CALIBRATION="${AUTO_ACCEPT_CALIBRATION:-0}"
+teleop_cmd=(
+  "${TELEOP_BIN}"
   --robot.type=${FOLLOWER_TYPE} \
   --robot.left_arm_port=${LEFT_FOLLOWER_PORT} \
   --robot.right_arm_port=${RIGHT_FOLLOWER_PORT} \
@@ -100,3 +102,10 @@ INFO
   --teleop.id=leader \
   --display_data=false \
   --fps=${TELEOP_FPS}
+)
+
+if [[ "${AUTO_ACCEPT_CALIBRATION}" == "1" ]]; then
+  printf '\n' | "${teleop_cmd[@]}"
+else
+  "${teleop_cmd[@]}"
+fi

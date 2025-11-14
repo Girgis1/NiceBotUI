@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Optional, Tuple
 
-from PySide6.QtCore import QObject, Signal, QProcess, QThread
+from PySide6.QtCore import QObject, Signal, QProcess, QThread, QProcessEnvironment
 
 from utils.app_state import AppStateStore
 from utils.config_compat import get_arm_port

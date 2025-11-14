@@ -188,11 +188,24 @@ class MainWindow(QMainWindow):
             }
         """
         
+        # Secret hold-to-action timers (define before button bindings)
+        self.dashboard_hold_timer = QTimer()
+        self.dashboard_hold_timer.setSingleShot(True)
+        self.dashboard_hold_timer.setInterval(3500)  # 3.5 seconds
+        self.dashboard_hold_timer.timeout.connect(self._on_dashboard_long_press)
+
+        self.settings_hold_timer = QTimer()
+        self.settings_hold_timer.setSingleShot(True)
+        self.settings_hold_timer.setInterval(3500)  # 3.5 seconds
+        self.settings_hold_timer.timeout.connect(self._on_settings_long_press)
+
         self.dashboard_btn = QPushButton("📊\nDashboard")
         self.dashboard_btn.setCheckable(True)
         self.dashboard_btn.setChecked(True)
         self.dashboard_btn.setStyleSheet(button_style)
         self.dashboard_btn.clicked.connect(lambda: self.switch_tab(0))
+        self.dashboard_btn.pressed.connect(lambda: self._start_hold_timer(self.dashboard_hold_timer))
+        self.dashboard_btn.released.connect(self.dashboard_hold_timer.stop)
         self.tab_buttons.addButton(self.dashboard_btn, 0)
         sidebar_layout.addWidget(self.dashboard_btn)
         
@@ -216,19 +229,10 @@ class MainWindow(QMainWindow):
         self.settings_btn.setCheckable(True)
         self.settings_btn.setStyleSheet(button_style)
         self.settings_btn.clicked.connect(lambda: self.switch_tab(3))
+        self.settings_btn.pressed.connect(lambda: self._start_hold_timer(self.settings_hold_timer))
+        self.settings_btn.released.connect(self.settings_hold_timer.stop)
         self.tab_buttons.addButton(self.settings_btn, 3)
         sidebar_layout.addWidget(self.settings_btn)
-        
-        # Secret hold-to-action timers
-        self.dashboard_hold_timer = QTimer()
-        self.dashboard_hold_timer.setSingleShot(True)
-        self.dashboard_hold_timer.setInterval(3500)  # 3.5 seconds
-        self.dashboard_hold_timer.timeout.connect(self._on_dashboard_long_press)
-        
-        self.settings_hold_timer = QTimer()
-        self.settings_hold_timer.setSingleShot(True)
-        self.settings_hold_timer.setInterval(3500)  # 3.5 seconds
-        self.settings_hold_timer.timeout.connect(self._on_settings_long_press)
         
         # Install event filters for hold detection
         self.dashboard_btn.installEventFilter(self)
@@ -341,18 +345,23 @@ class MainWindow(QMainWindow):
         from PySide6.QtCore import QEvent
         
         if obj == self.dashboard_btn:
-            if event.type() == QEvent.MouseButtonPress:
-                self.dashboard_hold_timer.start()
-            elif event.type() in (QEvent.MouseButtonRelease, QEvent.Leave):
+            if event.type() == QEvent.Leave:
                 self.dashboard_hold_timer.stop()
         
         elif obj == self.settings_btn:
-            if event.type() == QEvent.MouseButtonPress:
-                self.settings_hold_timer.start()
-            elif event.type() in (QEvent.MouseButtonRelease, QEvent.Leave):
+            if event.type() == QEvent.Leave:
                 self.settings_hold_timer.stop()
         
         return super().eventFilter(obj, event)
+    
+    def _start_hold_timer(self, timer: QTimer):
+        """Start/restart a hold timer when a tab button is pressed."""
+        try:
+            if timer.isActive():
+                timer.stop()
+            timer.start(timer.interval())
+        except Exception:
+            timer.start()
     
     def _on_dashboard_long_press(self):
         """Secret: Hold Dashboard button for 3.5 seconds to restart app"""
