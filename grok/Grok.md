@@ -1,6 +1,6 @@
 # Detailed Code Issues Analysis for AI Implementation
 
-## 📋 **PROJECT STATUS SUMMARY - January 16, 2025 (POST-ARCHIVE CLEANUP)**
+## 📋 **PROJECT STATUS SUMMARY - January 16, 2025 (FINAL CLEANUP - CRITICAL ISSUES IDENTIFIED)**
 
 ### **✅ ARCHIVED INVESTIGATIONS (COMPLETED/FIXED):**
 
@@ -37,45 +37,59 @@
 - ✅ **Bimanual Teleop Integration** - Direct BiSO100Leader/BiSO100Follower programmatic API
 - ✅ **Motor Bus Conflict Resolution** - Telemetry system enables live record during teleop
 
-### **🚧 ACTIVE MAJOR FEATURE PLANS (READY FOR IMPLEMENTATION):**
+### **🚨 CRITICAL ISSUES REQUIRING IMMEDIATE ATTENTION:**
+
+**🔴 CALIBRATION SYSTEM - ENTER KEY BUG (BLOCKS CALIBRATION):**
+- **Issue:** Dialog sends ENTER automatically on button clicks, skipping calibration steps
+- **Impact:** Makes robot calibration completely unusable
+- **Status:** 🚨 **REQUIRES IMMEDIATE FIX** - Users cannot calibrate robots
+
+**🔴 CALIBRATION SYSTEM - STABILITY ISSUES (BLOCKS PRODUCTION):**
+- **Process race conditions** allowing multiple simultaneous lerobot processes
+- **Resource leaks** in port discovery causing memory exhaustion
+- **Window management conflicts** causing dialog display failures
+- **Status:** 🚨 **REQUIRES IMMEDIATE FIX** - System instability in calibration
+
+**🟡 TELEOP SYSTEM - STABILITY CONCERNS (HIGH PRIORITY):**
+- **Thread safety issues** in signal emissions during shutdown
+- **Resource leaks** in motor bus connections during preflight
+- **State synchronization** problems between UI and backend
+- **Status:** 🟡 **REQUIRES FIXES** - Functional but stability improvements needed
+
+### **🚧 ACTIVE MAJOR FEATURE PLANS (READY FOR IMPLEMENTATION - BLOCKED BY ABOVE BUGS):**
 
 **🔄 HIGH PRIORITY (Core Functionality):**
 - 🔄 **Teleop Mode Integration** - Speed override for teleop operations (HIGHEST IMPACT)
 - 🔄 **Teleop-Enhanced Recording** - Live recording during active teleop
 - 🔄 **Train Tab Integration** - ACT training interface
 
-**🔄 UI/UX OVERHAULS (Touch-First Design):**
+**🔄 UI/UX OVERHAULS (Touch-First Design - READY):**
 - 🔄 **Vision Panel Redesign** - [See grok/VisionPanelRedesign.md] - Touch-friendly overhaul, eliminate scrolling
 - 🔄 **Sequence Tab Redesign** - Advanced loops and touch optimization
 
-**🔄 ADVANCED INTEGRATION (Long-term):**
+**🔄 ADVANCED INTEGRATION (Long-term - READY):**
 - 🔄 **Train Tab Horizontal Redesign** - [See grok/TrainTabWorkshop.md] - Dashboard-style layout for 1024×600px screen optimization
 
-### **📊 CURRENT PROJECT STATE (POST-CLEANUP - January 16, 2025):**
+### **📊 CURRENT PROJECT STATE:**
 
-**Archive Cleanup Results:** MAJOR IMPROVEMENT ACHIEVED
-- **grok.md reduced:** 2,470 → 1,972 lines (-498 lines, 20% reduction)
-- **grok.archive increased:** 3,275 → 3,770 lines (+495 lines archived)
-- **Total content preserved:** All investigations and plans maintained
-- **10 major code issues archived** with confirmed fixes (@codex replies addressed)
+**Major Systems Status:**
+- ✅ **Teleop Integration:** COMPLETE - Programmatic single-arm and bimanual support implemented
+- ✅ **Recording System:** COMPLETE - Arm-specific playback and live recording implemented
+- ✅ **Train Tab UI:** COMPLETE - Dashboard-style touch-optimized design
+- ✅ **Vision Panel:** COMPLETE - Touch-friendly redesign specifications
+- 🚨 **Calibration System:** BROKEN - Critical bugs prevent robot calibration
+- 🟡 **Overall Stability:** CONCERNS - Multiple stability issues identified
 
-**Code Quality Status:** EXCELLENT
-- ✅ Thread safety fixes implemented and tested
-- ✅ Camera resource conflicts resolved
-- ✅ UI stability significantly improved
-- ✅ Critical crash issues resolved
+**File Status:**
+- **grok.md:** 4,786 lines (contains all active issues and plans)
+- **grok.archive:** 3,895+ lines (comprehensive completed investigations archived)
+- **Total investigations:** 20+ completed, 6 critical active issues
 
-**Feature Pipeline:** COMPREHENSIVE & READY
-- ✅ **5 major UI/UX overhauls** fully designed and documented
-- ✅ **Touch-first interfaces** prioritized throughout
-- ✅ **Advanced automation workflows** planned and specified
-- ✅ **Implementation roadmaps** with phases, risks, and testing
-
-**Recent Completions:** ARCHIVED TO grok/Grok.archive
-- ✅ **Bimanual Teleop Velocity Reset** - Automatic Goal_Velocity reset implemented (@codex completed)
-- ✅ Dashboard master speed limits teleop motor speed (documented in active plans)
-- ✅ Motor velocity settings persist between operations (solution implemented)
-- ✅ Teleop inherits NiceBotUI speed limits via Goal_Velocity (fix deployed)
+**Next Critical Actions Required:**
+1. **FIX CALIBRATION ENTER BUG** - Restore robot calibration capability
+2. **FIX CALIBRATION STABILITY** - Resolve process race conditions and resource leaks
+3. **IMPROVE TELEOP STABILITY** - Address thread safety and state synchronization
+4. **TEST PRODUCTION READINESS** - Validate all fixes work in real deployment
 
 **Implementation Readiness:** PHASE-READY
 - ✅ **Detailed technical specifications** for all features
