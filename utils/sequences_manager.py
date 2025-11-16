@@ -37,6 +37,7 @@ except ImportError:
 TIMEZONE = pytz.timezone('Australia/Sydney')
 SEQUENCES_DIR = Path(__file__).parent.parent / "data" / "sequences"
 BACKUPS_DIR = Path(__file__).parent.parent / "data" / "backups" / "sequences"
+LEGACY_SEQUENCES_FILE = Path(__file__).parent.parent / "data" / "sequences.json"
 
 
 class SequencesManager:
@@ -51,6 +52,23 @@ class SequencesManager:
         """Ensure data directories exist"""
         self.sequences_dir.mkdir(parents=True, exist_ok=True)
         self.backups_dir.mkdir(parents=True, exist_ok=True)
+
+    def _load_legacy_sequences(self) -> Dict[str, Dict]:
+        """Return legacy sequences stored in data/sequences.json if it exists."""
+        if not LEGACY_SEQUENCES_FILE.exists():
+            return {}
+
+        try:
+            with open(LEGACY_SEQUENCES_FILE, "r") as handle:
+                payload = json.load(handle)
+        except Exception as exc:  # pragma: no cover - defensive
+            log_exception("SequencesManager: failed to read legacy sequences.json", exc, level="warning")
+            return {}
+
+        sequences = payload.get("sequences", {})
+        if isinstance(sequences, dict):
+            return sequences
+        return {}
     
     def _get_sequence_dir(self, name: str) -> Path:
         """Get directory path for a sequence folder"""
@@ -151,7 +169,13 @@ class SequencesManager:
                     composite.add_delay_step(step_name, duration)
                 
                 elif step_type == "home":
-                    composite.add_home_step(step_name)
+                    home_arm_1 = step_dict.get("home_arm_1", True)
+                    home_arm_2 = step_dict.get("home_arm_2", True)
+                    composite.add_home_step(
+                        step_name,
+                        home_arm_1=home_arm_1,
+                        home_arm_2=home_arm_2,
+                    )
                 
                 elif step_type == "vision":
                     camera = step_dict.get("camera", {})
@@ -174,28 +198,19 @@ class SequencesManager:
             return False
     
     def load_sequence(self, name: str) -> Optional[Dict]:
-        """Load a specific sequence (returns simplified format for UI compatibility)
-        
-        Returns a dict compatible with the old format:
-            {
-                "name": "Sequence Name",
-                "steps": [{"type": "action", "name": "GrabCup"}, ...],
-                "loop": false,
-                "metadata": {...}
-            }
-        """
+        """Load a specific sequence, supporting both composite and legacy formats."""
         try:
-            # Try loading as composite sequence
             composite = CompositeSequence.load(name, self.sequences_dir)
-            if not composite:
-                return None
-            
-            # Convert composite steps to simple format for UI
+        except Exception as exc:  # pragma: no cover - defensive
+            log_exception(f"SequencesManager: failed to load sequence {name}", exc, level="error", stack=True)
+            composite = None
+
+        if composite:
             simple_steps = []
             for step in composite.steps:
                 step_type = step.get("step_type", "")
                 simple_step = {"type": step_type}
-                
+
                 if step_type == "action":
                     simple_step["name"] = step.get("action_name", "")
                 elif step_type == "model":
@@ -205,16 +220,16 @@ class SequencesManager:
                 elif step_type == "delay":
                     simple_step["duration"] = step.get("duration", 1.0)
                 elif step_type == "home":
-                    pass  # No extra fields for home
+                    simple_step["home_arm_1"] = step.get("home_arm_1", True)
+                    simple_step["home_arm_2"] = step.get("home_arm_2", True)
                 elif step_type == "vision":
                     simple_step["name"] = step.get("name", step.get("trigger", {}).get("display_name", "Vision Trigger"))
                     simple_step["camera"] = step.get("camera", {})
                     simple_step["trigger"] = step.get("trigger", {})
                     simple_step["trigger"].setdefault("idle_mode", {"enabled": False, "interval_seconds": 2.0})
-                
+
                 simple_steps.append(simple_step)
-            
-            # Return in old format for compatibility
+
             return {
                 "name": composite.name,
                 "steps": simple_steps,
@@ -227,10 +242,27 @@ class SequencesManager:
                     "step_count": composite.step_count
                 }
             }
-            
-        except Exception as exc:
-            log_exception(f"SequencesManager: failed to load sequence {name}", exc, level="error", stack=True)
-            return None
+
+        legacy_sequences = self._load_legacy_sequences()
+        legacy_payload = legacy_sequences.get(name)
+        if legacy_payload:
+            steps = legacy_payload.get("steps", [])
+            metadata = {
+                "created": legacy_payload.get("created"),
+                "modified": legacy_payload.get("modified"),
+                "version": legacy_payload.get("version", "1.0"),
+                "file_format": "legacy_sequence_json",
+                "step_count": len(steps),
+            }
+            print(f"[SEQUENCES] ↺ Loaded legacy sequence: {name}")
+            return {
+                "name": name,
+                "steps": steps,
+                "loop": legacy_payload.get("loop", False),
+                "metadata": metadata,
+            }
+
+        return None
     
     def delete_sequence(self, name: str) -> bool:
         """Delete a sequence folder (with backup)"""
@@ -255,25 +287,29 @@ class SequencesManager:
             return False
     
     def list_sequences(self) -> List[str]:
-        """List all sequence names (from folders)"""
+        """List all sequence names (from folders or legacy file)."""
         try:
-            names = []
-            
-            # Look for folders with manifest.json
+            names: set[str] = set()
+
             for item in self.sequences_dir.iterdir():
-                if item.is_dir():
-                    manifest_path = item / "manifest.json"
-                    if manifest_path.exists():
-                        try:
-                            with open(manifest_path, 'r') as f:
-                                data = json.load(f)
-                                names.append(data.get("name", item.name))
-                        except Exception as exc:
-                            log_exception(f"SequencesManager: manifest parse failed ({item.name})", exc, level="warning")
-                            names.append(item.name.replace('_', ' ').title())
-            
+                if not item.is_dir():
+                    continue
+                manifest_path = item / "manifest.json"
+                if not manifest_path.exists():
+                    continue
+                try:
+                    with open(manifest_path, 'r') as f:
+                        data = json.load(f)
+                        names.add(data.get("name", item.name))
+                except Exception as exc:
+                    log_exception(f"SequencesManager: manifest parse failed ({item.name})", exc, level="warning")
+                    names.add(item.name.replace('_', ' ').title())
+
+            legacy_sequences = self._load_legacy_sequences()
+            names.update(legacy_sequences.keys())
+
             return sorted(names)
-            
+
         except Exception as exc:
             log_exception("SequencesManager: failed to list sequences", exc)
             return []

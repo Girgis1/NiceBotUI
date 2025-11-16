@@ -4,7 +4,7 @@ Actions Manager - Manage composite recordings
 NEW FORMAT (v2.0):
 - Each recording is a folder with manifest.json + component files
 - Clean, modular, industrial-grade design
-- No legacy support (clean start)
+- Legacy ``data/actions.json`` is still readable for backwards compatibility
 
 STRUCTURE:
     data/recordings/
@@ -36,6 +36,7 @@ except ImportError:
 TIMEZONE = pytz.timezone('Australia/Sydney')
 RECORDINGS_DIR = Path(__file__).parent.parent / "data" / "recordings"
 BACKUPS_DIR = Path(__file__).parent.parent / "data" / "backups" / "recordings"
+LEGACY_ACTIONS_FILE = Path(__file__).parent.parent / "data" / "actions.json"
 
 
 class ActionsManager:
@@ -50,14 +51,59 @@ class ActionsManager:
         """Ensure data directories exist"""
         self.recordings_dir.mkdir(parents=True, exist_ok=True)
         self.backups_dir.mkdir(parents=True, exist_ok=True)
-    
+
+    # ------------------------------------------------------------------ legacy helpers
+    def _load_legacy_actions_data(self) -> Dict[str, Dict]:
+        """Load legacy actions.json data if present."""
+        if not LEGACY_ACTIONS_FILE.exists():
+            return {}
+
+        try:
+            with open(LEGACY_ACTIONS_FILE, "r") as handle:
+                payload = json.load(handle)
+        except Exception as exc:  # pragma: no cover - defensive
+            log_exception("ActionsManager: legacy actions load failed", exc, level="warning")
+            return {}
+
+        actions = payload.get("actions", {})
+        if isinstance(actions, dict):
+            return actions
+        return {}
+
+    def _convert_legacy_action(self, name: str, data: Dict) -> Dict:
+        """Convert old single-file format into runtime friendly structure."""
+        recorded_data = data.get("recorded_data", [])
+        positions = data.get("positions", [])
+        base_type = data.get("type")
+
+        if base_type not in {"composite_recording", "live_recording", "position", "position_set"}:
+            base_type = "live_recording" if recorded_data else "position"
+
+        metadata = {
+            "created": data.get("created"),
+            "modified": data.get("modified"),
+            "source": "legacy_actions_json",
+        }
+
+        recording: Dict[str, Dict | List] = {
+            "name": name,
+            "type": base_type,
+            "speed": data.get("speed", 100),
+            "positions": positions,
+            "recorded_data": recorded_data,
+            "delays": data.get("delays", {}),
+            "metadata": metadata,
+        }
+
+        return recording
+
     def list_actions(self) -> List[str]:
         """List all recording names
 
         Scans recordings directory for folders containing manifest.json
         """
         try:
-            recordings = []
+            recordings = set()
 
             # Find all subdirectories with manifest.json
             for item in self.recordings_dir.iterdir():
@@ -68,10 +114,13 @@ class ActionsManager:
                             with open(manifest_path, 'r') as f:
                                 manifest = json.load(f)
                                 name = manifest.get("name", item.name)
-                                recordings.append(name)
+                                recordings.add(name)
                         except Exception as exc:
                             log_exception(f"ActionsManager: manifest parse failed ({item.name})", exc, level="warning")
-                            recordings.append(item.name)
+                            recordings.add(item.name)
+
+            legacy_actions = self._load_legacy_actions_data()
+            recordings.update(legacy_actions.keys())
 
             return sorted(recordings)
 
@@ -164,12 +213,19 @@ class ActionsManager:
         try:
             # Load composite recording
             composite = CompositeRecording.load(name, self.recordings_dir)
-            if not composite:
-                return None
-            
-            # Get full data (loads all components)
-            return composite.get_full_recording_data()
-            
+            if composite:
+                # Get full data (loads all components)
+                return composite.get_full_recording_data()
+
+            # Fallback to legacy single-file storage
+            legacy_actions = self._load_legacy_actions_data()
+            legacy_payload = legacy_actions.get(name)
+            if legacy_payload:
+                print(f"[ACTIONS] ↺ Loaded legacy recording: {name}")
+                return self._convert_legacy_action(name, legacy_payload)
+
+            return None
+
         except Exception as exc:
             log_exception(f"ActionsManager: failed to load recording {name}", exc, level="error", stack=True)
             return None

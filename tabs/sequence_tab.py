@@ -17,6 +17,7 @@ from PySide6.QtGui import QColor
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
+ROOT_DIR = Path(__file__).resolve().parent.parent
 
 from utils.sequences_manager import SequencesManager
 from utils.actions_manager import ActionsManager
@@ -55,44 +56,55 @@ except ImportError:
 
 class HomeStepWidget(QFrame):
     """Custom widget for home steps with arm selection checkboxes"""
-    
+
     def __init__(self, step_number: int, step_data: dict, parent=None):
         super().__init__(parent)
         self.step_data = step_data
         self.step_number = step_number
-        
-        # Set background color for home steps
+
+        self.step_data.setdefault("name", "Home")
+        self.step_data.setdefault("home_arm_1", True)
+        self.step_data.setdefault("home_arm_2", True)
+
+        self.setObjectName("home_step_widget")
+        self.setAutoFillBackground(True)
+        self.setMinimumHeight(52)
         self.setStyleSheet("""
-            HomeStepWidget {
+            #home_step_widget {
                 background-color: #1b5e20;
-                border-radius: 4px;
-                padding: 4px;
+                border-radius: 6px;
+                padding: 6px;
+            }
+            #home_step_widget QLabel {
+                color: #f1f8e9;
+                font-weight: 600;
+            }
+            #home_step_widget QCheckBox {
+                color: #f1f8e9;
+                font-weight: 500;
             }
         """)
-        
+
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(12)
-        
+
         # Step label
-        label = QLabel(f"{step_number}. 🏠 Home:")
-        label.setStyleSheet("color: white; font-weight: bold;")
-        layout.addWidget(label)
-        
+        self.step_label = QLabel(f"{step_number}. 🏠 Home")
+        layout.addWidget(self.step_label)
+
         # Arm 1 checkbox
         self.arm1_check = QCheckBox("Arm 1")
         self.arm1_check.setChecked(step_data.get("home_arm_1", True))
-        self.arm1_check.setStyleSheet("color: white;")
         self.arm1_check.stateChanged.connect(self._on_arm_changed)
         layout.addWidget(self.arm1_check)
-        
+
         # Arm 2 checkbox
         self.arm2_check = QCheckBox("Arm 2")
         self.arm2_check.setChecked(step_data.get("home_arm_2", True))
-        self.arm2_check.setStyleSheet("color: white;")
         self.arm2_check.stateChanged.connect(self._on_arm_changed)
         layout.addWidget(self.arm2_check)
-        
+
         layout.addStretch()
     
     def _on_arm_changed(self):
@@ -464,6 +476,44 @@ class SequenceTab(QWidget):
                 parent = parent.parent()
         except Exception as exc:
             log_exception("SequenceTab: failed to notify parent", exc, level="warning")
+
+    # ------------------------------------------------------------------ helpers
+    def _resolve_data_path(self, path_value: str) -> Path:
+        if not path_value:
+            return Path()
+        candidate = Path(path_value).expanduser()
+        if not candidate.is_absolute():
+            candidate = ROOT_DIR / candidate
+        return candidate
+
+    def _infer_task_from_policy_path(self, policy_path: Optional[str]) -> Optional[str]:
+        if not policy_path:
+            return None
+        parts = Path(policy_path).parts
+        if not parts:
+            return None
+        if "checkpoints" in parts:
+            idx = parts.index("checkpoints")
+            if idx > 0:
+                return parts[idx - 1]
+        if len(parts) >= 2:
+            return parts[-2]
+        return parts[-1]
+
+    def _discover_model_tasks(self) -> list[str]:
+        tasks: set[str] = set()
+        policy_cfg = self.config.get("policy", {})
+        train_dir = self._resolve_data_path(policy_cfg.get("base_path", ""))
+        if train_dir and train_dir.exists():
+            for item in sorted(train_dir.iterdir()):
+                if item.is_dir() and (item / "checkpoints").exists():
+                    tasks.add(item.name)
+
+        inferred = self._infer_task_from_policy_path(policy_cfg.get("path"))
+        if inferred:
+            tasks.add(inferred)
+
+        return sorted(tasks)
     
     def on_sequence_changed(self, name: str):
         """Handle sequence selection change"""
@@ -514,8 +564,9 @@ class SequenceTab(QWidget):
             # Use custom widget for home steps with arm checkboxes
             item = QListWidgetItem()
             item.setData(Qt.UserRole, step)
+            item.setData(Qt.UserRole + 1, "#1b5e20")
             self.steps_list.addItem(item)
-            
+
             # Create and set custom widget
             widget = HomeStepWidget(number, step, self)
             self.steps_list.setItemWidget(item, widget)
@@ -560,44 +611,52 @@ class SequenceTab(QWidget):
     
     def add_model_step(self):
         """Add a model execution step"""
-        # Get available tasks from config
-        train_dir = Path(self.config["policy"].get("base_path", ""))
-        
-        if not train_dir.exists():
-            self.status_label.setText("❌ No trained models found")
-            return
-        
-        # Get tasks
-        tasks = []
-        for item in train_dir.iterdir():
-            if item.is_dir() and (item / "checkpoints").exists():
-                tasks.append(item.name)
-        
+        tasks = self._discover_model_tasks()
+
         if not tasks:
+            policy_cfg = self.config.get("policy", {})
+            base_path = policy_cfg.get("base_path", "outputs/train")
+            resolved = self._resolve_data_path(base_path)
+            resolved_text = str(resolved) if base_path else "(not configured)"
             self.status_label.setText("❌ No trained models found")
-            return
-        
-        task, ok = QInputDialog.getItem(
-            self, "Add Model", "Select task:",
-            tasks, 0, False
-        )
-        
-        if ok and task:
-            # Ask for duration
-            duration, ok2 = QInputDialog.getDouble(
-                self, "Model Duration", "Execution time (seconds):",
-                25.0, 1.0, 300.0, 1
+            QMessageBox.information(
+                self,
+                "No Models Found",
+                "No trained policies were found under:\n"
+                f"{resolved_text}\n\n"
+                "Update Settings → Data Access → Training Output Path "
+                "once your models are saved.",
             )
-            
-            if ok2:
-                step = {
-                    "type": "model",
-                    "task": task,
-                    "checkpoint": "last",
-                    "duration": duration
-                }
-                self.add_step_to_list(step)
-            self.status_label.setText(f"✓ Added model: {task}")
+            return
+
+        if len(tasks) == 1:
+            task = tasks[0]
+            ok = True
+        else:
+            task, ok = QInputDialog.getItem(
+                self, "Add Model", "Select task:",
+                tasks, 0, False
+            )
+
+        if not ok or not task:
+            return
+
+        duration, ok2 = QInputDialog.getDouble(
+            self, "Model Duration", "Execution time (seconds):",
+            25.0, 1.0, 300.0, 1
+        )
+
+        if not ok2:
+            return
+
+        step = {
+            "type": "model",
+            "task": task,
+            "checkpoint": "last",
+            "duration": duration
+        }
+        self.add_step_to_list(step)
+        self.status_label.setText(f"✓ Added model: {task}")
     
     def add_vision_step(self):
         """Add a vision configuration step"""
@@ -626,7 +685,12 @@ class SequenceTab(QWidget):
     
     def add_home_step(self):
         """Add a home position step"""
-        step = {"type": "home"}
+        step = {
+            "type": "home",
+            "name": "Home",
+            "home_arm_1": True,
+            "home_arm_2": True,
+        }
         self.add_step_to_list(step)
         self.status_label.setText("✓ Added home step")
     
@@ -650,6 +714,8 @@ class SequenceTab(QWidget):
                 step_data = widget.get_step_data()
                 new_widget = HomeStepWidget(idx + 1, step_data, self)
                 self.steps_list.setItemWidget(item, new_widget)
+                item.setData(Qt.UserRole, step_data)
+                item.setSizeHint(new_widget.sizeHint())
             else:
                 # Regular text item
                 text = item.text()
