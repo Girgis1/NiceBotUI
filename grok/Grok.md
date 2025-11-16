@@ -80,13 +80,14 @@
 - ✅ **Recording System:** COMPLETE - Arm-specific playback and live recording implemented
 - ✅ **Train Tab UI:** COMPLETE - Dashboard-style touch-optimized design
 - ✅ **Vision Panel:** COMPLETE - Touch-friendly redesign specifications
+- ✅ **Critical Stability Fixes:** COMPLETE - Qt threading, dependencies, and config atomic writes resolved
 - 🚨 **Calibration System:** BROKEN - Critical bugs prevent robot calibration
-- 🟡 **Overall Stability:** CONCERNS - Multiple stability issues identified
+- 🟡 **Overall Stability:** IMPROVED - Major stability issues resolved, critical teleop/calibration bugs remain
 
 **File Status:**
-- **grok.md:** 4,786 lines (contains all active issues and plans)
-- **grok.archive:** 3,895+ lines (comprehensive completed investigations archived)
-- **Total investigations:** 20+ completed, 6 critical active issues
+- **grok.md:** 5,124 lines (contains all active issues and plans)
+- **grok.archive:** 4,729 lines (comprehensive completed investigations archived)
+- **Total investigations:** 24+ completed, 5 critical active issues
 
 **Next Critical Actions Required:**
 1. **FIX CALIBRATION ENTER BUG** - Restore robot calibration capability
@@ -109,18 +110,14 @@
 
 ---
 
-### 🆕 Additional Findings from Recent Code Review (Feb 2025)
+### 🆕 Remaining Code Quality Issues (Feb 2025)
 
-**🔴 Critical / High Priority**
-- **Qt threading violation in startup discovery (DeviceManager):** Worker thread calls `discover_all_devices()` on the GUI-owned instance, mutating Qt signals/state across threads. Fix by moving the object to the worker thread and communicating via signals, or invoke discovery on the main thread with `QMetaObject.invokeMethod(..., Qt.QueuedConnection)`.
-- **Config reads rewrite config.json (non-atomic):** `app.config.load_config` rewrites the file on every read without atomic replace, risking truncation and clobbering concurrent edits. Separate read vs. write paths; only persist on real changes using temp-file + `os.replace`.
-- **Unpinned core dependency:** `lerobot[feetech]` is installed from the main branch; pin to a tag/commit to avoid upstream-breaking deployments.
-- **Missing runtime dependency:** `serial.tools.list_ports` is used but `pyserial` is absent from `requirements.txt`; add it to keep fresh installs from crashing.
-
-**🟡 Medium Priority**
+**🟡 Medium Priority (Code Cleanup)**
 - **Duplicate helper in `utils/device_manager.py`:** `safe_print` is defined twice; remove the duplicate and centralize logging via existing logging utilities.
 - **SingleInstanceGuard POSIX-only import:** Unconditional `fcntl` import will crash on non-Linux; guard the import or document the Linux-only requirement alongside kiosk instructions.
 - **PySide6 test stub gap:** Tests fail because the stub lacks `QGuiApplication` (required by vision geometry helper). Extend the stub or shield the runtime import for headless testing.
+
+**🔵 Low Priority (Future Improvements)**
 - **Config defaults contain real ports/home positions:** Consider moving operator-specific defaults to a sample file and prompting users on first run to avoid deploying with wrong ports.
 - **Sequence tab sys.path hack:** `sys.path` mutation at import time is fragile; convert tabs to a package or adjust PYTHONPATH in the launcher.
 - **Installer/helper cleanup:** `require_cmd` helper is unused—either use it for prereq checks (git, python3) or remove it.
@@ -4894,7 +4891,25 @@ def stop(self) -> None:
 - Add port discovery resource management
 - Fix window management conflicts in calibration dialogs
 
-#### **3. PROCESS RESOURCE MANAGEMENT (MEDIUM PRIORITY)**
+#### **3. CODE CLEANUP ISSUES (LOW PRIORITY)**
+
+**Issue:** Duplicate code and platform-specific import issues.
+
+**Root Cause Analysis:**
+- Duplicate `safe_print` function exists in `utils/device_manager.py`
+- POSIX-only `fcntl` import in `app/instance_guard.py` crashes on non-Linux systems
+- Code duplication increases maintenance burden
+
+**Evidence:** Found during comprehensive bug check - duplicate function definitions and unconditional POSIX imports.
+
+**Risk Assessment:** LOW - Harmless but should be cleaned up for maintainability.
+
+**Fix Requirements:**
+- Remove duplicate `safe_print` function and centralize logging
+- Guard `fcntl` import with platform check or document Linux-only requirement
+- Clean up code duplication throughout codebase
+
+#### **4. PROCESS RESOURCE MANAGEMENT (MEDIUM PRIORITY)**
 
 **Issue:** Resource leaks in motor bus connections during preflight operations.
 

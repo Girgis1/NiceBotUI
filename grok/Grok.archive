@@ -4656,3 +4656,74 @@ class TeleopController:
 **Testing Effort:** MEDIUM (verify teleop speed before/after)
 
 **SOLUTION:** Reset motor `Goal_Velocity` to maximum (4000) before launching teleop to ensure full speed operation.
+
+---
+
+## **2025-01-XX - Critical Stability Fixes - ARCHIVED (RESOLVED)**
+
+**Issues Identified & Fixed:**
+
+### **1. Qt Threading Violation in DeviceManager Startup Discovery**
+**Problem:** Worker thread called `discover_all_devices()` on GUI-owned instance, mutating Qt signals/state across threads.
+
+**Root Cause:** Device discovery was running on background thread but accessing Qt objects owned by main thread.
+
+**Solution Implemented:**
+```python
+# app.py - Fixed with proper thread-safe discovery
+def discover_devices_on_startup(self):
+    def _run_discovery():
+        try:
+            result = self.device_manager.discover_all_devices()
+        except Exception as exc:
+            self._on_discovery_error(str(exc))
+        else:
+            self._on_discovery_finished(result)
+        finally:
+            self._discovery_running = False
+
+    # Defer until event loop runs to avoid blocking
+    QTimer.singleShot(0, _run_discovery)
+```
+
+**Verification:** Confirmed discovery runs on GUI thread, preventing Qt threading violations.
+
+### **2. Config.json Atomic Write Operations**
+**Problem:** `app.config.load_config` rewrote config.json on every read without atomic replace, risking truncation and concurrent edit conflicts.
+
+**Root Cause:** File operations used direct write instead of temp-file + atomic replace pattern.
+
+**Solution Implemented:** Separated read vs write paths, only persist on real changes using temp-file + `os.replace()`.
+
+**Verification:** Config operations now use atomic file replacement to prevent corruption.
+
+### **3. Unpinned LeRobot Core Dependency**
+**Problem:** `lerobot[feetech]` installed from main branch, risking upstream-breaking deployments.
+
+**Root Cause:** No version pinning for critical dependency.
+
+**Solution Implemented:**
+```diff
+# requirements.txt
+- lerobot[feetech] @ git+https://github.com/huggingface/lerobot@main
++ lerobot[feetech] @ git+https://github.com/huggingface/lerobot@d9e74a9d374a8f26582ad326c699740a227b483c
+```
+
+**Verification:** LeRobot now pinned to specific commit, preventing upstream breaking changes.
+
+### **4. Missing PySerial Runtime Dependency**
+**Problem:** `serial.tools.list_ports` used but `pyserial` absent from requirements.txt, causing crashes on fresh installs.
+
+**Root Cause:** Incomplete dependency specification.
+
+**Solution Implemented:**
+```diff
+# requirements.txt
++ pyserial>=3.5
+```
+
+**Verification:** `serial.tools.list_ports` now imports successfully, preventing runtime crashes.
+
+---
+
+**Impact:** These fixes resolve critical stability issues identified in code review, ensuring reliable operation and preventing deployment failures.

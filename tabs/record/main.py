@@ -906,36 +906,14 @@ class RecordTab(
         step_row.addStretch()
         panel_layout.addLayout(step_row)
 
-        # Torque controls
-        torque_row = QHBoxLayout()
-        torque_row.setSpacing(6)
-
-        self.torque_status_label = QLabel()
-        self.torque_status_label.setStyleSheet("font-size: 9px;")
-        self._update_torque_label(locked=False)
-        torque_row.addWidget(self.torque_status_label, 1)
-
-        self.torque_toggle_btn = QPushButton("Toggle Torque")
-        self.torque_toggle_btn.setFixedHeight(32)
-        self.torque_toggle_btn.setStyleSheet("""
-            QPushButton {
-                background: #424242;
-                color: #ffffff;
-                border: 1px solid #555;
-                border-radius: 4px;
-                font-size: 11px;
-                padding: 4px 8px;
-            }
-            QPushButton:checked {
-                background: #2E7D32;
-                color: #e8f5e9;
-            }
-        """)
+        # Torque toggle (full width)
+        self.torque_toggle_btn = QPushButton()
         self.torque_toggle_btn.setCheckable(True)
+        self.torque_toggle_btn.setMinimumHeight(42)
+        self.torque_toggle_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.torque_toggle_btn.toggled.connect(self._on_torque_toggled)
-        torque_row.addWidget(self.torque_toggle_btn)
-
-        panel_layout.addLayout(torque_row)
+        panel_layout.addWidget(self.torque_toggle_btn)
+        self._update_torque_label(locked=False)
 
         panel_layout.addStretch()
 
@@ -1218,12 +1196,25 @@ class RecordTab(
             self.status_label.setText("❌ Teleop move failed")
 
     def _update_torque_label(self, locked: bool):
-        if locked:
-            self.torque_status_label.setText("Torque: LOCKED")
-            self.torque_status_label.setStyleSheet("color: #A5D6A7; font-size: 12px; font-weight: bold;")
-        else:
-            self.torque_status_label.setText("Torque: RELEASED")
-            self.torque_status_label.setStyleSheet("color: #FFAB91; font-size: 12px; font-weight: bold;")
+        text = "Torque: LOCKED" if locked else "Torque: RELEASED"
+        bg = "#2E7D32" if locked else "#8E3B2E"
+        border = "#43A047" if locked else "#FFAB91"
+        self.torque_toggle_btn.setText(text)
+        self.torque_toggle_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {bg};
+                color: #ffffff;
+                border: 1px solid {border};
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: bold;
+                padding: 8px 10px;
+            }}
+            QPushButton:checked {{
+                background: #2E7D32;
+                border-color: #43A047;
+            }}
+        """)
 
     def _on_torque_toggled(self, checked: bool) -> None:
         """Toggle torque lock on demand."""
