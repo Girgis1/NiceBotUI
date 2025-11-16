@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QStackedWidget, QPushButton, QButtonGroup, QMessageBox
+    QStackedWidget, QPushButton, QButtonGroup, QMessageBox, QSizePolicy
 )
 from PySide6.QtCore import Qt, QTimer, QThread, QObject, Signal
 from PySide6.QtGui import QShortcut, QKeySequence
@@ -17,6 +17,7 @@ from PySide6.QtGui import QShortcut, QKeySequence
 from tabs.dashboard_tab import DashboardTab
 from tabs.record_tab import RecordTab
 from tabs.sequence_tab import SequenceTab
+from tabs.train_tab import TrainTab
 from utils.config_store import ConfigStore
 from utils.device_manager import DeviceManager
 from utils.camera_hub import shutdown_camera_hub
@@ -154,8 +155,8 @@ class MainWindow(QMainWindow):
             }
         """)
         sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setSpacing(8)
-        sidebar_layout.setContentsMargins(6, 12, 6, 12)
+        sidebar_layout.setSpacing(4)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
         
         # Tab buttons
         self.tab_buttons = QButtonGroup(self)
@@ -168,8 +169,7 @@ class MainWindow(QMainWindow):
                 color: #e0e0e0;
                 border: 2px solid #606060;
                 border-radius: 10px;
-                padding: 20px 8px;
-                min-height: 85px;
+                padding: 16px 8px;
                 font-size: 18px;
                 font-weight: bold;
                 text-align: center;
@@ -203,6 +203,7 @@ class MainWindow(QMainWindow):
         self.dashboard_btn.setCheckable(True)
         self.dashboard_btn.setChecked(True)
         self.dashboard_btn.setStyleSheet(button_style)
+        self.dashboard_btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         self.dashboard_btn.clicked.connect(lambda: self.switch_tab(0))
         self.dashboard_btn.pressed.connect(lambda: self._start_hold_timer(self.dashboard_hold_timer))
         self.dashboard_btn.released.connect(self.dashboard_hold_timer.stop)
@@ -212,6 +213,7 @@ class MainWindow(QMainWindow):
         self.sequence_btn = QPushButton("🔗\nSequence")
         self.sequence_btn.setCheckable(True)
         self.sequence_btn.setStyleSheet(button_style)
+        self.sequence_btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         self.sequence_btn.clicked.connect(lambda: self.switch_tab(1))
         self.tab_buttons.addButton(self.sequence_btn, 1)
         sidebar_layout.addWidget(self.sequence_btn)
@@ -219,20 +221,31 @@ class MainWindow(QMainWindow):
         self.record_btn = QPushButton("⏺\nRecord")
         self.record_btn.setCheckable(True)
         self.record_btn.setStyleSheet(button_style)
+        self.record_btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         self.record_btn.clicked.connect(lambda: self.switch_tab(2))
         self.tab_buttons.addButton(self.record_btn, 2)
         sidebar_layout.addWidget(self.record_btn)
-        
-        sidebar_layout.addStretch()
-        
+
+        self.train_btn = QPushButton("Train")
+        self.train_btn.setCheckable(True)
+        self.train_btn.setStyleSheet(button_style)
+        self.train_btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        self.train_btn.clicked.connect(lambda: self.switch_tab(3))
+        self.tab_buttons.addButton(self.train_btn, 3)
+        sidebar_layout.addWidget(self.train_btn)
+
         self.settings_btn = QPushButton("⚙️\nSettings")
         self.settings_btn.setCheckable(True)
         self.settings_btn.setStyleSheet(button_style)
-        self.settings_btn.clicked.connect(lambda: self.switch_tab(3))
+        self.settings_btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        self.settings_btn.clicked.connect(lambda: self.switch_tab(4))
         self.settings_btn.pressed.connect(lambda: self._start_hold_timer(self.settings_hold_timer))
         self.settings_btn.released.connect(self.settings_hold_timer.stop)
-        self.tab_buttons.addButton(self.settings_btn, 3)
+        self.tab_buttons.addButton(self.settings_btn, 4)
         sidebar_layout.addWidget(self.settings_btn)
+
+        for index in range(sidebar_layout.count()):
+            sidebar_layout.setStretch(index, 1)
         
         # Install event filters for hold detection
         self.dashboard_btn.installEventFilter(self)
@@ -247,6 +260,7 @@ class MainWindow(QMainWindow):
         self.dashboard_tab = DashboardTab(self.config, self, self.device_manager)
         self.sequence_tab = SequenceTab(self.config, self)
         self.record_tab = RecordTab(self.config, self)
+        self.train_tab = TrainTab(self.config, self)
         
         # Connect sequence execution signal
         self.sequence_tab.execute_sequence_signal.connect(self.dashboard_tab.run_sequence)
@@ -256,6 +270,7 @@ class MainWindow(QMainWindow):
         self.content_stack.addWidget(self.dashboard_tab)
         self.content_stack.addWidget(self.sequence_tab)
         self.content_stack.addWidget(self.record_tab)
+        self.content_stack.addWidget(self.train_tab)
         self.content_stack.addWidget(self.settings_tab)
         
         # Set default tab
@@ -285,6 +300,9 @@ class MainWindow(QMainWindow):
         
         self.tab4_shortcut = QShortcut(QKeySequence("Ctrl+4"), self)
         self.tab4_shortcut.activated.connect(lambda: self.switch_tab(3))
+
+        self.tab5_shortcut = QShortcut(QKeySequence("Ctrl+5"), self)
+        self.tab5_shortcut.activated.connect(lambda: self.switch_tab(4))
     
     def switch_tab(self, index: int):
         """Switch to a different tab"""
@@ -292,21 +310,12 @@ class MainWindow(QMainWindow):
         if previous_index == 0 and index != 0 and hasattr(self, "dashboard_tab"):
             self.dashboard_tab.close_camera_panel()
 
-        self.content_stack.setCurrentIndex(index)
+        if 0 <= index < self.content_stack.count():
+            self.content_stack.setCurrentIndex(index)
         # Update button states
-        if index == 0:
-            self.dashboard_btn.setChecked(True)
-        elif index == 1:
-            self.sequence_btn.setChecked(True)
-        elif index == 2:
-            self.record_btn.setChecked(True)
-        elif index == 3:
-            self.settings_btn.setChecked(True)
-        else:
-            # Guard for future tabs to keep button states in sync
-            button = self.tab_buttons.button(index)
-            if button is not None:
-                button.setChecked(True)
+        button = self.tab_buttons.button(index)
+        if button is not None:
+            button.setChecked(True)
     
     def load_config(self):
         """Load configuration using the shared config store."""
