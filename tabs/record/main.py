@@ -554,6 +554,32 @@ class RecordTab(
         indices = self._target_arm_indices()
         return indices[0] if indices else 0
 
+    def _gather_target_controllers(self, ensure_bus: bool = False) -> list[tuple[int, MotorController, bool]]:
+        """Return controllers for selected arms; optionally ensure bus is connected.
+
+        Returns list of tuples (arm_index, controller, temporary_flag).
+        """
+        controllers: list[tuple[int, MotorController, bool]] = []
+        for arm_index in self._target_arm_indices():
+            controller: MotorController
+            temporary = False
+            if self.motor_controller and arm_index == self.active_arm_index:
+                controller = self.motor_controller
+            else:
+                controller = MotorController(self.config, arm_index=arm_index)
+                temporary = True
+            if ensure_bus and not controller.bus:
+                if not controller.connect():
+                    raise RuntimeError(f"Failed to connect bus for arm {arm_index}")
+            controllers.append((arm_index, controller, temporary))
+        return controllers
+
+    def _cleanup_temp_controllers(self, controllers: list[tuple[int, MotorController, bool]]) -> None:
+        for _, controller, temporary in controllers:
+            if temporary:
+                with contextlib.suppress(Exception):
+                    controller.disconnect()
+
     def _sync_active_arm_to_target(self) -> None:
         primary = self._primary_arm_index()
         if primary != self.active_arm_index:
@@ -1077,38 +1103,39 @@ class RecordTab(
 
     def ensure_teleop_connection(self) -> bool:
         """Ensure bus connection is available for teleop operations."""
+        controllers: list[tuple[int, MotorController, bool]] = []
         try:
-            if not self.motor_controller.bus:
-                if not self.motor_controller.connect():
-                    self.status_label.setText("❌ Failed to connect to motors")
-                    return False
+            controllers = self._gather_target_controllers(ensure_bus=True)
+            return True
         except Exception as exc:
             log_exception("RecordTab: teleop motor connect failed", exc, level="error")
             self.status_label.setText("❌ Failed to connect to motors")
             return False
-        return bool(self.motor_controller.bus)
+        finally:
+            self._cleanup_temp_controllers(controllers)
 
     def ensure_teleop_ready(self) -> bool:
         """Ensure teleop connection and torque lock are active."""
-        if not self.ensure_teleop_connection():
-            return False
-
-        if not self.teleop_torque_enabled:
-            try:
-                for name in self.motor_controller.motor_names:
-                    self.motor_controller.bus.write("Torque_Enable", name, 1, normalize=False)
+        controllers: list[tuple[int, MotorController, bool]] = []
+        try:
+            controllers = self._gather_target_controllers(ensure_bus=True)
+            if not self.teleop_torque_enabled:
+                for _, controller, _ in controllers:
+                    for name in controller.motor_names:
+                        controller.bus.write("Torque_Enable", name, 1, normalize=False)
                 self.teleop_torque_enabled = True
                 self._update_torque_label(locked=True)
                 if hasattr(self, "torque_toggle_btn"):
                     self.torque_toggle_btn.blockSignals(True)
                     self.torque_toggle_btn.setChecked(True)
                     self.torque_toggle_btn.blockSignals(False)
-            except Exception as exc:
-                log_exception("RecordTab: teleop enable torque failed", exc, level="error")
-                self.status_label.setText("❌ Failed to enable torque")
-                return False
-
-        return True
+            return True
+        except Exception as exc:
+            log_exception("RecordTab: teleop enable torque failed", exc, level="error")
+            self.status_label.setText("❌ Failed to enable torque")
+            return False
+        finally:
+            self._cleanup_temp_controllers(controllers)
 
     def on_hold_pressed(self):
         """Hold button pressed - release torque for manual positioning."""
@@ -1116,9 +1143,12 @@ class RecordTab(
         if not self.ensure_teleop_connection():
             return
 
+        controllers: list[tuple[int, MotorController, bool]] = []
         try:
-            for name in self.motor_controller.motor_names:
-                self.motor_controller.bus.write("Torque_Enable", name, 0, normalize=False)
+            controllers = self._gather_target_controllers(ensure_bus=True)
+            for _, controller, _ in controllers:
+                for name in controller.motor_names:
+                    controller.bus.write("Torque_Enable", name, 0, normalize=False)
             self.teleop_torque_enabled = False
             self._update_torque_label(locked=False)
             if hasattr(self, "torque_toggle_btn"):
@@ -1129,6 +1159,8 @@ class RecordTab(
         except Exception as exc:
             log_exception("RecordTab: teleop release torque failed", exc, level="error")
             self.status_label.setText("❌ Failed to release torque")
+        finally:
+            self._cleanup_temp_controllers(controllers)
 
     def on_hold_released(self):
         """Hold released - re-enable torque lock."""
@@ -1168,32 +1200,37 @@ class RecordTab(
 
     def _apply_teleop_step(self, joint_index: int, direction: int, multiplier: int = 1):
         """Apply a teleop step to the given joint."""
+        controllers: list[tuple[int, MotorController, bool]] = []
         if not self.ensure_teleop_ready():
             return
 
         try:
-            positions = self.motor_controller.read_positions_from_bus()
-            if not positions:
-                positions = self.motor_controller.read_positions()
-            if not positions or joint_index >= len(positions):
-                return
+            controllers = self._gather_target_controllers(ensure_bus=True)
+            for arm_idx, controller, _ in controllers:
+                positions = controller.read_positions_from_bus()
+                if not positions:
+                    positions = controller.read_positions()
+                if not positions or joint_index >= len(positions):
+                    continue
 
-            step = self.teleop_step * multiplier
-            target_positions = positions[:]
-            target_positions[joint_index] = max(0, min(4095, positions[joint_index] + direction * step))
+                step = self.teleop_step * multiplier
+                target_positions = positions[:]
+                target_positions[joint_index] = max(0, min(4095, positions[joint_index] + direction * step))
 
-            motor_name = self.motor_controller.motor_names[joint_index]
-            velocity = max(120, min(1200, self.default_velocity))
-            self.motor_controller.bus.write("Goal_Velocity", motor_name, velocity, normalize=False)
-            self.motor_controller.bus.write("Goal_Position", motor_name, target_positions[joint_index], normalize=False)
+                motor_name = controller.motor_names[joint_index]
+                velocity = max(120, min(1200, self.default_velocity))
+                controller.bus.write("Goal_Velocity", motor_name, velocity, normalize=False)
+                controller.bus.write("Goal_Position", motor_name, target_positions[joint_index], normalize=False)
 
-            print(
-                f"[TELEOP] Joint {motor_name}: {positions[joint_index]} -> {target_positions[joint_index]}"
-            )
+                print(
+                    f"[TELEOP] Arm {self._arm_tag_for_index(arm_idx)} joint {motor_name}: {positions[joint_index]} -> {target_positions[joint_index]}"
+                )
 
         except Exception as exc:
             print(f"[TELEOP] ❌ Failed to move joint: {exc}")
             self.status_label.setText("❌ Teleop move failed")
+        finally:
+            self._cleanup_temp_controllers(controllers)
 
     def _update_torque_label(self, locked: bool):
         text = "Torque: LOCKED" if locked else "Torque: RELEASED"
@@ -1219,6 +1256,7 @@ class RecordTab(
     def _on_torque_toggled(self, checked: bool) -> None:
         """Toggle torque lock on demand."""
         # Prevent re-entrancy from programmatic sync
+        controllers: list[tuple[int, MotorController, bool]] = []
         if checked:
             if not self.ensure_teleop_connection():
                 self.torque_toggle_btn.blockSignals(True)
@@ -1226,8 +1264,10 @@ class RecordTab(
                 self.torque_toggle_btn.blockSignals(False)
                 return
             try:
-                for name in self.motor_controller.motor_names:
-                    self.motor_controller.bus.write("Torque_Enable", name, 1, normalize=False)
+                controllers = self._gather_target_controllers(ensure_bus=True)
+                for _, controller, _ in controllers:
+                    for name in controller.motor_names:
+                        controller.bus.write("Torque_Enable", name, 1, normalize=False)
                 self.teleop_torque_enabled = True
                 self._update_torque_label(locked=True)
                 self.status_label.setText("Torque locked - keypad active")
@@ -1237,6 +1277,8 @@ class RecordTab(
                 self.torque_toggle_btn.blockSignals(True)
                 self.torque_toggle_btn.setChecked(False)
                 self.torque_toggle_btn.blockSignals(False)
+            finally:
+                self._cleanup_temp_controllers(controllers)
         else:
             if not self.ensure_teleop_connection():
                 self.torque_toggle_btn.blockSignals(True)
@@ -1244,8 +1286,10 @@ class RecordTab(
                 self.torque_toggle_btn.blockSignals(False)
                 return
             try:
-                for name in self.motor_controller.motor_names:
-                    self.motor_controller.bus.write("Torque_Enable", name, 0, normalize=False)
+                controllers = self._gather_target_controllers(ensure_bus=True)
+                for _, controller, _ in controllers:
+                    for name in controller.motor_names:
+                        controller.bus.write("Torque_Enable", name, 0, normalize=False)
                 self.teleop_torque_enabled = False
                 self._update_torque_label(locked=False)
                 self.status_label.setText("Torque released - manually move the arm")
@@ -1255,4 +1299,6 @@ class RecordTab(
                 self.torque_toggle_btn.blockSignals(True)
                 self.torque_toggle_btn.setChecked(True)
                 self.torque_toggle_btn.blockSignals(False)
+            finally:
+                self._cleanup_temp_controllers(controllers)
     

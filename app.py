@@ -198,16 +198,23 @@ class MainWindow(QMainWindow):
         self.record_btn.clicked.connect(lambda: self.switch_tab(2))
         self.tab_buttons.addButton(self.record_btn, 2)
         sidebar_layout.addWidget(self.record_btn)
-        
+
+        self.train_btn = QPushButton("🚂\nTrain")
+        self.train_btn.setCheckable(True)
+        self.train_btn.setStyleSheet(button_style)
+        self.train_btn.clicked.connect(lambda: self.switch_tab(3))
+        self.tab_buttons.addButton(self.train_btn, 3)
+        sidebar_layout.addWidget(self.train_btn)
+
         sidebar_layout.addStretch()
         
         self.settings_btn = QPushButton("⚙️\nSettings")
         self.settings_btn.setCheckable(True)
         self.settings_btn.setStyleSheet(button_style)
-        self.settings_btn.clicked.connect(lambda: self.switch_tab(3))
+        self.settings_btn.clicked.connect(lambda: self.switch_tab(4))
         self.settings_btn.pressed.connect(lambda: self._start_hold_timer(self.settings_hold_timer))
         self.settings_btn.released.connect(self.settings_hold_timer.stop)
-        self.tab_buttons.addButton(self.settings_btn, 3)
+        self.tab_buttons.addButton(self.settings_btn, 4)
         sidebar_layout.addWidget(self.settings_btn)
         
         # Install event filters for hold detection
@@ -219,11 +226,13 @@ class MainWindow(QMainWindow):
         
         # Create tabs
         from tabs.settings_tab import SettingsTab
-        
+        from tabs.train.main import TrainTab
+
         self.dashboard_tab = DashboardTab(self.config, self, self.device_manager)
         self.sequence_tab = SequenceTab(self.config, self)
         self.record_tab = RecordTab(self.config, self)
-        
+        self.train_tab = TrainTab(self.config, self)
+
         # Connect sequence execution signal
         self.sequence_tab.execute_sequence_signal.connect(self.dashboard_tab.run_sequence)
         self.settings_tab = SettingsTab(self.config, self, self.device_manager)
@@ -232,6 +241,7 @@ class MainWindow(QMainWindow):
         self.content_stack.addWidget(self.dashboard_tab)
         self.content_stack.addWidget(self.sequence_tab)
         self.content_stack.addWidget(self.record_tab)
+        self.content_stack.addWidget(self.train_tab)
         self.content_stack.addWidget(self.settings_tab)
         
         # Set default tab
