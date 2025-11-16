@@ -19,28 +19,12 @@ from utils.app_state import AppStateStore
 from utils.capabilities import detect_capabilities
 from utils.camera_support import prepare_camera_source
 from utils.logging_utils import log_exception
-
-
-def safe_print(*args, **kwargs):
-    """Print that handles BrokenPipeError gracefully for GUI apps."""
-    try:
-        print(*args, **kwargs)
-    except BrokenPipeError:
-        # Ignore broken pipe errors (common when output is piped/redirected)
-        pass
+from utils.safe_print import safe_print
 
 try:  # Optional dependency for coordinating shared camera access
     from utils.camera_hub import CameraStreamHub
 except Exception:  # pragma: no cover - avoid hard dependency during bootstrapping
     CameraStreamHub = None
-
-
-def safe_print(*args, **kwargs) -> None:
-    """Print helper that swallows BrokenPipeError in GUI contexts."""
-    try:
-        print(*args, **kwargs)
-    except BrokenPipeError:
-        pass
 
 
 class DeviceManager(QObject):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict
 
@@ -147,19 +148,32 @@ def create_default_config() -> Dict[str, Any]:
 
 
 def load_config(path: Path = CONFIG_PATH) -> Dict[str, Any]:
-    """Load the JSON config, ensuring the latest schema."""
+    """Load the JSON config, ensuring the latest schema without rewriting unnecessarily."""
     if path.exists():
-        config = json.loads(path.read_text())
-        config = ensure_multi_arm_config(config)
+        raw_text = path.read_text()
+        original = json.loads(raw_text)
+        # Work on a copy so we can detect schema updates
+        config = ensure_multi_arm_config(json.loads(raw_text))
         state = config.setdefault("dashboard_state", {})
         state.setdefault("active_robot_arm_index", 0)
+        changed = config != original
     else:
         config = create_default_config()
+        changed = True
 
-    path.write_text(json.dumps(config, indent=2))
+    if changed:
+        _atomic_write_json(path, config)
     return config
 
 
 def save_config(config: Dict[str, Any], path: Path = CONFIG_PATH) -> None:
     """Persist the configuration to disk."""
-    path.write_text(json.dumps(config, indent=2))
+    _atomic_write_json(path, config)
+
+
+def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
+    """Write JSON to disk atomically to avoid partial writes."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2))
+    os.replace(tmp_path, path)

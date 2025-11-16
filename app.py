@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QStackedWidget, QPushButton, QButtonGroup, QMessageBox
 )
-from PySide6.QtCore import Qt, QTimer, QThread, QObject, Signal
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QShortcut, QKeySequence
 
 from tabs.dashboard_tab import DashboardTab
@@ -64,48 +64,24 @@ class MainWindow(QMainWindow):
             self.resize(1024, 600)
     
     def discover_devices_on_startup(self):
-        """Run device discovery in a worker thread so UI stays responsive."""
-        if getattr(self, "_discovery_thread", None):
-            # Discovery already running
+        """Run device discovery on the GUI thread to keep Qt threading contracts."""
+        if getattr(self, "_discovery_running", False):
             return
 
-        class _DiscoveryWorker(QObject):
-            finished = Signal(dict)
-            error = Signal(str)
+        self._discovery_running = True
 
-            def __init__(self, manager: DeviceManager):
-                super().__init__()
-                self.manager = manager
+        def _run_discovery():
+            try:
+                result = self.device_manager.discover_all_devices()
+            except Exception as exc:  # pragma: no cover - defensive
+                self._on_discovery_error(str(exc))
+            else:
+                self._on_discovery_finished(result)
+            finally:
+                self._discovery_running = False
 
-            def run(self) -> None:
-                try:
-                    result = self.manager.discover_all_devices()
-                    self.finished.emit(result)
-                except Exception as exc:  # pragma: no cover - defensive
-                    self.error.emit(str(exc))
-
-        self._discovery_worker = _DiscoveryWorker(self.device_manager)
-        self._discovery_thread = QThread(self)
-        self._discovery_worker.moveToThread(self._discovery_thread)
-        self._discovery_thread.started.connect(self._discovery_worker.run)
-        self._discovery_worker.finished.connect(self._on_discovery_finished)
-        self._discovery_worker.error.connect(self._on_discovery_error)
-        # Ensure thread resources cleaned up
-        self._discovery_worker.finished.connect(self._cleanup_discovery_thread)
-        self._discovery_worker.error.connect(self._cleanup_discovery_thread)
-        self._discovery_thread.start()
-
-    def _cleanup_discovery_thread(self, *_) -> None:
-        thread = getattr(self, "_discovery_thread", None)
-        worker = getattr(self, "_discovery_worker", None)
-        if worker:
-            worker.deleteLater()
-        if thread:
-            thread.quit()
-            thread.wait()
-            thread.deleteLater()
-        self._discovery_thread = None
-        self._discovery_worker = None
+        # Defer until the event loop is running to avoid blocking showEvent.
+        QTimer.singleShot(0, _run_discovery)
 
     def _on_discovery_finished(self, result: dict) -> None:  # pragma: no cover - UI callback
         # Nothing extra for now; hook available for future UI updates

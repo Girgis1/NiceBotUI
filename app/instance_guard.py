@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
-import fcntl
 from pathlib import Path
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX platforms
+    fcntl = None
 
 
 class SingleInstanceError(RuntimeError):
@@ -18,6 +22,11 @@ class SingleInstanceGuard:
         self._handle = None
 
     def __enter__(self):
+        if fcntl is None:
+            raise SingleInstanceError(
+                "SingleInstanceGuard requires POSIX fcntl locking; "
+                "this build targets Linux kiosks."
+            )
         self._handle = open(self.lockfile_path, "w")
         try:
             fcntl.lockf(self._handle, fcntl.LOCK_EX | fcntl.LOCK_NB)

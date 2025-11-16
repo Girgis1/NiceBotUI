@@ -109,6 +109,24 @@
 
 ---
 
+### 🆕 Additional Findings from Recent Code Review (Feb 2025)
+
+**🔴 Critical / High Priority**
+- **Qt threading violation in startup discovery (DeviceManager):** Worker thread calls `discover_all_devices()` on the GUI-owned instance, mutating Qt signals/state across threads. Fix by moving the object to the worker thread and communicating via signals, or invoke discovery on the main thread with `QMetaObject.invokeMethod(..., Qt.QueuedConnection)`.
+- **Config reads rewrite config.json (non-atomic):** `app.config.load_config` rewrites the file on every read without atomic replace, risking truncation and clobbering concurrent edits. Separate read vs. write paths; only persist on real changes using temp-file + `os.replace`.
+- **Unpinned core dependency:** `lerobot[feetech]` is installed from the main branch; pin to a tag/commit to avoid upstream-breaking deployments.
+- **Missing runtime dependency:** `serial.tools.list_ports` is used but `pyserial` is absent from `requirements.txt`; add it to keep fresh installs from crashing.
+
+**🟡 Medium Priority**
+- **Duplicate helper in `utils/device_manager.py`:** `safe_print` is defined twice; remove the duplicate and centralize logging via existing logging utilities.
+- **SingleInstanceGuard POSIX-only import:** Unconditional `fcntl` import will crash on non-Linux; guard the import or document the Linux-only requirement alongside kiosk instructions.
+- **PySide6 test stub gap:** Tests fail because the stub lacks `QGuiApplication` (required by vision geometry helper). Extend the stub or shield the runtime import for headless testing.
+- **Config defaults contain real ports/home positions:** Consider moving operator-specific defaults to a sample file and prompting users on first run to avoid deploying with wrong ports.
+- **Sequence tab sys.path hack:** `sys.path` mutation at import time is fragile; convert tabs to a package or adjust PYTHONPATH in the launcher.
+- **Installer/helper cleanup:** `require_cmd` helper is unused—either use it for prereq checks (git, python3) or remove it.
+- **Minor cleanup:** `create_application` re-imports `sys`/`os` just to wrap stdout—hoist imports and document the wrapper for clarity.
+- **Test coverage gap:** Current tests only cover camera/geometry helpers. Add unit/functional tests around `ConfigStore`, `DeviceManager` (with mocked hardware), config schema compatibility, and tab logic; consider headless Qt smoke tests for the main window.
+
 ## 2025-01-14 16:00:00 - BIMANUAL TELEOP SYSTEM REVIEW (COMPREHENSIVE ANALYSIS)
 
 ### **🎯 EXECUTIVE SUMMARY**
