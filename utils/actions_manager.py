@@ -36,6 +36,7 @@ except ImportError:
 TIMEZONE = pytz.timezone('Australia/Sydney')
 RECORDINGS_DIR = Path(__file__).parent.parent / "data" / "recordings"
 BACKUPS_DIR = Path(__file__).parent.parent / "data" / "backups" / "recordings"
+LEGACY_ACTIONS_FILE = Path(__file__).parent.parent / "data" / "actions.json"
 
 
 class ActionsManager:
@@ -44,7 +45,61 @@ class ActionsManager:
     def __init__(self):
         self.recordings_dir = RECORDINGS_DIR
         self.backups_dir = BACKUPS_DIR
+        self.legacy_actions_file = LEGACY_ACTIONS_FILE
+        self._legacy_notice_logged = False
         self._ensure_directories()
+
+    # ------------------------------------------------------------------ legacy helpers
+    def _read_legacy_actions(self) -> Dict[str, Dict]:
+        """Load the legacy ``actions.json`` format if it still exists."""
+
+        if not self.legacy_actions_file.exists():
+            return {}
+
+        try:
+            with open(self.legacy_actions_file, "r") as handle:
+                data = json.load(handle)
+        except Exception as exc:
+            log_exception("ActionsManager: failed to read legacy actions.json", exc, level="warning")
+            return {}
+
+        actions = data.get("actions", {})
+        if not isinstance(actions, dict):
+            return {}
+
+        return {name: payload for name, payload in actions.items() if isinstance(payload, dict)}
+
+    def _load_legacy_action(self, name: str) -> Optional[Dict]:
+        """Return a normalized action dict from the legacy store."""
+
+        actions = self._read_legacy_actions()
+        if name not in actions:
+            return None
+
+        payload = dict(actions[name])
+        payload.setdefault("name", name)
+        payload.setdefault("mode", "solo")
+
+        if "type" not in payload:
+            if payload.get("recorded_data"):
+                payload["type"] = "live_recording"
+            elif payload.get("positions"):
+                payload["type"] = "position"
+            else:
+                payload["type"] = "recording"
+
+        if not self._legacy_notice_logged:
+            print("[ACTIONS] Legacy actions.json detected. Run `python utils/migrate_data.py` to upgrade to the new format.")
+            self._legacy_notice_logged = True
+
+        return payload
+
+    def _get_recording_dir(self, name: str) -> Path:
+        """Return the folder path for a composite recording."""
+
+        safe_name = name.lower().replace(" ", "_")
+        safe_name = "".join(c for c in safe_name if c.isalnum() or c in "_-")
+        return self.recordings_dir / safe_name
     
     def _ensure_directories(self):
         """Ensure data directories exist"""
@@ -57,7 +112,7 @@ class ActionsManager:
         Scans recordings directory for folders containing manifest.json
         """
         try:
-            recordings = []
+            recordings: Dict[str, None] = {}
 
             # Find all subdirectories with manifest.json
             for item in self.recordings_dir.iterdir():
@@ -68,12 +123,21 @@ class ActionsManager:
                             with open(manifest_path, 'r') as f:
                                 manifest = json.load(f)
                                 name = manifest.get("name", item.name)
-                                recordings.append(name)
+                                recordings[name] = None
                         except Exception as exc:
                             log_exception(f"ActionsManager: manifest parse failed ({item.name})", exc, level="warning")
-                            recordings.append(item.name)
+                            recordings[item.name] = None
 
-            return sorted(recordings)
+            if not recordings:
+                legacy_actions = self._read_legacy_actions()
+                return sorted(legacy_actions.keys())
+
+            # Include legacy-only actions so existing installs still see them
+            legacy_actions = self._read_legacy_actions()
+            for legacy_name in legacy_actions.keys():
+                recordings.setdefault(legacy_name, None)
+
+            return sorted(recordings.keys())
 
         except Exception as exc:
             log_exception("ActionsManager: list_actions failed", exc)
@@ -161,18 +225,22 @@ class ActionsManager:
                 ]
             }
         """
-        try:
-            # Load composite recording
-            composite = CompositeRecording.load(name, self.recordings_dir)
-            if not composite:
-                return None
-            
-            # Get full data (loads all components)
-            return composite.get_full_recording_data()
-            
-        except Exception as exc:
-            log_exception(f"ActionsManager: failed to load recording {name}", exc, level="error", stack=True)
-            return None
+        manifest_path = self._get_recording_dir(name) / "manifest.json"
+
+        if manifest_path.exists():
+            try:
+                composite = CompositeRecording.load(name, self.recordings_dir)
+                if composite:
+                    return composite.get_full_recording_data()
+            except Exception as exc:
+                log_exception(f"ActionsManager: failed to load recording {name}", exc, level="error", stack=True)
+
+        # Fall back to legacy single-file storage if the new format is missing
+        legacy = self._load_legacy_action(name)
+        if legacy:
+            return legacy
+
+        return None
     
     def save_action(self, name: str, action_data: dict, action_type: str = "recording") -> bool:
         """Save a recording
@@ -327,37 +395,66 @@ class ActionsManager:
     def delete_action(self, name: str) -> bool:
         """Delete a recording (with backup)"""
         try:
-            # Load composite to get directory
-            composite = CompositeRecording.load(name, self.recordings_dir)
-            if not composite:
+            manifest_path = self._get_recording_dir(name) / "manifest.json"
+            if manifest_path.exists():
+                # Load composite to get directory
+                composite = CompositeRecording.load(name, self.recordings_dir)
+                if not composite:
+                    return False
+
+                # Create backup of entire folder
+                timestamp = datetime.now(TIMEZONE).strftime("%Y%m%d_%H%M%S")
+                backup_name = f"{composite.recording_dir.name}_{timestamp}"
+                backup_path = self.backups_dir / backup_name
+
+                # Copy folder to backup
+                if composite.recording_dir.exists():
+                    shutil.copytree(composite.recording_dir, backup_path)
+                    print(f"[ACTIONS] Backed up to: {backup_path}")
+
+                # Delete the recording
+                result = composite.delete_recording()
+
+                if result:
+                    print(f"[ACTIONS] ✓ Deleted recording: {name}")
+
+                return result
+
+            # If composite folder does not exist, try removing legacy entry
+            legacy_actions = self._read_legacy_actions()
+            if name in legacy_actions:
+                try:
+                    with open(self.legacy_actions_file, "r") as handle:
+                        data = json.load(handle)
+                except Exception as exc:
+                    log_exception("ActionsManager: legacy delete read failed", exc, level="warning")
+                    return False
+
+                actions = data.get("actions", {})
+                if isinstance(actions, dict) and name in actions:
+                    actions.pop(name)
+                    data["actions"] = actions
+                    try:
+                        with open(self.legacy_actions_file, "w") as handle:
+                            json.dump(data, handle, indent=2)
+                        print(f"[ACTIONS] ✓ Deleted legacy recording entry: {name}")
+                        return True
+                    except Exception as exc:
+                        log_exception("ActionsManager: legacy delete write failed", exc, level="warning")
                 return False
-            
-            # Create backup of entire folder
-            timestamp = datetime.now(TIMEZONE).strftime("%Y%m%d_%H%M%S")
-            backup_name = f"{composite.recording_dir.name}_{timestamp}"
-            backup_path = self.backups_dir / backup_name
-            
-            # Copy folder to backup
-            if composite.recording_dir.exists():
-                shutil.copytree(composite.recording_dir, backup_path)
-                print(f"[ACTIONS] Backed up to: {backup_path}")
-            
-            # Delete the recording
-            result = composite.delete_recording()
-            
-            if result:
-                print(f"[ACTIONS] ✓ Deleted recording: {name}")
-            
-            return result
-            
+
         except Exception as exc:
             log_exception(f"ActionsManager: failed to delete recording {name}", exc)
             return False
-    
+
     def action_exists(self, name: str) -> bool:
         """Check if recording exists"""
-        composite = CompositeRecording.load(name, self.recordings_dir)
-        return composite is not None
+        manifest_path = self._get_recording_dir(name) / "manifest.json"
+        if manifest_path.exists():
+            return True
+
+        legacy_actions = self._read_legacy_actions()
+        return name in legacy_actions
     
     def get_recording_info(self, name: str) -> Optional[Dict]:
         """Get metadata about a recording without loading full data"""
