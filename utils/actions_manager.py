@@ -34,8 +34,10 @@ except ImportError:
 
 
 TIMEZONE = pytz.timezone('Australia/Sydney')
-RECORDINGS_DIR = Path(__file__).parent.parent / "data" / "recordings"
-BACKUPS_DIR = Path(__file__).parent.parent / "data" / "backups" / "recordings"
+ROOT_DIR = Path(__file__).parent.parent
+RECORDINGS_DIR = ROOT_DIR / "data" / "recordings"
+BACKUPS_DIR = ROOT_DIR / "data" / "backups" / "recordings"
+LEGACY_ACTIONS_FILE = ROOT_DIR / "data" / "actions.json"
 
 
 class ActionsManager:
@@ -44,7 +46,10 @@ class ActionsManager:
     def __init__(self):
         self.recordings_dir = RECORDINGS_DIR
         self.backups_dir = BACKUPS_DIR
+        self.legacy_actions_file = LEGACY_ACTIONS_FILE
         self._ensure_directories()
+        self._legacy_cache: Optional[Dict[str, Dict]] = None
+        self._legacy_mtime: Optional[float] = None
     
     def _ensure_directories(self):
         """Ensure data directories exist"""
@@ -57,7 +62,8 @@ class ActionsManager:
         Scans recordings directory for folders containing manifest.json
         """
         try:
-            recordings = []
+            recordings: List[str] = []
+            seen: set[str] = set()
 
             # Find all subdirectories with manifest.json
             for item in self.recordings_dir.iterdir():
@@ -69,15 +75,54 @@ class ActionsManager:
                                 manifest = json.load(f)
                                 name = manifest.get("name", item.name)
                                 recordings.append(name)
+                                seen.add(name.lower())
                         except Exception as exc:
                             log_exception(f"ActionsManager: manifest parse failed ({item.name})", exc, level="warning")
                             recordings.append(item.name)
+                            seen.add(item.name.lower())
+
+            # Include legacy actions (data/actions.json) for backwards compatibility
+            legacy_actions = self._load_legacy_actions()
+            for legacy_name in legacy_actions.keys():
+                key = legacy_name.lower()
+                if key not in seen:
+                    recordings.append(legacy_name)
+                    seen.add(key)
 
             return sorted(recordings)
 
         except Exception as exc:
             log_exception("ActionsManager: list_actions failed", exc)
             return []
+
+    def _load_legacy_actions(self) -> Dict[str, Dict]:
+        """Load legacy actions from data/actions.json when present."""
+
+        actions_path = self.legacy_actions_file
+        if not actions_path.exists():
+            return {}
+
+        try:
+            mtime = actions_path.stat().st_mtime
+            if self._legacy_cache is not None and self._legacy_mtime == mtime:
+                return self._legacy_cache
+
+            with open(actions_path, "r") as handle:
+                data = json.load(handle)
+
+            actions = data.get("actions")
+            if not isinstance(actions, dict):
+                return {}
+
+            self._legacy_cache = actions
+            self._legacy_mtime = mtime
+            return actions
+
+        except Exception as exc:
+            log_exception("ActionsManager: failed to load legacy actions.json", exc, level="warning")
+            self._legacy_cache = None
+            self._legacy_mtime = None
+            return {}
 
     def list_live_recordings(self) -> List[str]:
         """List recordings that contain at least one live recording step.
@@ -164,15 +209,33 @@ class ActionsManager:
         try:
             # Load composite recording
             composite = CompositeRecording.load(name, self.recordings_dir)
-            if not composite:
-                return None
-            
-            # Get full data (loads all components)
-            return composite.get_full_recording_data()
-            
+            if composite:
+                # Get full data (loads all components)
+                return composite.get_full_recording_data()
+
         except Exception as exc:
             log_exception(f"ActionsManager: failed to load recording {name}", exc, level="error", stack=True)
+
+        # Fallback to legacy JSON for installs that haven't migrated yet
+        legacy_actions = self._load_legacy_actions()
+        legacy = legacy_actions.get(name)
+        if not legacy:
             return None
+
+        positions = legacy.get("positions", [])
+        delays = legacy.get("delays", {})
+        speed = legacy.get("speed", 100)
+        metadata = legacy.get("metadata", {})
+
+        return {
+            "name": name,
+            "type": "position",
+            "positions": positions,
+            "delays": delays,
+            "speed": speed,
+            "mode": legacy.get("mode", "solo"),
+            "metadata": metadata,
+        }
     
     def save_action(self, name: str, action_data: dict, action_type: str = "recording") -> bool:
         """Save a recording

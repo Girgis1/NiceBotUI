@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
 from robot_worker import RobotWorker
 from utils.execution_manager import ExecutionWorker
 from utils.log_messages import LogEntry, translate_worker_message
+from utils.model_paths import (
+    build_checkpoint_path,
+    resolve_training_root,
+)
 
 
 class DashboardExecutionMixin:
@@ -42,7 +45,7 @@ class DashboardExecutionMixin:
         self.checkpoint_combo.clear()
 
         try:
-            train_dir = Path(self.config["policy"].get("base_path", ""))
+            train_dir = resolve_training_root(self.config)
             checkpoints_dir = train_dir / model_name / "checkpoints"
 
             if checkpoints_dir.exists():
@@ -92,8 +95,9 @@ class DashboardExecutionMixin:
                 checkpoint_name = self.checkpoint_combo.itemData(checkpoint_index)
                 if checkpoint_name:
                     try:
-                        train_dir = Path(self.config["policy"].get("base_path", ""))
-                        new_path = train_dir / model_name / "checkpoints" / checkpoint_name / "pretrained_model"
+                        new_path = build_checkpoint_path(
+                            self.config, model_name, checkpoint_name
+                        )
                         self.config["policy"]["path"] = str(new_path)
                         print(f"[DASHBOARD] Policy path updated to: {new_path}")
                     except Exception as e:
@@ -258,8 +262,9 @@ class DashboardExecutionMixin:
         checkpoint_name = self.checkpoint_combo.currentData() if self.checkpoint_combo.isVisible() else "last"
 
         try:
-            train_dir = Path(self.config["policy"].get("base_path", ""))
-            checkpoint_path = train_dir / model_name / "checkpoints" / checkpoint_name / "pretrained_model"
+            checkpoint_path = build_checkpoint_path(
+                self.config, model_name, checkpoint_name
+            )
 
             # Update config for this run
             model_config = self.config.copy()

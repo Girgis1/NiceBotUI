@@ -31,6 +31,7 @@ from utils.sequences_manager import SequencesManager
 from utils.camera_backend import open_capture
 from utils.camera_hub import CameraStreamHub
 from utils.config_compat import get_active_arm_index, get_first_enabled_arm
+from utils.model_paths import build_checkpoint_path
 from utils.execution import (
     ExecutionContext,
     execute_composite_recording,
@@ -889,8 +890,7 @@ class ExecutionWorker(QThread):
         
         try:
             # Get checkpoint path
-            train_dir = Path(self.config["policy"].get("base_path", ""))
-            checkpoint_path = train_dir / task / "checkpoints" / checkpoint / "pretrained_model"
+            checkpoint_path = build_checkpoint_path(self.config, task, checkpoint)
             
             if not checkpoint_path.exists():
                 self.log_message.emit('error', f"Model not found: {checkpoint_path}")
@@ -939,8 +939,7 @@ class ExecutionWorker(QThread):
         
         try:
             # Get checkpoint path
-            train_dir = Path(self.config["policy"].get("base_path", ""))
-            checkpoint_path = train_dir / task / "checkpoints" / checkpoint / "pretrained_model"
+            checkpoint_path = build_checkpoint_path(self.config, task, checkpoint)
             
             # Build robot client command
             robot_cmd = self._build_robot_client_cmd(checkpoint_path)
@@ -1090,8 +1089,7 @@ class ExecutionWorker(QThread):
         hub_paused = False
         try:
             # Get checkpoint path
-            train_dir = Path(self.config["policy"].get("base_path", ""))
-            checkpoint_path = train_dir / task / "checkpoints" / checkpoint / "pretrained_model"
+            checkpoint_path = build_checkpoint_path(self.config, task, checkpoint)
             
             if not checkpoint_path.exists():
                 self.log_message.emit('error', f"Model not found: {checkpoint_path}")
@@ -1397,8 +1395,7 @@ class ExecutionWorker(QThread):
         # Otherwise use server mode
         try:
             # Get checkpoint path
-            train_dir = Path(self.config["policy"].get("base_path", ""))
-            checkpoint_path = train_dir / task / "checkpoints" / checkpoint / "pretrained_model"
+            checkpoint_path = build_checkpoint_path(self.config, task, checkpoint)
             
             if not checkpoint_path.exists():
                 self.log_message.emit('error', f"Model not found: {checkpoint_path}")

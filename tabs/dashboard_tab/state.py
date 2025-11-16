@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.config_compat import get_active_arm_index, set_active_arm_index
+from utils.model_paths import list_model_task_dirs
 
 
 class DashboardStateMixin:
@@ -167,11 +168,9 @@ class DashboardStateMixin:
         sequences_mgr = SequencesManager()
 
         try:
-            train_dir = Path(self.config["policy"].get("base_path", ""))
-            if train_dir.exists():
-                for item in sorted(train_dir.iterdir()):
-                    if item.is_dir() and (item / "checkpoints").exists():
-                        self.run_combo.addItem(f"🤖 Model: {item.name}")
+            task_dirs = list_model_task_dirs(self.config)
+            for path in task_dirs:
+                self.run_combo.addItem(f"🤖 Model: {path.name}")
         except Exception as exc:  # pragma: no cover - defensive logging
             print(f"[DASHBOARD] Error loading models: {exc}")
 

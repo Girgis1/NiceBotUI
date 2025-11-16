@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QComboBox, QInputDialog, QMessageBox, QListWidget, QListWidgetItem,
     QDialog, QCheckBox, QFrame
 )
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal, QSize
 from PySide6.QtGui import QColor
 
 # Add parent directory to path
@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.sequences_manager import SequencesManager
 from utils.actions_manager import ActionsManager
 from utils.logging_utils import log_exception
+from utils.model_paths import list_model_task_dirs
 
 # Vision designer dialog (new modular UI)
 try:
@@ -61,14 +62,24 @@ class HomeStepWidget(QFrame):
         self.step_data = step_data
         self.step_number = step_number
         
-        # Set background color for home steps
+        # Style tweaks so the entry renders consistently across platforms
+        self.setObjectName("homeStepWidget")
         self.setStyleSheet("""
-            HomeStepWidget {
+            #homeStepWidget {
                 background-color: #1b5e20;
                 border-radius: 4px;
-                padding: 4px;
+                padding: 6px;
+            }
+            #homeStepWidget QLabel {
+                color: #e8f5e9;
+                font-weight: bold;
+            }
+            #homeStepWidget QCheckBox {
+                color: #e8f5e9;
             }
         """)
+        self.setMinimumHeight(42)
+        self.setFrameShape(QFrame.StyledPanel)
         
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 4, 8, 4)
@@ -76,24 +87,24 @@ class HomeStepWidget(QFrame):
         
         # Step label
         label = QLabel(f"{step_number}. 🏠 Home:")
-        label.setStyleSheet("color: white; font-weight: bold;")
         layout.addWidget(label)
         
         # Arm 1 checkbox
         self.arm1_check = QCheckBox("Arm 1")
         self.arm1_check.setChecked(step_data.get("home_arm_1", True))
-        self.arm1_check.setStyleSheet("color: white;")
         self.arm1_check.stateChanged.connect(self._on_arm_changed)
         layout.addWidget(self.arm1_check)
         
         # Arm 2 checkbox
         self.arm2_check = QCheckBox("Arm 2")
         self.arm2_check.setChecked(step_data.get("home_arm_2", True))
-        self.arm2_check.setStyleSheet("color: white;")
         self.arm2_check.stateChanged.connect(self._on_arm_changed)
         layout.addWidget(self.arm2_check)
-        
+
         layout.addStretch()
+
+    def sizeHint(self) -> QSize:  # pragma: no cover - Qt layout helper
+        return QSize(260, 44)
     
     def _on_arm_changed(self):
         """Update step data when checkboxes change"""
@@ -560,23 +571,15 @@ class SequenceTab(QWidget):
     
     def add_model_step(self):
         """Add a model execution step"""
-        # Get available tasks from config
-        train_dir = Path(self.config["policy"].get("base_path", ""))
-        
-        if not train_dir.exists():
-            self.status_label.setText("❌ No trained models found")
-            return
-        
-        # Get tasks
-        tasks = []
-        for item in train_dir.iterdir():
-            if item.is_dir() and (item / "checkpoints").exists():
-                tasks.append(item.name)
-        
+        task_dirs = list_model_task_dirs(self.config)
+        tasks = [path.name for path in task_dirs]
+
         if not tasks:
-            self.status_label.setText("❌ No trained models found")
+            self.status_label.setText(
+                "❌ No trained models found. Update Settings → Data Access → Policy Base Path."
+            )
             return
-        
+
         task, ok = QInputDialog.getItem(
             self, "Add Model", "Select task:",
             tasks, 0, False
