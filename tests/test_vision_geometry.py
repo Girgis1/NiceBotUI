@@ -77,6 +77,37 @@ class _QApplication:
         pass
 
 
+class _ScreenGeometry:
+    def __init__(self, w=1, h=1, x=0, y=0):
+        self._w = w
+        self._h = h
+        self._x = x
+        self._y = y
+
+    def width(self):
+        return self._w
+
+    def height(self):
+        return self._h
+
+    def left(self):
+        return self._x
+
+    def top(self):
+        return self._y
+
+
+class _Screen:
+    def availableGeometry(self):
+        return _ScreenGeometry()
+
+
+class _QGuiApplication:
+    @staticmethod
+    def primaryScreen():
+        return _Screen()
+
+
 qtcore_stub = types.SimpleNamespace(
     QPointF=_make_dummy("QPointF"),
     QRectF=_make_dummy("QRectF"),
@@ -89,6 +120,7 @@ qtgui_stub = types.SimpleNamespace(
     QColor=_make_dummy("QColor"),
     QFont=_make_dummy("QFont"),
     QImage=_make_dummy("QImage"),
+    QGuiApplication=_QGuiApplication,
     QPainter=_make_dummy("QPainter"),
     QPen=_make_dummy("QPen"),
     QPolygonF=_make_dummy("QPolygonF"),

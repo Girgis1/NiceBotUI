@@ -6,4 +6,4 @@ pytz>=2023.3
 pyyaml>=6.0
 psutil>=5.9.0
 pyserial>=3.5
-lerobot[feetech] @ git+https://github.com/huggingface/lerobot@main
+lerobot[feetech] @ git+https://github.com/huggingface/lerobot@d9e74a9d374a8f26582ad326c699740a227b483c

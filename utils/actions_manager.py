@@ -206,22 +206,34 @@ class ActionsManager:
                 ]
             }
         """
-        try:
-            # Load composite recording
-            composite = CompositeRecording.load(name, self.recordings_dir)
-            if composite:
-                # Get full data (loads all components)
-                return composite.get_full_recording_data()
+        legacy_actions = self._load_legacy_actions()
+        recording_dir = self.recordings_dir / name
+        manifest_path = recording_dir / "manifest.json"
 
+        # If this is a legacy-only action (no folder/manifest), return it quietly
+        legacy = legacy_actions.get(name)
+        if (not recording_dir.exists() or not manifest_path.exists()) and legacy:
+            return self._build_legacy_payload(name, legacy)
+
+        try:
+            # Load composite recording when manifest exists
+            if manifest_path.exists():
+                composite = CompositeRecording.load(name, self.recordings_dir)
+                if composite:
+                    return composite.get_full_recording_data()
         except Exception as exc:
-            log_exception(f"ActionsManager: failed to load recording {name}", exc, level="error", stack=True)
+            # Only log noisy errors for non-legacy entries
+            if not legacy:
+                log_exception(f"ActionsManager: failed to load recording {name}", exc, level="error", stack=True)
 
         # Fallback to legacy JSON for installs that haven't migrated yet
-        legacy_actions = self._load_legacy_actions()
-        legacy = legacy_actions.get(name)
-        if not legacy:
-            return None
+        if legacy:
+            return self._build_legacy_payload(name, legacy)
 
+        return None
+
+    def _build_legacy_payload(self, name: str, legacy: Dict) -> Dict:
+        """Render a legacy actions.json entry as a recording payload."""
         positions = legacy.get("positions", [])
         delays = legacy.get("delays", {})
         speed = legacy.get("speed", 100)

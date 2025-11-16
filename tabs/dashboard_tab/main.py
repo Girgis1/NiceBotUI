@@ -3,8 +3,6 @@ Dashboard Tab - Main robot control interface
 This is the existing UI refactored as a tab
 """
 
-import sys
-from pathlib import Path
 from typing import Optional, Dict, List, Tuple
 try:
     import cv2  # type: ignore
@@ -20,9 +18,6 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QColor, QImage, QPixmap
-
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from utils.app_state import AppStateStore
 from utils.camera_hub import CameraStreamHub

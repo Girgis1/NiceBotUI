@@ -3,8 +3,6 @@ Sequence Tab - Sequence Builder
 Combine actions, trained models, and delays into complex sequences
 """
 
-import sys
-from pathlib import Path
 from typing import Optional
 
 from PySide6.QtWidgets import (
@@ -14,9 +12,6 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QSize
 from PySide6.QtGui import QColor
-
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from utils.sequences_manager import SequencesManager
 from utils.actions_manager import ActionsManager
@@ -522,9 +517,13 @@ class SequenceTab(QWidget):
             text = f"{number}. ⏱️ Delay: {duration:.1f}s"
             color = QColor("#FF9800")
         elif step_type == "home":
-            # Use custom widget for home steps with arm checkboxes
-            item = QListWidgetItem()
+            # Use custom widget for home steps with arm checkboxes and text fallback
+            arm1 = "✓" if step.get("home_arm_1", True) else "✗"
+            arm2 = "✓" if step.get("home_arm_2", True) else "✗"
+            item = QListWidgetItem(f"{number}. 🏠 Home (Arm 1 {arm1} / Arm 2 {arm2})")
             item.setData(Qt.UserRole, step)
+            item.setForeground(QColor("#e8f5e9"))
+            item.setBackground(QColor("#1b5e20"))
             self.steps_list.addItem(item)
             
             # Create and set custom widget
@@ -556,7 +555,9 @@ class SequenceTab(QWidget):
         actions = self.actions_manager.list_actions()
         
         if not actions:
-            self.status_label.setText("❌ No saved actions. Create one in the Record tab first.")
+            self.status_label.setText(
+                "❌ No saved actions. Record one first or run utils/migrate_data.py to import legacy actions.json."
+            )
             return
         
         action, ok = QInputDialog.getItem(
@@ -575,8 +576,11 @@ class SequenceTab(QWidget):
         tasks = [path.name for path in task_dirs]
 
         if not tasks:
+            policy_cfg = self.config.get("policy", {}) if isinstance(self.config, dict) else {}
+            base_path = policy_cfg.get("base_path") or "outputs/train"
             self.status_label.setText(
-                "❌ No trained models found. Update Settings → Data Access → Policy Base Path."
+                f"❌ No trained models found. Ensure the base path exists ({base_path}) "
+                "and contains task/checkpoints folders."
             )
             return
 

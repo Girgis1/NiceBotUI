@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+from utils.actions_manager import ActionsManager
 from utils.config_compat import get_active_arm_index, set_active_arm_index
+from utils.mode_utils import get_mode_icon
 from utils.model_paths import list_model_task_dirs
+from utils.sequences_manager import SequencesManager
 
 
 class DashboardStateMixin:
@@ -158,11 +158,6 @@ class DashboardStateMixin:
 
         placeholder = "-- Select a model, sequence, or action --"
         self.run_combo.addItem(placeholder)
-
-        sys.path.insert(0, str(Path(__file__).parent.parent))
-        from utils.actions_manager import ActionsManager
-        from utils.sequences_manager import SequencesManager
-        from utils.mode_utils import get_mode_icon
 
         actions_mgr = ActionsManager()
         sequences_mgr = SequencesManager()

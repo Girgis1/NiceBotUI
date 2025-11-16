@@ -3,22 +3,17 @@ Record Tab - Action Recorder
 Allows recording sequences of motor positions for playback
 """
 
-import sys
 import time
-from pathlib import Path
 from functools import partial
 from typing import Optional
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QInputDialog, QMessageBox, QLineEdit, QSlider,
-    QGridLayout, QFrame, QComboBox
+    QGridLayout, QFrame, QComboBox, QSizePolicy
 )
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont
-
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import contextlib
 
@@ -731,23 +726,19 @@ class RecordTab(
 
         # Header with HOLD button
         header_row = QHBoxLayout()
-        header_label = QLabel("TELEOP")
-        header_label.setStyleSheet("color: #90CAF9; font-size: 12px; font-weight: bold;")
-        header_row.addWidget(header_label)
-        header_row.addStretch()
-
         self.hold_btn = QPushButton("HOLD")
         self.hold_btn.setCheckable(True)
-        self.hold_btn.setFixedHeight(32)
+        self.hold_btn.setMinimumHeight(64)  # doubled height
+        self.hold_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.hold_btn.setStyleSheet("""
             QPushButton {
                 background-color: #424242;
                 color: white;
                 border: 1px solid #616161;
-                border-radius: 4px;
-                font-size: 11px;
+                border-radius: 8px;
+                font-size: 14px;
                 font-weight: bold;
-                padding: 4px 12px;
+                padding: 8px 12px;
             }
             QPushButton:pressed, QPushButton:checked {
                 background-color: #f44336;
@@ -915,11 +906,36 @@ class RecordTab(
         step_row.addStretch()
         panel_layout.addLayout(step_row)
 
-        # Torque status
+        # Torque controls
+        torque_row = QHBoxLayout()
+        torque_row.setSpacing(6)
+
         self.torque_status_label = QLabel()
         self.torque_status_label.setStyleSheet("font-size: 9px;")
         self._update_torque_label(locked=False)
-        panel_layout.addWidget(self.torque_status_label)
+        torque_row.addWidget(self.torque_status_label, 1)
+
+        self.torque_toggle_btn = QPushButton("Toggle Torque")
+        self.torque_toggle_btn.setFixedHeight(32)
+        self.torque_toggle_btn.setStyleSheet("""
+            QPushButton {
+                background: #424242;
+                color: #ffffff;
+                border: 1px solid #555;
+                border-radius: 4px;
+                font-size: 11px;
+                padding: 4px 8px;
+            }
+            QPushButton:checked {
+                background: #2E7D32;
+                color: #e8f5e9;
+            }
+        """)
+        self.torque_toggle_btn.setCheckable(True)
+        self.torque_toggle_btn.toggled.connect(self._on_torque_toggled)
+        torque_row.addWidget(self.torque_toggle_btn)
+
+        panel_layout.addLayout(torque_row)
 
         panel_layout.addStretch()
 
@@ -1105,6 +1121,10 @@ class RecordTab(
                     self.motor_controller.bus.write("Torque_Enable", name, 1, normalize=False)
                 self.teleop_torque_enabled = True
                 self._update_torque_label(locked=True)
+                if hasattr(self, "torque_toggle_btn"):
+                    self.torque_toggle_btn.blockSignals(True)
+                    self.torque_toggle_btn.setChecked(True)
+                    self.torque_toggle_btn.blockSignals(False)
             except Exception as exc:
                 log_exception("RecordTab: teleop enable torque failed", exc, level="error")
                 self.status_label.setText("❌ Failed to enable torque")
@@ -1123,6 +1143,10 @@ class RecordTab(
                 self.motor_controller.bus.write("Torque_Enable", name, 0, normalize=False)
             self.teleop_torque_enabled = False
             self._update_torque_label(locked=False)
+            if hasattr(self, "torque_toggle_btn"):
+                self.torque_toggle_btn.blockSignals(True)
+                self.torque_toggle_btn.setChecked(False)
+                self.torque_toggle_btn.blockSignals(False)
             self.status_label.setText("Torque released - manually move the arm, then press SET")
         except Exception as exc:
             log_exception("RecordTab: teleop release torque failed", exc, level="error")
@@ -1200,4 +1224,44 @@ class RecordTab(
         else:
             self.torque_status_label.setText("Torque: RELEASED")
             self.torque_status_label.setStyleSheet("color: #FFAB91; font-size: 12px; font-weight: bold;")
+
+    def _on_torque_toggled(self, checked: bool) -> None:
+        """Toggle torque lock on demand."""
+        # Prevent re-entrancy from programmatic sync
+        if checked:
+            if not self.ensure_teleop_connection():
+                self.torque_toggle_btn.blockSignals(True)
+                self.torque_toggle_btn.setChecked(False)
+                self.torque_toggle_btn.blockSignals(False)
+                return
+            try:
+                for name in self.motor_controller.motor_names:
+                    self.motor_controller.bus.write("Torque_Enable", name, 1, normalize=False)
+                self.teleop_torque_enabled = True
+                self._update_torque_label(locked=True)
+                self.status_label.setText("Torque locked - keypad active")
+            except Exception as exc:
+                log_exception("RecordTab: torque enable toggle failed", exc, level="error")
+                self.status_label.setText("❌ Failed to enable torque")
+                self.torque_toggle_btn.blockSignals(True)
+                self.torque_toggle_btn.setChecked(False)
+                self.torque_toggle_btn.blockSignals(False)
+        else:
+            if not self.ensure_teleop_connection():
+                self.torque_toggle_btn.blockSignals(True)
+                self.torque_toggle_btn.setChecked(True)
+                self.torque_toggle_btn.blockSignals(False)
+                return
+            try:
+                for name in self.motor_controller.motor_names:
+                    self.motor_controller.bus.write("Torque_Enable", name, 0, normalize=False)
+                self.teleop_torque_enabled = False
+                self._update_torque_label(locked=False)
+                self.status_label.setText("Torque released - manually move the arm")
+            except Exception as exc:
+                log_exception("RecordTab: torque release toggle failed", exc, level="error")
+                self.status_label.setText("❌ Failed to release torque")
+                self.torque_toggle_btn.blockSignals(True)
+                self.torque_toggle_btn.setChecked(True)
+                self.torque_toggle_btn.blockSignals(False)
     
