@@ -85,15 +85,17 @@
 - 🟡 **Overall Stability:** IMPROVED - Major stability issues resolved, critical teleop/calibration bugs remain
 
 **File Status:**
-- **grok.md:** 5,124 lines (contains all active issues and plans)
+- **grok.md:** 5,159 lines (contains all active issues and plans)
 - **grok.archive:** 4,729 lines (comprehensive completed investigations archived)
-- **Total investigations:** 24+ completed, 5 critical active issues
+- **Total investigations:** 24+ completed, 6 active issues (added playback smoothness)
 
 **Next Critical Actions Required:**
 1. **FIX CALIBRATION ENTER BUG** - Restore robot calibration capability
 2. **FIX CALIBRATION STABILITY** - Resolve process race conditions and resource leaks
 3. **IMPROVE TELEOP STABILITY** - Address thread safety and state synchronization
 4. **TEST PRODUCTION READINESS** - Validate all fixes work in real deployment
+
+**Note (Feb 2025):** Calibration dialog code has been hardened (process exclusivity, capped buffers, window/pixmap safety). On-hardware calibration still pending a run to validate the fixes.
 
 **Implementation Readiness:** PHASE-READY
 - ✅ **Detailed technical specifications** for all features
@@ -4909,7 +4911,40 @@ def stop(self) -> None:
 - Guard `fcntl` import with platform check or document Linux-only requirement
 - Clean up code duplication throughout codebase
 
-#### **4. PROCESS RESOURCE MANAGEMENT (MEDIUM PRIORITY)**
+#### **4. PLAYBACK SMOOTHNESS IMPROVEMENT (MEDIUM PRIORITY)**
+
+**Issue:** Clunky "move-stop-move-stop" playback behavior between set positions.
+
+**Root Cause Analysis:**
+- Direct position commands without trajectory planning
+- No velocity ramping or motion blending
+- Abrupt stops between consecutive moves
+
+**Evidence:** User reports "move. stop... a bit clunky" during sequence playback.
+
+**Risk Assessment:** MEDIUM - Affects user experience and perceived system quality.
+
+**Solution Plan:**
+- Add move style dropdown to SET button with 4 options:
+  - ⚡ Direct: Current instant move behavior
+  - 🌊 Smooth: Basic velocity ramping (trapezoidal profile)
+  - 🔗 Blended: Blend with next move (continuous motion)
+  - ⏱️ Interpolated: Time-based interpolation (like live recordings)
+
+- Implement in transport_controls.py:
+  - Check action metadata for 'move_style' field
+  - Route to different execution methods based on style
+  - Add velocity profiling for smooth moves
+  - Implement basic blending for consecutive moves
+
+- UI Integration:
+  - QComboBox next to SET button in record tab
+  - Store move style in action metadata during recording
+  - Apply during playback based on recorded style
+
+**Expected Outcome:** Transform clunky playback into smooth, professional robotic motion with user-configurable precision vs smoothness trade-offs.
+
+#### **5. PROCESS RESOURCE MANAGEMENT (MEDIUM PRIORITY)**
 
 **Issue:** Resource leaks in motor bus connections during preflight operations.
 

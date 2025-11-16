@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Optional, Tuple
 
-from PySide6.QtCore import QObject, Signal, QProcess, QThread, QProcessEnvironment
+from PySide6.QtCore import QObject, Signal, QProcess, QThread, QProcessEnvironment, QMetaObject, Q_ARG, Qt
 
 from utils.app_state import AppStateStore
 from utils.config_compat import get_arm_port
@@ -52,21 +52,24 @@ class ProgrammaticTeleopWorker(QThread):
         self.running = False
         self.teleop = None
         self.robot = None
+        self._stopping = False
 
     def stop(self):
         """Stop the teleop session."""
+        self._stopping = True
         self.running = False
+        self.requestInterruption()
         self.wait(2000)  # Wait up to 2 seconds for clean shutdown
 
     def run(self):
         """Main teleop execution loop."""
         if not LEROBOT_AVAILABLE:
-            self.error.emit("LeRobot library not available")
+            self._emit_error_safe("LeRobot library not available")
             return
 
         try:
             self.running = True
-            self.log_message.emit(f"Starting programmatic {self.arm_target} teleop...")
+            self._emit_log_safe(f"Starting programmatic {self.arm_target} teleop...")
 
             # Create teleoperator and robot instances
             teleop_result, self.robot = self._create_teleop_instances()
@@ -86,24 +89,24 @@ class ProgrammaticTeleopWorker(QThread):
 
             # Connect and calibrate teleoperators
             if self._is_mixed_bimanual:
-                self.log_message.emit("Connecting left teleoperator (SO100)...")
+                self._emit_log_safe("Connecting left teleoperator (SO100)...")
                 self.left_teleop.connect()
-                self.log_message.emit("Connecting right teleoperator (SO101)...")
+                self._emit_log_safe("Connecting right teleoperator (SO101)...")
                 self.right_teleop.connect()
-                self.log_message.emit("Calibrating left teleoperator...")
+                self._emit_log_safe("Calibrating left teleoperator...")
                 self.left_teleop.calibrate()
-                self.log_message.emit("Calibrating right teleoperator...")
+                self._emit_log_safe("Calibrating right teleoperator...")
                 self.right_teleop.calibrate()
             else:
-                self.log_message.emit("Connecting teleoperator...")
+                self._emit_log_safe("Connecting teleoperator...")
                 self.teleop.connect()
-                self.log_message.emit("Calibrating teleoperator...")
-                self.teleop.calibrate()
+                self._emit_log_safe("Calibrating teleoperator...")
+            self.teleop.calibrate()
 
-            self.log_message.emit("Connecting robot...")
+            self._emit_log_safe("Connecting robot...")
             self.robot.connect()
 
-            self.log_message.emit(f"🎮 {self.arm_target.title()} teleop active - move leader arms to control")
+            self._emit_log_safe(f"🎮 {self.arm_target.title()} teleop active - move leader arms to control")
 
             # Main teleop loop
             while self.running:
@@ -130,22 +133,24 @@ class ProgrammaticTeleopWorker(QThread):
 
                 except Exception as e:
                     if self.running:  # Only emit error if we're still supposed to be running
-                        self.log_message.emit(f"Teleop error: {e}")
+                        self._emit_log_safe(f"Teleop error: {e}")
                         break
 
             # Cleanup
             self._cleanup()
 
-            if self.running:  # Normal completion
-                self.log_message.emit("✅ Teleop session completed")
+            if self.running and not self._stopping:  # Normal completion
+                self._emit_log_safe("✅ Teleop session completed")
             else:  # Stopped by user
-                self.log_message.emit("🛑 Teleop stopped by user")
+                self._emit_log_safe("🛑 Teleop stopped by user")
 
         except Exception as e:
-            self.log_message.emit(f"❌ Teleop failed: {e}")
-            self.error.emit(str(e))
+            self._emit_log_safe(f"❌ Teleop failed: {e}")
+            self._emit_error_safe(str(e))
         finally:
+            self.running = False
             self.finished.emit()
+            self._stopping = False
 
     def _create_teleop_instances(self) -> Tuple:
         """Create the appropriate teleoperator and robot instances based on arm_target."""
@@ -185,6 +190,31 @@ class ProgrammaticTeleopWorker(QThread):
         robot = lerobot.robots.so101_follower.So101Follower(robot_config)
 
         return teleop, robot
+
+    # ------------------------------------------------------------------
+    # Safe signal helpers (queued to main thread)
+
+    def _emit_log_safe(self, message: str) -> None:
+        QMetaObject.invokeMethod(
+            self, "_emit_log_slot", Qt.QueuedConnection, Q_ARG(str, message)
+        )
+
+    def _emit_error_safe(self, message: str) -> None:
+        QMetaObject.invokeMethod(
+            self, "_emit_error_slot", Qt.QueuedConnection, Q_ARG(str, message)
+        )
+
+    def _emit_log_slot(self, message: str) -> None:  # pragma: no cover - Qt slot
+        try:
+            self.log_message.emit(message)
+        except Exception:
+            pass
+
+    def _emit_error_slot(self, message: str) -> None:  # pragma: no cover - Qt slot
+        try:
+            self.error.emit(message)
+        except Exception:
+            pass
 
     def _create_bimanual_instances(self):
         """Create bimanual teleoperator and robot with mixed leader types.
@@ -457,10 +487,15 @@ class TeleopController(QObject):
         # Stop programmatic worker if running
         if self._worker and self._worker.isRunning():
             self._emit_status("Stopping teleop…")
-            self._worker.stop()
-            self._worker = None
-            self._set_running(False)
-            safe_print("[TeleopController] Programmatic teleop stopped")
+            try:
+                self._worker.stop()
+                if not self._worker.wait(3000):
+                    self._worker.terminate()
+                    self._worker.wait(1000)
+            finally:
+                self._worker = None
+                self._set_running(False)
+                safe_print("[TeleopController] Programmatic teleop stopped")
             return
 
         # Stop script-based process if running

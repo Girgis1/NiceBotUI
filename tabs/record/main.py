@@ -615,8 +615,8 @@ class RecordTab(
     def _read_motor_positions_safe(self, *, prefer_bus: bool = True) -> list[int]:
         """Best-effort motor position read that plays nicely with teleop sessions."""
 
-        if self._is_teleop_active():
-            return []
+        # During teleop, still attempt to read positions but avoid blocking on bus
+        prefer_bus = prefer_bus and not self._is_teleop_active()
         positions = self._read_positions_for_arm(self.active_arm_index, prefer_bus=prefer_bus)
         return positions or []
 

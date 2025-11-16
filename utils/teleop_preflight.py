@@ -94,8 +94,12 @@ class TeleopPreflight:
     def _reset_port(self, port: str, velocity: int = 4000, acceleration: int = 255) -> bool:
         retries = 3
         for attempt in range(1, retries + 1):
+            bus = None
             try:
                 bus = create_motor_bus(port)
+                # If supported, cap per-op timeouts to avoid hangs
+                if hasattr(bus, "timeout"):
+                    bus.timeout = 2.0
             except Exception as exc:
                 log_exception(f"TeleopPreflight: connect failed ({port})", exc)
                 time.sleep(0.2)
@@ -116,10 +120,11 @@ class TeleopPreflight:
                         log_exception(f"TeleopPreflight: write failed ({port} {name})", exc, level="warning")
                 return success
             finally:
-                try:
-                    bus.disconnect()
-                except Exception:
-                    pass
+                if bus:
+                    try:
+                        bus.disconnect()
+                    except Exception:
+                        pass
             time.sleep(0.2)
         return False
 

@@ -73,7 +73,6 @@ class SO101CalibrationDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setModal(True)
-        self.setWindowFlag(Qt.FramelessWindowHint, True)
         self.setWindowTitle("SO101 Calibration")
         self.resize(1024, 620)
 
@@ -82,6 +81,7 @@ class SO101CalibrationDialog(QDialog):
         self._active_process: Optional[QProcess] = None
         self._process_kind: Optional[str] = None
         self._latest_aux_output = ""
+        self._max_output_size = 1024 * 1024  # 1MB cap on aux output
         self._result_payload: Optional[Dict[str, str]] = None
         self._manual_id_override = False
         self._id_variants: List[str] = []
@@ -100,6 +100,7 @@ class SO101CalibrationDialog(QDialog):
         )
         self._update_command_preview()
         QTimer.singleShot(0, self._focus_default)
+        QTimer.singleShot(0, self._load_center_image)
 
     # ------------------------------------------------------------------ UI
     def _build_ui(
@@ -299,12 +300,8 @@ class SO101CalibrationDialog(QDialog):
         )
         layout.addWidget(self.center_image_label, stretch=1)
 
-        pixmap = QPixmap(str(self.calibration_image_path)) if self.calibration_image_path.exists() else QPixmap()
-        self.center_pixmap = pixmap
-        if pixmap.isNull():
-            self.center_image_label.setText("Calibration reference image missing. Add one under assets/calibration/so101_center.png.")
-        else:
-            self._update_center_pixmap()
+        self.center_pixmap = QPixmap()
+        self.center_image_label.setText("Loading calibration reference…")
 
         return container
 
@@ -322,6 +319,20 @@ class SO101CalibrationDialog(QDialog):
     def resizeEvent(self, event):  # type: ignore[override]
         super().resizeEvent(event)
         self._update_center_pixmap()
+
+    def _load_center_image(self) -> None:
+        """Load center image safely once the dialog is visible."""
+        try:
+            if self.calibration_image_path.exists():
+                pixmap = QPixmap(str(self.calibration_image_path))
+                if not pixmap.isNull():
+                    self.center_pixmap = pixmap
+                    self.center_image_label.clear()
+                    self._update_center_pixmap()
+                    return
+            self.center_image_label.setText("Calibration reference image missing. Add one under assets/calibration/so101_center.png.")
+        except Exception as exc:
+            self.center_image_label.setText(f"Image load error: {exc}")
 
     # ---------------------------------------------------------------- Schema / command helpers
     def _combo_style(self) -> str:
@@ -415,6 +426,9 @@ class SO101CalibrationDialog(QDialog):
         if not _normalize_port(self.port_combo.currentText()):
             self._append_log("❌ Select a valid robot port before continuing.\n")
             return
+        if not self._can_start_process():
+            self._append_log("[UI] Calibration already in progress.\n")
+            return
 
         self._stage = "running"
         self._disable_motor_snapshot_mode()
@@ -437,7 +451,8 @@ class SO101CalibrationDialog(QDialog):
         self.log_output.appendPlainText("Starting lerobot-calibrate...\n")
 
     def _run_port_discovery(self):
-        if self._active_process:
+        if not self._can_start_process():
+            self._append_log("[UI] Cannot start port discovery - process already running.\n")
             return
         self.find_ports_btn.setEnabled(False)
         self._latest_aux_output = ""
@@ -449,11 +464,17 @@ class SO101CalibrationDialog(QDialog):
         process.setArguments(["-lc", command])
         process.readyReadStandardOutput.connect(lambda: self._on_process_output(process, False))
         process.readyReadStandardError.connect(lambda: self._on_process_output(process, True))
+        process.errorOccurred.connect(lambda err: self._on_process_error(process, kind, err))
         process.finished.connect(lambda code, status: self._on_process_finished(process, kind, code))
-        process.start()
         self._active_process = process
         self._process_kind = kind
         self._append_log(f"$ {command}\n")
+        process.start()
+        if process.error() != QProcess.UnknownError and process.state() == QProcess.NotRunning:
+            self._append_log(f"[UI] Failed to start process: {process.errorString()}\n")
+            self._active_process = None
+            self._process_kind = None
+            self._stage = "config"
 
     def _on_process_output(self, process: QProcess, is_stderr: bool):
         data = bytes(process.readAllStandardError() if is_stderr else process.readAllStandardOutput())
@@ -470,6 +491,9 @@ class SO101CalibrationDialog(QDialog):
                 self._enable_motor_snapshot_mode()
         elif self._process_kind == "find-port":
             self._latest_aux_output += text
+            if len(self._latest_aux_output) > self._max_output_size:
+                self._latest_aux_output = self._latest_aux_output[-self._max_output_size // 2 :]
+                self._append_log("[UI] Warning: Port discovery output truncated\n")
 
     def _show_center_prompt(self):
         if self._awaiting_center:
@@ -480,6 +504,12 @@ class SO101CalibrationDialog(QDialog):
         self._set_log_fullscreen(False)
         self.stack.setCurrentWidget(self.center_widget)
         self._append_log("[UI] Awaiting center position confirmation...\n")
+
+    def _can_start_process(self) -> bool:
+        """Return True when no active process is running and stage is valid."""
+        if self._active_process and self._active_process.state() != QProcess.NotRunning:
+            return False
+        return self._stage in ("config", "running")
 
     def _on_process_finished(self, process: QProcess, kind: str, exit_code: int):
         if self._active_process is not process:
@@ -496,6 +526,16 @@ class SO101CalibrationDialog(QDialog):
             self._finalize_calibration(success)
         self._active_process = None
         self._process_kind = None
+        self._stage = "config" if kind == "find-port" else self._stage
+
+    def _on_process_error(self, process: QProcess, kind: str, error):
+        if self._active_process is not process:
+            return
+        self._append_log(f"[UI] Process error ({kind}): {process.errorString()}\n")
+        self.find_ports_btn.setEnabled(True)
+        self._active_process = None
+        self._process_kind = None
+        self._stage = "config"
 
     def _finalize_calibration(self, success: bool):
         self.primary_btn.setEnabled(True)
@@ -659,13 +699,20 @@ class SO101CalibrationDialog(QDialog):
                 target_rect = screen.availableGeometry()
         if target_rect is None:
             return
-        self.setFixedSize(target_rect.width(), target_rect.height())
-        self.move(target_rect.left(), target_rect.top())
+        width = min(max(target_rect.width(), 640), 1280)
+        height = min(max(target_rect.height(), 480), 800)
+        self.resize(width, height)
+        self.move(
+            target_rect.center().x() - self.width() // 2,
+            target_rect.center().y() - self.height() // 2,
+        )
 
     def reject(self) -> None:  # type: ignore[override]
         if self._active_process:
             self._active_process.kill()
             self._active_process = None
+            self._process_kind = None
+            self._stage = "config"
         super().reject()
 
     def accept(self) -> None:  # type: ignore[override]
