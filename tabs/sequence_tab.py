@@ -60,6 +60,7 @@ class HomeStepWidget(QFrame):
         super().__init__(parent)
         self.step_data = step_data
         self.step_number = step_number
+        self.setMinimumHeight(48)
         
         # Set background color for home steps
         self.setStyleSheet("""
@@ -94,6 +95,12 @@ class HomeStepWidget(QFrame):
         layout.addWidget(self.arm2_check)
         
         layout.addStretch()
+
+    def sizeHint(self):
+        hint = super().sizeHint()
+        if hint.height() < 48:
+            hint.setHeight(48)
+        return hint
     
     def _on_arm_changed(self):
         """Update step data when checkboxes change"""
@@ -560,44 +567,63 @@ class SequenceTab(QWidget):
     
     def add_model_step(self):
         """Add a model execution step"""
-        # Get available tasks from config
-        train_dir = Path(self.config["policy"].get("base_path", ""))
-        
-        if not train_dir.exists():
-            self.status_label.setText("❌ No trained models found")
-            return
-        
-        # Get tasks
-        tasks = []
-        for item in train_dir.iterdir():
-            if item.is_dir() and (item / "checkpoints").exists():
-                tasks.append(item.name)
-        
-        if not tasks:
-            self.status_label.setText("❌ No trained models found")
-            return
-        
-        task, ok = QInputDialog.getItem(
-            self, "Add Model", "Select task:",
-            tasks, 0, False
-        )
-        
-        if ok and task:
-            # Ask for duration
-            duration, ok2 = QInputDialog.getDouble(
-                self, "Model Duration", "Execution time (seconds):",
-                25.0, 1.0, 300.0, 1
+        tasks = self._discover_available_models()
+
+        if tasks:
+            task, ok = QInputDialog.getItem(
+                self,
+                "Add Model",
+                "Select task:",
+                tasks,
+                0,
+                False,
             )
-            
-            if ok2:
-                step = {
-                    "type": "model",
-                    "task": task,
-                    "checkpoint": "last",
-                    "duration": duration
-                }
-                self.add_step_to_list(step)
-            self.status_label.setText(f"✓ Added model: {task}")
+            if not ok or not task:
+                return
+        else:
+            suggestion = self._infer_model_name_from_config()
+            task, ok = QInputDialog.getText(
+                self,
+                "Add Model",
+                "Enter model/task name:",
+                text=suggestion,
+            )
+            if not ok or not task.strip():
+                self.status_label.setText("Model entry cancelled")
+                return
+            task = task.strip()
+            self.status_label.setText("Manual model entry — configure Settings › Data to auto-detect tasks.")
+
+        checkpoint, ok_checkpoint = QInputDialog.getText(
+            self,
+            "Model Checkpoint",
+            "Checkpoint name:",
+            text="last",
+        )
+        if not ok_checkpoint:
+            return
+        checkpoint = checkpoint.strip() or "last"
+
+        duration, ok_duration = QInputDialog.getDouble(
+            self,
+            "Model Duration",
+            "Execution time (seconds):",
+            25.0,
+            1.0,
+            300.0,
+            1,
+        )
+        if not ok_duration:
+            return
+
+        step = {
+            "type": "model",
+            "task": task,
+            "checkpoint": checkpoint,
+            "duration": duration,
+        }
+        self.add_step_to_list(step)
+        self.status_label.setText(f"✓ Added model: {task}")
     
     def add_vision_step(self):
         """Add a vision configuration step"""
@@ -629,7 +655,46 @@ class SequenceTab(QWidget):
         step = {"type": "home"}
         self.add_step_to_list(step)
         self.status_label.setText("✓ Added home step")
-    
+
+    def _discover_available_models(self) -> list:
+        """Return a sorted list of model task names found on disk."""
+
+        policy_cfg = self.config.get("policy", {})
+        base_path = policy_cfg.get("base_path", "")
+        if not base_path:
+            return []
+
+        train_dir = Path(base_path).expanduser()
+        if not train_dir.exists():
+            return []
+
+        tasks = []
+        for item in sorted(train_dir.iterdir()):
+            if item.is_dir() and (item / "checkpoints").exists():
+                tasks.append(item.name)
+
+        return tasks
+
+    def _infer_model_name_from_config(self) -> str:
+        """Best-effort inference of the current task name from config path."""
+
+        policy_cfg = self.config.get("policy", {})
+        path_value = policy_cfg.get("path", "")
+        if not path_value:
+            return ""
+
+        candidate = Path(path_value)
+        parts = candidate.parts
+        if "checkpoints" in parts:
+            idx = parts.index("checkpoints")
+            if idx > 0:
+                return parts[idx - 1]
+
+        if candidate.parent.name:
+            return candidate.parent.name
+
+        return candidate.stem
+
     def delete_selected_step(self):
         """Delete selected step"""
         current_row = self.steps_list.currentRow()
