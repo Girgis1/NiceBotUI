@@ -8,8 +8,9 @@ from typing import Optional, Dict, Any
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QFrame, QProgressBar, QComboBox, QTimer
+    QFrame, QProgressBar, QComboBox
 )
+from PySide6.QtCore import QTimer
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QPalette, QColor
 
