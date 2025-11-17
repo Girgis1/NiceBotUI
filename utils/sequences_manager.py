@@ -160,6 +160,23 @@ class SequencesManager:
                     enabled = step_dict.get("enabled", True)
                     delay_after = step_dict.get("delay_after", 0.0)
                     composite.add_vision_step(step_name, camera, trigger, enabled, delay_after)
+                elif step_type == "palletize":
+                    composite.add_palletize_step(
+                        step_name,
+                        int(step_dict.get("arm_index", 0)),
+                        step_dict.get("corners", []),
+                        step_dict.get("divisions", {}),
+                        int(step_dict.get("approach_velocity", 600)),
+                        int(step_dict.get("down_velocity", 400)),
+                        int(step_dict.get("release_velocity", 300)),
+                        int(step_dict.get("retract_velocity", 600)),
+                        step_dict.get("down_offsets", {}),
+                        int(step_dict.get("release_offset", 0)),
+                        float(step_dict.get("settle_time", 0.0)),
+                        float(step_dict.get("release_hold", 0.0)),
+                        step_dict.get("enabled", True),
+                        step_dict.get("delay_after", 0.0),
+                    )
             
             # Save manifest
             success = composite.save_manifest()
@@ -211,7 +228,23 @@ class SequencesManager:
                     simple_step["camera"] = step.get("camera", {})
                     simple_step["trigger"] = step.get("trigger", {})
                     simple_step["trigger"].setdefault("idle_mode", {"enabled": False, "interval_seconds": 2.0})
-                
+                elif step_type == "palletize":
+                    simple_step.update(
+                        {
+                            "arm_index": step.get("arm_index", 0),
+                            "corners": step.get("corners", []),
+                            "divisions": step.get("divisions", {}),
+                            "approach_velocity": step.get("approach_velocity", 600),
+                            "down_velocity": step.get("down_velocity", 400),
+                            "release_velocity": step.get("release_velocity", 300),
+                            "retract_velocity": step.get("retract_velocity", 600),
+                            "down_offsets": step.get("down_offsets", {}),
+                            "release_offset": step.get("release_offset", 0),
+                            "settle_time": step.get("settle_time", 0.0),
+                            "release_hold": step.get("release_hold", 0.0),
+                        }
+                    )
+
                 simple_steps.append(simple_step)
             
             # Return in old format for compatibility

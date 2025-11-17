@@ -14,7 +14,7 @@ Each step is self-contained and represents a unit of work in a sequence.
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 import pytz
 
 
@@ -87,6 +87,8 @@ class SequenceStep:
                 return HomeStep.from_dict(data)
             elif step_type == "vision":
                 return VisionStep.from_dict(data)
+            elif step_type == "palletize":
+                return PalletizeStep.from_dict(data)
             else:
                 print(f"[ERROR] Unknown step type: {step_type}")
                 return None
@@ -237,6 +239,82 @@ class VisionStep(SequenceStep):
             name=data.get("name", data.get("trigger", {}).get("display_name", "Vision Trigger")),
             camera=data.get("camera", {}),
             trigger=data.get("trigger", {}),
+            enabled=data.get("enabled", True),
+            delay_after=data.get("delay_after", 0.0),
+        )
+        metadata = data.get("metadata", {})
+        step.created_at = metadata.get("created_at", step.created_at)
+        step.modified_at = metadata.get("modified_at", step.modified_at)
+        return step
+
+
+class PalletizeStep(SequenceStep):
+    """Palletize grid execution step."""
+
+    def __init__(
+        self,
+        name: str,
+        arm_index: int,
+        corners: Optional[List[Dict]] = None,
+        divisions: Optional[Dict] = None,
+        approach_velocity: int = 600,
+        down_velocity: int = 400,
+        release_velocity: int = 300,
+        retract_velocity: int = 600,
+        down_offsets: Optional[Dict] = None,
+        release_offset: int = 0,
+        settle_time: float = 0.0,
+        release_hold: float = 0.0,
+        enabled: bool = True,
+        delay_after: float = 0.0,
+    ):
+        super().__init__("palletize", name, enabled, delay_after)
+        self.arm_index = arm_index
+        self.corners = corners or []
+        self.divisions = divisions or {"c1_c2": 1, "c2_c3": 1}
+        self.approach_velocity = approach_velocity
+        self.down_velocity = down_velocity
+        self.release_velocity = release_velocity
+        self.retract_velocity = retract_velocity
+        self.down_offsets = down_offsets or {}
+        self.release_offset = release_offset
+        self.settle_time = settle_time
+        self.release_hold = release_hold
+
+    def to_dict(self) -> dict:
+        data = super().to_dict()
+        data.update(
+            {
+                "arm_index": self.arm_index,
+                "corners": self.corners,
+                "divisions": self.divisions,
+                "approach_velocity": self.approach_velocity,
+                "down_velocity": self.down_velocity,
+                "release_velocity": self.release_velocity,
+                "retract_velocity": self.retract_velocity,
+                "down_offsets": self.down_offsets,
+                "release_offset": self.release_offset,
+                "settle_time": self.settle_time,
+                "release_hold": self.release_hold,
+            }
+        )
+        return data
+
+    @staticmethod
+    def from_dict(data: dict) -> "PalletizeStep":
+        step = PalletizeStep(
+            name=data.get("name", "Palletize Grid"),
+            arm_index=int(data.get("arm_index", 0)),
+            corners=data.get("corners", []),
+            divisions=data.get("divisions", {}),
+            approach_velocity=int(data.get("approach_velocity", 600)),
+            down_velocity=int(data.get("down_velocity", 400)),
+            release_velocity=int(data.get("release_velocity", 300)),
+            retract_velocity=int(data.get("retract_velocity", 600)),
+            down_offsets=data.get("down_offsets", {}),
+            release_offset=int(data.get("release_offset", 0)),
+            settle_time=float(data.get("settle_time", 0.0)),
+            release_hold=float(data.get("release_hold", 0.0)),
             enabled=data.get("enabled", True),
             delay_after=data.get("delay_after", 0.0),
         )
