@@ -5232,27 +5232,27 @@ process.setProcessEnvironment(env)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  🚂 TRAIN TAB │ 00:00 │ R:2/2 │ C:2/2 │ Training: pick_and_place_v2    │  ← Dashboard Status Bar
+│  🚂 TRAIN TAB │ 00:00 │ R:2/2 │ C:2/2 │ Training: pick_and_place_v2     │  ← Dashboard Status Bar
 ├─────────────────────────────────────────────────────────────────────────┤
 │  ┌─────────────────────────────┐ ┌─────────────────────────────────────┐ │
 │  │        🎬 RECORDING         │ │       📋 EPISODES                   │ │
-│  │        CENTER               │ │       MANAGEMENT                   │ │
+│  │        CENTER               │ │       MANAGEMENT                    │ │
 │  ├─────────────────────────────┤ ├─────────────────────────────────────┤ │
-│  │ ⏺️ RECORDING: ACTIVE        │ │ ◀ [22] [23] [24] ▶                 │ │
+│  │ ⏺️ RECORDING: ACTIVE        │ │ ◀ [22] [23] [24] ▶                  │ │
 │  │ Time: 00:15/00:30           │ │                                     │ │
-│  │ Actions: 1,247              │ │ [22] ✓ Complete                    │ │
+│  │ Actions: 1,247              │ │ [22] ✓ Complete                     │ │
 │  │ Quality: GOOD               │ │ [23] 🎬 Recording                   │ │
-│  │                             │ │ [24] ○ Pending                     │ │
-│  │ [▶ START] [⏸ PAUSE]         │ │ [25] ○ Pending                     │ │
+│  │                             │ │ [24] ○ Pending                      │ │
+│  │ [▶ START] [⏸ PAUSE]         │ │ [25] ○ Pending                      │ │
 │  │ [⏹ STOP] [💾 SAVE]          │ │                                     │ │
-│  │ [🗑️ DISCARD]                │ │ 📊 Progress: ████████░░░ 46%       │ │
+│  │ [🗑️ DISCARD]                │ │ 📊 Progress: ████████░░░ 46%        │ │
 │  └─────────────────────────────┘ └─────────────────────────────────────┘ │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  ┌─────────────────────────────────────────────────────────────────────┐ │  ← Dataset Overview
 │  │ 📁 DATASET OVERVIEW                                                 │ │
 │  │ Name: pick_and_place_v2  Episodes: 23/50  Size: 1.2GB               │ │
-│  │ Status: COLLECTING  Quality: GOOD  Format: ACT                     │ │
-│  │ [⚙️ CONFIG] [📤 SYNC] [📊 ANALYTICS] [🎯 TRAIN]                      │ │
+│  │ Status: COLLECTING  Quality: GOOD  Format: ACT                      │ │
+│  │ [⚙️ CONFIG] [📤 SYNC] [📊 ANALYTICS] [🎯 TRAIN]                     │ │
 │  └─────────────────────────────────────────────────────────────────────┘ │
 └───────────────────────────────────────────────────────────────────────── ← 600px TOTAL
 ```
@@ -5273,7 +5273,7 @@ process.setProcessEnvironment(env)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  🚂 TRAIN TAB │ 00:00 │ R:2/2 │ C:2/2 │ Training: pick_and_place_v2    │  ← Dashboard Status Bar
+│  🚂 TRAIN TAB │ 00:00 │ R:2/2 │ C:2/2 │ Training: pick_and_place_v2     │  ← Dashboard Status Bar
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
 │  ┌─────────────────────────────────────────────────────────────────────┐ │  ← Primary Action Card
@@ -5447,3 +5447,160 @@ TOTAL: ~358px (comfortably fits in 600px)
 ---
 
 **Status:** Calibration dialog sizing optimized for 1024×600px touchscreen. No more buttons pushed off-screen.
+
+---
+
+## **🔧 CALIBRATION DIALOG REDESIGN - MINIMALIST LAYOUT FOR 1024×600px**
+
+
+### **🎯 REQUIREMENTS SPECIFIED**
+
+**Remove unnecessary elements:**
+- ❌ **Header label** ("SO101 Calibration" title) - **saves ~24px**
+- ❌ **Blue command preview** line - **saves ~24px**
+
+**Keep essential elements:**
+- ✅ **Input boxes form** (Robot Type, Arm Type, Robot Port, Robot ID)
+- ✅ **Log output area** - **maximize to fill remaining space**
+- ✅ **Cancel/Next buttons** at bottom
+
+**Layout constraints:**
+- **Screen size:** 1024×600px touchscreen
+- **Window must sit flush** against screen edges (like vision menu)
+- **Log area maximized** without exceeding screen height
+
+### **📏 CURRENT VS TARGET LAYOUT COMPARISON**
+
+**BEFORE (Current Layout):**
+```
+┌─────────────────────────────────┐ 600px total height
+│ Header: "SO101 Calibration"     │ ~24px (TO REMOVE)
+├─────────────────────────────────┤
+│ Form Container (gray box)       │ ~192px (input fields)
+│ with 4 rows of inputs           │
+├─────────────────────────────────┤
+│ Blue Command Preview Line       │ ~24px (TO REMOVE)
+├─────────────────────────────────┤
+│ Log Output Area                 │ 140px minimum
+├─────────────────────────────────┤
+│ Cancel / Next Buttons           │ 40px
+└─────────────────────────────────┘
+TOTAL: ~424px (room for log expansion)
+```
+
+**AFTER (Target Layout):**
+```
+┌─────────────────────────────────┐ 600px total height
+│ Form Container (gray box)       │ ~144px (compacted inputs)
+│ with 4 rows of inputs           │
+├─────────────────────────────────┤
+│ Log Output Area                 │ ~416px (MAXIMIZED)
+├─────────────────────────────────┤
+│ Cancel / Next Buttons           │ 40px
+└─────────────────────────────────┘
+TOTAL: 600px (fits screen perfectly)
+```
+
+### **🛠️ IMPLEMENTATION REQUIREMENTS FOR CODEX AGENT**
+
+**1. Remove Header Section:**
+```python
+# REMOVE: Header QLabel creation and layout.addWidget(header)
+# File: tabs/settings/calibration_dialog.py
+# Lines: ~120-125 (header creation)
+# Lines: ~125 (layout.addWidget(header))
+```
+
+**2. Remove Command Preview Section:**
+```python
+# REMOVE: Command preview QLabel creation and layout
+# File: tabs/settings/calibration_dialog.py
+# Lines: ~279-287 (command preview creation and setup)
+# Lines: ~287 (layout.addWidget(self.command_preview))
+```
+
+**3. Maximize Log Output Height:**
+```python
+# CHANGE: Log output sizing
+# File: tabs/settings/calibration_dialog.py
+# Line: ~138: self.log_output.setMinimumHeight(140)
+# CHANGE TO: self.log_output.setMinimumHeight(400)  # Or calculate dynamically
+# Line: ~139: QSizePolicy.Expanding (keep as is for maximum expansion)
+```
+
+**4. Compact Form Container (Optional):**
+```python
+# REDUCE: Form container margins and spacing for more log space
+# File: tabs/settings/calibration_dialog.py
+# Line: ~186: layout.setContentsMargins(8, 6, 8, 2) → (4, 3, 4, 1)
+# Line: ~187: layout.setSpacing(4) → 2
+# Line: ~190: table.setVerticalSpacing(4) → 2
+# Line: ~191: table.setHorizontalSpacing(8) → 6
+```
+
+**5. Window Positioning (Flush Against Screen Edges):**
+```python
+# CHANGE: Window positioning to match vision menu
+# File: tabs/settings/calibration_dialog.py
+# Line: ~76: Remove self.setWindowFlag(Qt.FramelessWindowHint, True) if present
+# OR ensure proper positioning in _match_host_window()
+
+# Current _match_host_window() method:
+# Lines: ~695-713
+# NEEDS: Ensure window sits at (0,0) with no margins
+# CHANGE TO:
+def _match_host_window(self):
+    """Position window flush against screen edges like vision menu."""
+    screen = QGuiApplication.primaryScreen()
+    if screen:
+        available = screen.availableGeometry()
+        self.setGeometry(0, 0, 1024, 600)  # Exact screen size, top-left position
+```
+
+### **📊 HEIGHT CALCULATIONS**
+
+**Space Saved by Removals:**
+- Header: **24px**
+- Command Preview: **24px**
+- **Total saved: 48px**
+
+**Optimized Height Distribution:**
+```
+Form Container: 144px (compacted from 192px)
+Log Area: 416px (expanded from 140px, +276px)
+Buttons: 40px (unchanged)
+TOTAL: 600px (perfect screen fit)
+```
+
+### **🎨 VISUAL RESULT**
+
+**Target Minimalist Layout:**
+```
+┌─────────────────────────────────────────────────────────────────────┐  ← Screen edge (0,0)
+│  ┌─────────────────────────────────────────────────────────────────┐  │
+│  │  Robot Type    [so101 ▼]                                        │  │
+│  │  Arm Type      [Follower ▼]                                     │  │
+│  │  Robot Port    [COMBOBOX] [Find Ports]                          │  │
+│  │  Robot ID      [TEXT FIELD] [◀] [▶]                             │  │
+│  └─────────────────────────────────────────────────────────────────┘  │
+│                                                                     │  ← 416px maximized log area
+│  [LOG OUTPUT - MAXIMIZED SPACE FOR CALIBRATION MESSAGES]           │
+│  [Shows all calibration progress, errors, and status updates]      │
+│  [with plenty of room to read long command outputs]               │
+│                                                                     │
+│  [Cancel]                                    [Next]                │  ← Buttons at bottom
+└─────────────────────────────────────────────────────────────────────┘  ← Screen edge (1024,600)
+```
+
+### **✅ VALIDATION REQUIREMENTS**
+- **Window size:** Exactly 1024×600px
+- **Window position:** (0,0) - flush against screen edges
+- **No title bar:** Like vision menu (frameless if needed)
+- **Log area:** Maximum possible height without scrolling dialog
+- **Touch friendly:** All elements remain accessible
+
+**Ready for codex agent implementation.** This redesign removes visual clutter while maximizing the functional log area for better calibration monitoring.
+
+---
+
+**Status:** Calibration dialog redesign requirements documented. Ready for codex agent implementation.

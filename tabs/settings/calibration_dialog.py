@@ -114,15 +114,8 @@ class SO101CalibrationDialog(QDialog):
         available_ports: Iterable[str],
     ) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 2)
+        layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(2)
-
-        header = QLabel("SO101 Calibration")
-        header.setAlignment(Qt.AlignCenter)
-        header.setStyleSheet(
-            "font-size: 18px; font-weight: 600; color: #f5f5f5; padding: 2px;"
-        )
-        layout.addWidget(header)
 
         self.stack = QStackedWidget()
         layout.addWidget(self.stack, stretch=1)
@@ -135,8 +128,8 @@ class SO101CalibrationDialog(QDialog):
 
         self.log_output = QPlainTextEdit()
         self.log_output.setReadOnly(True)
-        self.log_output.setMinimumHeight(140)
-        self.log_output.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.log_output.setMinimumHeight(120)
+        self.log_output.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         log_font = QFont("DejaVu Sans Mono, Noto Color Emoji, monospace", 11)
         self.log_output.setFont(log_font)
         self.log_output.setStyleSheet(
@@ -150,7 +143,7 @@ class SO101CalibrationDialog(QDialog):
             }
             """
         )
-        layout.addWidget(self.log_output, stretch=0)
+        layout.addWidget(self.log_output, stretch=1)
 
         button_row = QHBoxLayout()
         button_row.addStretch()
@@ -276,15 +269,14 @@ class SO101CalibrationDialog(QDialog):
 
         layout.addLayout(table)
 
+        # Command preview label is constructed but not added to the layout
+        # so it no longer consumes vertical space in the dialog.
         self.command_preview = QLabel()
         self.command_preview.setWordWrap(True)
         self.command_preview.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.command_preview.setStyleSheet(
             "color: #9ee5ff; font-family: 'JetBrains Mono', 'Consolas', monospace; font-size: 12px;"
         )
-        self.command_preview.setFixedHeight(24)  # Compact single-row footprint
-        self.command_preview.setContentsMargins(0, -2, 0, 2)
-        layout.addWidget(self.command_preview)
 
         self._refresh_id_suggestions(default_robot_id)
         return container
@@ -698,21 +690,19 @@ class SO101CalibrationDialog(QDialog):
         target_rect = None
         parent = self.parentWidget()
         if parent is not None:
-            target_rect = (parent.window() or parent).geometry()
+            host_window = parent.window() or parent
+            target_rect = host_window.geometry()
         if target_rect is None:
             screen = (self.windowHandle().screen() if self.windowHandle() else None) or QGuiApplication.primaryScreen()
             if screen is not None:
                 target_rect = screen.availableGeometry()
         if target_rect is None:
             return
-        # For 1024x600 touchscreen, ensure we fit perfectly
-        width = min(target_rect.width(), 1024)
-        height = min(target_rect.height(), 600)
-        self.resize(width, height)
-        self.move(
-            target_rect.center().x() - self.width() // 2,
-            target_rect.center().y() - self.height() // 2,
-        )
+        # For 1024x600 touchscreen, overlay host window / screen bounds flush to edges.
+        width = max(min(target_rect.width(), 1024), 1)
+        height = max(min(target_rect.height(), 600), 1)
+        self.setFixedSize(width, height)
+        self.move(target_rect.left(), target_rect.top())
 
     def reject(self) -> None:  # type: ignore[override]
         if self._active_process:
