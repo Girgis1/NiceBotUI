@@ -135,7 +135,7 @@ class SO101CalibrationDialog(QDialog):
 
         self.log_output = QPlainTextEdit()
         self.log_output.setReadOnly(True)
-        self.log_output.setMinimumHeight(100)
+        self.log_output.setMinimumHeight(140)
         self.log_output.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         log_font = QFont("DejaVu Sans Mono, Noto Color Emoji, monospace", 11)
         self.log_output.setFont(log_font)
@@ -183,7 +183,7 @@ class SO101CalibrationDialog(QDialog):
         container.setStyleSheet("QFrame { background-color: #303030; border: 2px solid #4a4a4a; border-radius: 8px; }")
 
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setContentsMargins(8, 6, 8, 2)
         layout.setSpacing(4)
 
         table = QGridLayout()
@@ -283,7 +283,7 @@ class SO101CalibrationDialog(QDialog):
             "color: #9ee5ff; font-family: 'JetBrains Mono', 'Consolas', monospace; font-size: 12px;"
         )
         self.command_preview.setFixedHeight(24)  # Compact single-row footprint
-        self.command_preview.setContentsMargins(0, 0, 0, 0)
+        self.command_preview.setContentsMargins(0, -2, 0, 2)
         layout.addWidget(self.command_preview)
 
         self._refresh_id_suggestions(default_robot_id)
