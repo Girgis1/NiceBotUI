@@ -194,6 +194,9 @@ class MultiArmMixin:
         teleop_solo_layout.addLayout(teleop_arm_select_row)
 
         self.teleop_solo_arm_config = SingleArmConfig("Leader Arm 1", show_home_controls=False)
+        self.teleop_solo_arm_config.calibrate_clicked.connect(
+            lambda: self.calibrate_arm_at_index(self.teleop_solo_arm_selector.currentIndex(), arm_type="teleop")
+        )
         self.teleop_solo_arm_config.test_clicked.connect(
             lambda: self.test_teleop_arm(self.teleop_solo_arm_selector.currentIndex(), self.teleop_solo_arm_config)
         )
@@ -206,11 +209,13 @@ class MultiArmMixin:
 
         teleop_arms_row = QHBoxLayout()
         self.teleop_arm1_config = SingleArmConfig("Left Leader (Arm 1)", show_home_controls=False)
+        self.teleop_arm1_config.calibrate_clicked.connect(lambda: self.calibrate_arm_at_index(0, arm_type="teleop"))
         self.teleop_arm1_config.test_clicked.connect(
             lambda: self.test_teleop_arm(0, self.teleop_arm1_config)
         )
         teleop_arms_row.addWidget(self.teleop_arm1_config)
         self.teleop_arm2_config = SingleArmConfig("Right Leader (Arm 2)", show_home_controls=False)
+        self.teleop_arm2_config.calibrate_clicked.connect(lambda: self.calibrate_arm_at_index(1, arm_type="teleop"))
         self.teleop_arm2_config.test_clicked.connect(
             lambda: self.test_teleop_arm(1, self.teleop_arm2_config)
         )
@@ -218,6 +223,7 @@ class MultiArmMixin:
         teleop_bimanual_layout.addLayout(teleop_arms_row)
         layout.addWidget(self.teleop_bimanual_container)
 
+        self._connect_teleop_arm_signal_handlers()
         layout.addStretch()
         return widget
 
@@ -248,6 +254,22 @@ class MultiArmMixin:
         if self.robot_arm2_config:
             self.robot_arm2_config.port_changed.connect(lambda port: self._handle_robot_port_change(1, port))
             self.robot_arm2_config.id_changed.connect(lambda robot_id: self._handle_robot_id_change(1, robot_id))
+
+    def _connect_teleop_arm_signal_handlers(self) -> None:
+        if self.teleop_solo_arm_config and self.teleop_solo_arm_selector:
+            self.teleop_solo_arm_config.port_changed.connect(
+                lambda port: self._handle_teleop_port_change(self.teleop_solo_arm_selector.currentIndex(), port)
+            )
+            self.teleop_solo_arm_config.id_changed.connect(
+                lambda robot_id: self._handle_teleop_id_change(self.teleop_solo_arm_selector.currentIndex(), robot_id)
+            )
+
+        if self.teleop_arm1_config:
+            self.teleop_arm1_config.port_changed.connect(lambda port: self._handle_teleop_port_change(0, port))
+            self.teleop_arm1_config.id_changed.connect(lambda robot_id: self._handle_teleop_id_change(0, robot_id))
+        if self.teleop_arm2_config:
+            self.teleop_arm2_config.port_changed.connect(lambda port: self._handle_teleop_port_change(1, port))
+            self.teleop_arm2_config.id_changed.connect(lambda robot_id: self._handle_teleop_id_change(1, robot_id))
 
     def _selector_style(self) -> str:
         return (
@@ -349,16 +371,19 @@ class MultiArmMixin:
             self.status_label.setText(f"❌ Error setting home for Arm {arm_index + 1}: {exc}")
             self.status_label.setStyleSheet("QLabel { color: #f44336; font-size: 15px; padding: 8px; }")
 
-    def calibrate_arm_at_index(self, arm_index: int):
+    def calibrate_arm_at_index(self, arm_index: int, arm_type: str = "robot"):
         """Launch the touch calibration dialog for the requested arm."""
-        arms = self.config.setdefault("robot", {}).setdefault("arms", [])
+        arm_section = "teleop" if arm_type == "teleop" else "robot"
+        arms = self.config.setdefault(arm_section, {}).setdefault("arms", [])
         while len(arms) <= arm_index:
             arms.append({})
         arm_cfg = arms[arm_index]
 
-        default_robot_type = arm_cfg.get("robot_type", "so101")
-        default_arm_role = arm_cfg.get("arm_role", "follower")
-        default_port = arm_cfg.get("port") or self._get_arm_port_from_ui(arm_index)
+        default_arm_role = arm_cfg.get("arm_role") or ("leader" if arm_section == "teleop" else "follower")
+        default_robot_type = self._infer_robot_type(arm_cfg, fallback="so101")
+        default_port = arm_cfg.get("port") or (
+            self._get_teleop_port_from_ui(arm_index) if arm_section == "teleop" else self._get_arm_port_from_ui(arm_index)
+        )
         default_robot_id = arm_cfg.get("id") or self._suggest_robot_id(default_robot_type, default_arm_role)
         available_ports = self._collect_known_ports()
 
@@ -371,13 +396,24 @@ class MultiArmMixin:
             available_ports=available_ports,
         )
         dialog.calibration_finished.connect(
-            lambda payload, idx=arm_index: self._apply_calibration_result(idx, payload)
+            lambda payload, idx=arm_index, section=arm_section: self._apply_calibration_result(idx, payload, section)
         )
         dialog.exec()
 
     # ------------------------------------------------------------------ Calibration helpers
     def _suggest_robot_id(self, robot_type: str, arm_role: str) -> str:
         return f"R_{(robot_type or 'so101').lower()}_{(arm_role or 'follower').title()}"
+
+    def _infer_robot_type(self, arm_cfg: Dict[str, str], fallback: str = "so101") -> str:
+        """Prefer explicit robot_type but fall back to legacy `type` field (eg so101_leader)."""
+        explicit = arm_cfg.get("robot_type")
+        if explicit:
+            return explicit
+        legacy = (arm_cfg.get("type") or "").lower()
+        for suffix in ("_follower", "_leader"):
+            if legacy.endswith(suffix):
+                return legacy[: -len(suffix)]
+        return legacy or fallback
 
     def _collect_known_ports(self) -> List[str]:
         ports: List[str] = []
@@ -391,11 +427,16 @@ class MultiArmMixin:
 
         for arm in self.config.get("robot", {}).get("arms", []):
             add_port(arm.get("port"))
+        for arm in self.config.get("teleop", {}).get("arms", []):
+            add_port(arm.get("port"))
 
         widgets = [
             self.robot_arm1_config,
             self.robot_arm2_config,
             self.solo_arm_config,
+            self.teleop_arm1_config,
+            self.teleop_arm2_config,
+            self.teleop_solo_arm_config,
         ]
         for widget in widgets:
             if widget:
@@ -417,10 +458,26 @@ class MultiArmMixin:
 
         return widget.get_port() if widget else ""
 
-    def _apply_calibration_result(self, arm_index: int, payload: Dict[str, str]):
+    def _get_teleop_port_from_ui(self, arm_index: int) -> str:
+        widget = None
+        if arm_index == 0 and self.teleop_arm1_config:
+            widget = self.teleop_arm1_config
+        elif arm_index == 1 and self.teleop_arm2_config:
+            widget = self.teleop_arm2_config
+
+        if (
+            self.teleop_solo_arm_config
+            and self.teleop_solo_arm_selector
+            and self.teleop_solo_arm_selector.currentIndex() == arm_index
+        ):
+            widget = self.teleop_solo_arm_config
+        return widget.get_port() if widget else ""
+
+    def _apply_calibration_result(self, arm_index: int, payload: Dict[str, str], section: str = "robot"):
         try:
             self._ensure_config_store()
-            arms = self.config.setdefault("robot", {}).setdefault("arms", [])
+            arm_section = "teleop" if section == "teleop" else "robot"
+            arms = self.config.setdefault(arm_section, {}).setdefault("arms", [])
             while len(arms) <= arm_index:
                 arms.append({})
             arm_cfg = arms[arm_index]
@@ -429,10 +486,13 @@ class MultiArmMixin:
             arm_cfg["robot_type"] = payload["robot_type"]
             arm_cfg["arm_role"] = payload["arm_role"]
             self.config_store.save()
-            self._sync_ui_arm_fields(arm_index, payload)
-            self.status_label.setText(
-                f"✓ Calibration saved for Arm {arm_index + 1}: {payload['robot_id']} on {payload['port']}"
-            )
+            if arm_section == "teleop":
+                self._sync_ui_teleop_fields(arm_index, payload)
+                arm_label = f"Leader {arm_index + 1}"
+            else:
+                self._sync_ui_arm_fields(arm_index, payload)
+                arm_label = f"Arm {arm_index + 1}"
+            self.status_label.setText(f"✓ Calibration saved for {arm_label}: {payload['robot_id']} on {payload['port']}")
             self.status_label.setStyleSheet("QLabel { color: #4CAF50; font-size: 15px; padding: 8px; }")
             self.config_changed.emit()
         except Exception as exc:
@@ -450,11 +510,32 @@ class MultiArmMixin:
             self.solo_arm_config.set_port(payload["port"])
             self.solo_arm_config.set_id(payload["robot_id"])
 
+    def _sync_ui_teleop_fields(self, arm_index: int, payload: Dict[str, str]):
+        if arm_index == 0 and self.teleop_arm1_config:
+            self.teleop_arm1_config.set_port(payload["port"])
+            self.teleop_arm1_config.set_id(payload["robot_id"])
+        if arm_index == 1 and self.teleop_arm2_config:
+            self.teleop_arm2_config.set_port(payload["port"])
+            self.teleop_arm2_config.set_id(payload["robot_id"])
+        if (
+            self.teleop_solo_arm_config
+            and self.teleop_solo_arm_selector
+            and self.teleop_solo_arm_selector.currentIndex() == arm_index
+        ):
+            self.teleop_solo_arm_config.set_port(payload["port"])
+            self.teleop_solo_arm_config.set_id(payload["robot_id"])
+
     def _handle_robot_port_change(self, arm_index: int, port: str) -> None:
         self._auto_update_robot_field(arm_index, "port", port)
 
     def _handle_robot_id_change(self, arm_index: int, robot_id: str) -> None:
         self._auto_update_robot_field(arm_index, "id", robot_id)
+
+    def _handle_teleop_port_change(self, arm_index: int, port: str) -> None:
+        self._auto_update_teleop_field(arm_index, "port", port)
+
+    def _handle_teleop_id_change(self, arm_index: int, robot_id: str) -> None:
+        self._auto_update_teleop_field(arm_index, "id", robot_id)
 
     def _auto_update_robot_field(self, arm_index: int, key: str, value: str) -> None:
         self._ensure_config_store()
@@ -468,6 +549,19 @@ class MultiArmMixin:
 
         self.config_store.update(mutator)
         self._save_config_snapshot(f"💾 Saved {key} for Arm {arm_index + 1}")
+
+    def _auto_update_teleop_field(self, arm_index: int, key: str, value: str) -> None:
+        self._ensure_config_store()
+
+        def mutator(cfg: dict) -> None:
+            teleop_cfg = cfg.setdefault("teleop", {})
+            arms = teleop_cfg.setdefault("arms", [])
+            while len(arms) <= arm_index:
+                arms.append({})
+            arms[arm_index][key] = value
+
+        self.config_store.update(mutator)
+        self._save_config_snapshot(f"💾 Saved {key} for Leader {arm_index + 1}")
 
     def _save_config_snapshot(self, status: str | None = None) -> None:
         self._ensure_config_store()

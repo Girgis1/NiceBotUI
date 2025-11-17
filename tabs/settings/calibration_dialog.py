@@ -74,7 +74,7 @@ class SO101CalibrationDialog(QDialog):
         super().__init__(parent)
         self.setModal(True)
         self.setWindowTitle("SO101 Calibration")
-        self.resize(1024, 620)
+        self.resize(1024, 600)
 
         self._stage = "config"
         self._awaiting_center = False
@@ -86,6 +86,7 @@ class SO101CalibrationDialog(QDialog):
         self._manual_id_override = False
         self._id_variants: List[str] = []
         self._id_variant_index = 0
+        self._initial_robot_id = default_robot_id or ""
         self.calibration_image_path = calibration_image_path
         self._motor_snapshot_mode = False
         self._motor_lines: Dict[str, str] = {}
@@ -112,8 +113,8 @@ class SO101CalibrationDialog(QDialog):
         available_ports: Iterable[str],
     ) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(12)
+        layout.setContentsMargins(18, 18, 18, 10)
+        layout.setSpacing(8)
 
         header = QLabel("SO101 Calibration")
         header.setAlignment(Qt.AlignCenter)
@@ -133,7 +134,8 @@ class SO101CalibrationDialog(QDialog):
 
         self.log_output = QPlainTextEdit()
         self.log_output.setReadOnly(True)
-        self.log_output.setMinimumHeight(160)
+        self.log_output.setMinimumHeight(60)
+        self.log_output.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         log_font = QFont("DejaVu Sans Mono, Noto Color Emoji, monospace", 11)
         self.log_output.setFont(log_font)
         self.log_output.setStyleSheet(
@@ -295,6 +297,7 @@ class SO101CalibrationDialog(QDialog):
         self.center_image_label = QLabel()
         self.center_image_label.setAlignment(Qt.AlignCenter)
         self.center_image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.center_image_label.setMaximumSize(800, 400)  # Limit size to prevent huge gray box
         self.center_image_label.setStyleSheet(
             "QLabel { background-color: #1f1f1f; border: 2px solid #3a3a3a; border-radius: 12px; }"
         )
@@ -350,8 +353,9 @@ class SO101CalibrationDialog(QDialog):
         role = (self.arm_role_combo.currentText() or "Follower").lower()
         base = f"R_{robot}_{role.capitalize()}"
         variants = [base, f"{base}_01", f"{base}_02", f"{base}_backup"]
-        if default_robot_id and default_robot_id not in variants:
-            variants.insert(0, default_robot_id)
+        preferred_id = default_robot_id or self.robot_id_edit.text().strip() or self._initial_robot_id
+        if preferred_id and preferred_id not in variants:
+            variants.insert(0, preferred_id)
         self._id_variants = variants
         self._id_variant_index = 0
         if not self._manual_id_override:
@@ -367,8 +371,8 @@ class SO101CalibrationDialog(QDialog):
         self._update_command_preview()
 
     def _on_schema_changed(self):
-        self._manual_id_override = False
-        self._refresh_id_suggestions()
+        # Keep the user-provided ID when toggling schema; only refresh variants
+        self._refresh_id_suggestions(self.robot_id_edit.text().strip())
 
     def _on_name_edited(self):
         self._manual_id_override = True
@@ -380,11 +384,12 @@ class SO101CalibrationDialog(QDialog):
         robot_type = f"{robot_slug}_{arm_role}"
         port_value = _normalize_port(self.port_combo.currentText())
         robot_id = self.robot_id_edit.text().strip() or f"R_{robot_slug}_{arm_role.title()}"
+        section = "teleop" if arm_role == "leader" else "robot"
         args = [
             "lerobot-calibrate",
-            f"--robot.type={robot_type}",
-            f"--robot.port={port_value}",
-            f"--robot.id={robot_id}",
+            f"--{section}.type={robot_type}",
+            f"--{section}.port={port_value}",
+            f"--{section}.id={robot_id}",
         ]
         return " ".join(shlex.quote(arg) for arg in args)
 
@@ -666,7 +671,7 @@ class SO101CalibrationDialog(QDialog):
             self.log_output.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         else:
             self.stack.show()
-            self.log_output.setMinimumHeight(160)
+            self.log_output.setMinimumHeight(120)
             self.log_output.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
             self.stack.setCurrentWidget(self.center_widget if self._awaiting_center else self.form_widget)
 
@@ -699,8 +704,9 @@ class SO101CalibrationDialog(QDialog):
                 target_rect = screen.availableGeometry()
         if target_rect is None:
             return
-        width = min(max(target_rect.width(), 640), 1280)
-        height = min(max(target_rect.height(), 480), 800)
+        # For 1024x600 touchscreen, ensure we fit perfectly
+        width = min(target_rect.width(), 1024)
+        height = min(target_rect.height(), 600)
         self.resize(width, height)
         self.move(
             target_rect.center().x() - self.width() // 2,
