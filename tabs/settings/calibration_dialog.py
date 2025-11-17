@@ -73,6 +73,7 @@ class SO101CalibrationDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setModal(True)
+        self.setWindowFlag(Qt.FramelessWindowHint, True)  # Match vision window: no native title bar/close button
         self.setWindowTitle("SO101 Calibration")
         self.resize(1024, 600)
 
@@ -113,13 +114,13 @@ class SO101CalibrationDialog(QDialog):
         available_ports: Iterable[str],
     ) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 18, 18, 10)
-        layout.setSpacing(8)
+        layout.setContentsMargins(8, 4, 8, 2)
+        layout.setSpacing(2)
 
         header = QLabel("SO101 Calibration")
         header.setAlignment(Qt.AlignCenter)
         header.setStyleSheet(
-            "font-size: 22px; font-weight: 600; color: #f5f5f5; padding: 6px;"
+            "font-size: 18px; font-weight: 600; color: #f5f5f5; padding: 2px;"
         )
         layout.addWidget(header)
 
@@ -134,7 +135,7 @@ class SO101CalibrationDialog(QDialog):
 
         self.log_output = QPlainTextEdit()
         self.log_output.setReadOnly(True)
-        self.log_output.setMinimumHeight(60)
+        self.log_output.setMinimumHeight(100)
         self.log_output.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         log_font = QFont("DejaVu Sans Mono, Noto Color Emoji, monospace", 11)
         self.log_output.setFont(log_font)
@@ -155,14 +156,14 @@ class SO101CalibrationDialog(QDialog):
         button_row.addStretch()
 
         self.cancel_btn = QPushButton("Cancel")
-        self.cancel_btn.setMinimumHeight(52)
+        self.cancel_btn.setMinimumHeight(40)
         self.cancel_btn.clicked.connect(self._on_cancel_clicked)
         button_row.addWidget(self.cancel_btn)
 
         self.primary_btn = QPushButton("Next")
-        self.primary_btn.setMinimumHeight(52)
+        self.primary_btn.setMinimumHeight(40)
         self.primary_btn.setStyleSheet(
-            "QPushButton { background-color: #4CAF50; color: white; font-size: 18px; font-weight: bold; padding: 10px 24px; border-radius: 10px; }"
+            "QPushButton { background-color: #4CAF50; color: white; font-size: 16px; font-weight: bold; padding: 8px 20px; border-radius: 8px; }"
         )
         self.primary_btn.clicked.connect(self._on_primary_clicked)
         button_row.addWidget(self.primary_btn)
@@ -179,17 +180,15 @@ class SO101CalibrationDialog(QDialog):
     ) -> QWidget:
         container = QFrame()
         container.setFrameShape(QFrame.NoFrame)
-        container.setStyleSheet(
-            "QFrame { background-color: #303030; border: 2px solid #4a4a4a; border-radius: 12px; }"
-        )
+        container.setStyleSheet("QFrame { background-color: #303030; border: 2px solid #4a4a4a; border-radius: 8px; }")
 
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(14)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(4)
 
         table = QGridLayout()
-        table.setVerticalSpacing(12)
-        table.setHorizontalSpacing(12)
+        table.setVerticalSpacing(4)
+        table.setHorizontalSpacing(8)
 
         label_style = "color: #dcdcdc; font-size: 16px; font-weight: 600;"
 
@@ -201,7 +200,7 @@ class SO101CalibrationDialog(QDialog):
         self.robot_type_combo = QComboBox()
         self.robot_type_combo.addItems(["so101", "so100"])
         self.robot_type_combo.setCurrentText(default_robot_type or "so101")
-        self.robot_type_combo.setMinimumHeight(48)
+        self.robot_type_combo.setMinimumHeight(36)
         self.robot_type_combo.setStyleSheet(self._combo_style())
         self.robot_type_combo.currentTextChanged.connect(self._on_schema_changed)
         table.addWidget(self.robot_type_combo, 0, 1)
@@ -214,7 +213,7 @@ class SO101CalibrationDialog(QDialog):
         self.arm_role_combo = QComboBox()
         self.arm_role_combo.addItems(["Follower", "Leader"])
         self.arm_role_combo.setCurrentText((default_arm_role or "follower").title())
-        self.arm_role_combo.setMinimumHeight(48)
+        self.arm_role_combo.setMinimumHeight(36)
         self.arm_role_combo.setStyleSheet(self._combo_style())
         self.arm_role_combo.currentTextChanged.connect(self._on_schema_changed)
         table.addWidget(self.arm_role_combo, 1, 1)
@@ -225,10 +224,10 @@ class SO101CalibrationDialog(QDialog):
         table.addWidget(port_label, 2, 0)
 
         port_row = QHBoxLayout()
-        port_row.setSpacing(8)
+        port_row.setSpacing(6)
         self.port_combo = QComboBox()
         self.port_combo.setEditable(True)
-        self.port_combo.setMinimumHeight(48)
+        self.port_combo.setMinimumHeight(36)
         self.port_combo.setStyleSheet(self._combo_style())
         ports = list(dict.fromkeys([_normalize_port(p) for p in available_ports if p]))
         if default_port and default_port not in ports:
@@ -241,9 +240,9 @@ class SO101CalibrationDialog(QDialog):
         port_row.addWidget(self.port_combo, stretch=1)
 
         self.find_ports_btn = QPushButton("lerobot-find-port")
-        self.find_ports_btn.setMinimumHeight(48)
+        self.find_ports_btn.setMinimumHeight(36)
         self.find_ports_btn.setStyleSheet(
-            "QPushButton { background-color: #1976D2; color: white; font-weight: bold; padding: 0 18px; border-radius: 10px; }"
+            "QPushButton { background-color: #1976D2; color: white; font-weight: bold; padding: 0 12px; border-radius: 8px; }"
         )
         self.find_ports_btn.clicked.connect(self._run_port_discovery)
         port_row.addWidget(self.find_ports_btn)
@@ -255,22 +254,22 @@ class SO101CalibrationDialog(QDialog):
         table.addWidget(id_label, 3, 0)
 
         id_row = QHBoxLayout()
-        id_row.setSpacing(6)
+        id_row.setSpacing(4)
         self.robot_id_edit = QLineEdit(default_robot_id)
-        self.robot_id_edit.setMinimumHeight(48)
+        self.robot_id_edit.setMinimumHeight(36)
         self.robot_id_edit.setStyleSheet(
-            "QLineEdit { background-color: #2a2a2a; color: #f5f5f5; border: 2px solid #5a5a5a; border-radius: 10px; padding: 0 12px; font-size: 16px; }"
+            "QLineEdit { background-color: #2a2a2a; color: #f5f5f5; border: 2px solid #5a5a5a; border-radius: 8px; padding: 0 8px; font-size: 14px; }"
         )
         self.robot_id_edit.textEdited.connect(self._on_name_edited)
         id_row.addWidget(self.robot_id_edit, stretch=1)
 
         self.id_prev_btn = QPushButton("◀")
-        self.id_prev_btn.setFixedSize(52, 48)
+        self.id_prev_btn.setFixedSize(36, 36)
         self.id_prev_btn.clicked.connect(lambda: self._cycle_id(-1))
         id_row.addWidget(self.id_prev_btn)
 
         self.id_next_btn = QPushButton("▶")
-        self.id_next_btn.setFixedSize(52, 48)
+        self.id_next_btn.setFixedSize(36, 36)
         self.id_next_btn.clicked.connect(lambda: self._cycle_id(1))
         id_row.addWidget(self.id_next_btn)
         table.addLayout(id_row, 3, 1)
@@ -281,8 +280,10 @@ class SO101CalibrationDialog(QDialog):
         self.command_preview.setWordWrap(True)
         self.command_preview.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.command_preview.setStyleSheet(
-            "color: #9ee5ff; font-family: 'JetBrains Mono', 'Consolas', monospace; font-size: 14px;"
+            "color: #9ee5ff; font-family: 'JetBrains Mono', 'Consolas', monospace; font-size: 12px;"
         )
+        self.command_preview.setFixedHeight(24)  # Compact single-row footprint
+        self.command_preview.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.command_preview)
 
         self._refresh_id_suggestions(default_robot_id)
@@ -671,7 +672,7 @@ class SO101CalibrationDialog(QDialog):
             self.log_output.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         else:
             self.stack.show()
-            self.log_output.setMinimumHeight(120)
+            self.log_output.setMinimumHeight(100)
             self.log_output.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
             self.stack.setCurrentWidget(self.center_widget if self._awaiting_center else self.form_widget)
 
