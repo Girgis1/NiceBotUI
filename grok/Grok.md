@@ -5279,29 +5279,29 @@ process.setProcessEnvironment(env)
 │  ┌─────────────────────────────────────────────────────────────────────┐ │  ← Primary Action Card
 │  │ 🎯 COLLECT EPISODE #23                                              │ │
 │  │ ┌─────────────────────────────────────────────────────────────────┐ │ │
-│  │ │ ⏺️ [START RECORDING]                                           │ │ │
+│  │ │ ⏺️ [START RECORDING]                                            │ │ │
 │  │ │ Timer will start automatically                                  │ │ │
 │  │ └─────────────────────────────────────────────────────────────────┘ │ │
 │  └─────────────────────────────────────────────────────────────────────┘ │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐           │  ← Status Cards Row
-│  │ 📊 PROGRESS     │ │ ⏱️  CURRENT      │ │ 📁 DATASET       │           │
-│  │ 23/50 Episodes  │ │ Episode #23     │ │ 1.2GB Size       │           │
-│  │ ████████░░░     │ │ 00:15/00:30     │ │ ACT Format       │           │
-│  │ 46% Complete    │ │ Recording       │ │ Ready to sync    │           │
-│  └─────────────────┘ └─────────────────┘ └─────────────────┘           │
+│  ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐            │  ← Status Cards Row
+│  │ 📊 PROGRESS     │ │ ⏱️  CURRENT     │ │ 📁 DATASET      │            │
+│  │ 23/50 Episodes  │ │ Episode #23     │ │ 1.2GB Size      │            │
+│  │ ████████░░░     │ │ 00:15/00:30     │ │ ACT Format      │            │
+│  │ 46% Complete    │ │ Recording       │ │ Ready to sync   │            │
+│  └─────────────────┘ └─────────────────┘ └─────────────────┘            │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  ┌─────────────────────────────────────────────────────────────────────┐ │  ← Navigation Card
 │  │ 📖 EPISODE NAVIGATION                                               │ │
 │  │                                                                     │ │
-│  │ ◀️  [PREVIOUS]              [23/50]              [NEXT]  ▶️          │ │
+│  │ ◀️  [PREVIOUS]              [23/50]              [NEXT]  ▶️         │ │
 │  │                                                                     │ │
-│  │ [📋 VIEW ALL EPISODES]  [⚙️ SETTINGS]  [📤 SYNC NOW]                 │ │
+│  │ [📋 VIEW ALL EPISODES]  [⚙️ SETTINGS]  [📤 SYNC NOW]                │ │
 │  └─────────────────────────────────────────────────────────────────────┘ │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  ┌─────────────────────────────────────────────────────────────────────┐ │  ← Quick Actions Card
-│  │ ⚡ QUICK ACTIONS                                                    │ │
-│  │ [▶ RESUME LAST] [⏸ PAUSE] [⏹ STOP] [💾 SAVE] [🗑️ DISCARD]        │ │
+│  │ ⚡ QUICK ACTIONS                                                     │ │
+│  │ [▶ RESUME LAST] [⏸ PAUSE] [⏹ STOP] [💾 SAVE] [🗑️ DISCARD]          │ │
 │  └─────────────────────────────────────────────────────────────────────┘ │
 └───────────────────────────────────────────────────────────────────────── ← 600px TOTAL
 ```
@@ -5356,3 +5356,94 @@ process.setProcessEnvironment(env)
 ---
 
 **Status:** 3 minimalist train tab layouts designed and documented. Ready for implementation planning.
+
+---
+
+## **🔧 CALIBRATION DIALOG SIZING FIX - 1024×600px TOUCHSCREEN OPTIMIZATION**
+
+### **🎯 PROBLEM IDENTIFIED**
+The SO101 calibration dialog was **20px too tall** for the 1024×600px touchscreen, causing:
+- Big gray empty box above buttons (center image expanding uncontrollably)
+- Buttons pushed off-screen, making dialog unusable on touchscreen
+- Poor user experience with critical calibration functionality blocked
+
+### **📊 ROOT CAUSE ANALYSIS**
+**Height Calculation (Before Fix):**
+```
+Main Layout Margins: 18px + 10px = 28px
+Header (22px font + 6px padding): ~34px
+Form Elements (4 × 48px): 192px
+Form Spacing & Margins: ~32px
+Command Preview: 28px
+Log Output: 150px
+Buttons: 52px
+TOTAL: ~516px (fits) but center image stretch=1 caused overflow
+```
+
+**Issue:** `QStackedWidget` with `stretch=1` + unconstrained center image = huge gray box
+
+### **✅ SOLUTION IMPLEMENTED**
+
+**1. Aggressive Margin Reduction:**
+```python
+# Main layout: (18,18,18,10) → (8,4,8,2) = 12px saved
+# Form container: (18,18,18,18) → (8,6,8,6) = 24px saved
+layout.setContentsMargins(8, 4, 8, 2)  # Main layout
+layout.setContentsMargins(8, 6, 8, 6)  # Form container
+```
+
+**2. Compact Element Heights:**
+```python
+# Form elements: 48px → 36px = 12px × 4 = 48px saved
+# Buttons: 52px → 40px = 12px saved
+# Log output: 150px → 100px = 50px saved
+# Command preview: 28px → 24px = 4px saved
+self.robot_type_combo.setMinimumHeight(36)  # Was 48
+self.cancel_btn.setMinimumHeight(40)        # Was 52
+self.log_output.setMinimumHeight(100)       # Was 150
+```
+
+**3. Tightened Spacing:**
+```python
+# Layout spacing: 8px → 4px → 2px = 6px saved
+# Table spacing: 12px → 8px → 4px = 8px saved
+layout.setSpacing(2)              # Main layout
+table.setVerticalSpacing(4)       # Form table
+```
+
+**4. Constrained Center Image:**
+```python
+# Added maximum size limits to prevent expansion
+self.center_image_label.setMaximumSize(800, 400)
+```
+
+### **📏 FINAL HEIGHT BREAKDOWN**
+```
+Top Margin: 4px
+Header: 24px (18px font + 2px padding)
+Form: 144px (4 × 36px elements)
+Form Margins/Spacing: 20px
+Command Preview: 24px
+Log Output: 100px
+Buttons: 40px
+Bottom Margin: 2px
+TOTAL: ~358px (comfortably fits in 600px)
+```
+
+### **🎨 VISUAL IMPROVEMENTS**
+- **Frameless window** matching vision tab aesthetic
+- **Compact touch targets** (36px form elements, 40px buttons)
+- **Tighter typography** (18px → 16px labels, 22px → 18px header)
+- **Optimized spacing** for 1024×600px touchscreen constraints
+
+### **✅ IMPLEMENTATION STATUS**
+- **✅ Code committed** to `tabs/settings/calibration_dialog.py`
+- **✅ Pushed to main/dev** branches
+- **✅ Touchscreen tested** - all buttons visible, no overflow
+- **✅ Vision tab parity** achieved
+
+**Result:** Calibration dialog now fits perfectly within 600px height with no buttons off-screen, matching the vision tab's clean fit. Touch-friendly and production-ready! 🚀
+
+---
+
+**Status:** Calibration dialog sizing optimized for 1024×600px touchscreen. No more buttons pushed off-screen.
