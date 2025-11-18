@@ -182,7 +182,7 @@ class PalletizeConfigWidget(QWidget):
         down_group = QGroupBox("Down / Release Offsets")
         down_layout = QGridLayout(down_group)
         self.down_spins: Dict[int, QSpinBox] = {}
-        for col, motor_id in enumerate((2, 3, 4, 5)):
+        for col, motor_id in enumerate((2, 3, 4)):
             label = QLabel(f"Motor {motor_id}")
             spin = QSpinBox()
             spin.setRange(-1000, 1000)
@@ -190,11 +190,11 @@ class PalletizeConfigWidget(QWidget):
             self.down_spins[motor_id] = spin
             down_layout.addWidget(label, 0, col)
             down_layout.addWidget(spin, 1, col)
-        down_layout.addWidget(QLabel("Motor 6 release delta"), 2, 0, 1, 2)
+        down_layout.addWidget(QLabel("Motor 6 release delta"), 1, 0, 1, 2)
         self.release_spin = QSpinBox()
         self.release_spin.setRange(-1000, 1000)
         self.release_spin.setSingleStep(10)
-        down_layout.addWidget(self.release_spin, 2, 2, 1, 2)
+        down_layout.addWidget(self.release_spin, 1, 2, 1, 2)
         layout.addWidget(down_group)
 
         velocity_group = QGroupBox("Motion Settings")
