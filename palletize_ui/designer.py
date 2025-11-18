@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -314,15 +315,19 @@ class PalletizeConfigDialog(QDialog):
     def __init__(self, parent: Optional[QWidget], step: Dict, config: dict):
         super().__init__(parent)
         self.setWindowTitle("Palletize Setup")
-        self.resize(720, 640)
+        # Target 1024x600 screens: keep dialog comfortably within 600px and make content scrollable.
+        self.resize(720, 560)
         self._config = config
         self._result: Optional[Dict] = None
         self._test_worker: Optional[PalletizeTestWorker] = None
         self._test_requested_stop = False
 
         layout = QVBoxLayout(self)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
         self.widget = PalletizeConfigWidget(step, config, self)
-        layout.addWidget(self.widget)
+        scroll.setWidget(self.widget)
+        layout.addWidget(scroll)
 
         test_bar = QHBoxLayout()
         self.test_btn = QPushButton("Test Cells")
@@ -407,5 +412,3 @@ class PalletizeConfigDialog(QDialog):
 
     def get_step_data(self) -> Optional[Dict]:
         return self._result
-
-

@@ -8,16 +8,20 @@ import sys
 from pathlib import Path
 
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QStackedWidget, QPushButton, QButtonGroup, QMessageBox, QSizePolicy
+    QApplication,
+    QMainWindow,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QStackedWidget,
+    QPushButton,
+    QButtonGroup,
+    QMessageBox,
+    QSizePolicy,
 )
 from PySide6.QtCore import Qt, QTimer, QThread, QObject, Signal
 from PySide6.QtGui import QShortcut, QKeySequence
 
-from tabs.dashboard_tab import DashboardTab
-from tabs.record_tab import RecordTab
-from tabs.sequence_tab import SequenceTab
-from tabs.train_tab import TrainTab
 from utils.config_store import ConfigStore
 from utils.device_manager import DeviceManager
 from utils.camera_hub import shutdown_camera_hub
@@ -254,8 +258,12 @@ class MainWindow(QMainWindow):
         # Content area with stacked widget (takes remaining width)
         self.content_stack = QStackedWidget()
         
-        # Create tabs
+        # Create tabs (imported lazily so QApplication is already constructed)
+        from tabs.dashboard_tab import DashboardTab
+        from tabs.record_tab import RecordTab
+        from tabs.sequence_tab import SequenceTab
         from tabs.settings_tab import SettingsTab
+        from tabs.train_tab import TrainTab
         
         self.dashboard_tab = DashboardTab(self.config, self, self.device_manager)
         self.sequence_tab = SequenceTab(self.config, self)

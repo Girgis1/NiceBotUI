@@ -246,6 +246,7 @@ class CompositeSequence:
             step["trigger"] = kwargs.get("trigger", {})
         elif step_type == "palletize":
             step["arm_index"] = kwargs.get("arm_index", 0)
+            step["corners"] = kwargs.get("corners", [])
             step["divisions"] = kwargs.get("divisions", {})
             step["down_offsets"] = kwargs.get("down_offsets", {})
             step["release_offset"] = kwargs.get("release_offset", 0)
@@ -459,6 +460,7 @@ class CompositeSequence:
                     enabled,
                     delay_after,
                     arm_index=arm_index,
+                    corners=corners,
                     divisions=divisions,
                     down_offsets=down_offsets,
                     release_offset=release_offset,
