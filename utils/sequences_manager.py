@@ -160,7 +160,23 @@ class SequencesManager:
                     enabled = step_dict.get("enabled", True)
                     delay_after = step_dict.get("delay_after", 0.0)
                     composite.add_vision_step(step_name, camera, trigger, enabled, delay_after)
-            
+                elif step_type == "palletize":
+                    grid = step_dict.get("grid", {})
+                    motion = step_dict.get("motion", {})
+                    arm_index = step_dict.get("arm_index", 0)
+                    palletizer_uid = step_dict.get("palletizer_uid") or grid.get("palletizer_uid")
+                    enabled = step_dict.get("enabled", True)
+                    delay_after = step_dict.get("delay_after", 0.0)
+                    composite.add_palletize_step(
+                        step_name,
+                        arm_index,
+                        grid,
+                        motion,
+                        palletizer_uid,
+                        enabled,
+                        delay_after,
+                    )
+
             # Save manifest
             success = composite.save_manifest()
             if success:
@@ -211,7 +227,14 @@ class SequencesManager:
                     simple_step["camera"] = step.get("camera", {})
                     simple_step["trigger"] = step.get("trigger", {})
                     simple_step["trigger"].setdefault("idle_mode", {"enabled": False, "interval_seconds": 2.0})
-                
+                elif step_type == "palletize":
+                    simple_step["name"] = step.get("name", "Palletize")
+                    simple_step["arm_index"] = step.get("arm_index", 0)
+                    simple_step["grid"] = step.get("grid", {})
+                    simple_step["motion"] = step.get("motion", {})
+                    if step.get("palletizer_uid"):
+                        simple_step["palletizer_uid"] = step.get("palletizer_uid")
+
                 simple_steps.append(simple_step)
             
             # Return in old format for compatibility
