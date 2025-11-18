@@ -235,13 +235,23 @@ class PalletizeRuntime:
 
         # Stage 1: move joints 2–4 to their clearance heights above the cell,
         # keeping motor 1 (base) and motor 5 (wrist) at their current angles.
-        # This gives a straight "lift / radius" move with no rotation.
+        # Motor 6 (gripper) is never driven to an absolute value from corners;
+        # it stays at the value from the previous step until we apply the
+        # release delta at the cell pose.
         current_positions = controller.read_positions()
         if len(current_positions) != 6:
             raise RuntimeError("Palletize step failed: could not read 6 joint positions for clearance path")
 
+        gripper_current = current_positions[5]
+
         # Clearance pose derived from the final cell pose plus configurable offsets
         clearance_pose = _apply_offsets(approach_pose, clearance_offsets)
+        # Ensure list has at least 6 entries and preserve current gripper value
+        if len(clearance_pose) < 6:
+            clearance_pose = list(clearance_pose) + [0] * (6 - len(clearance_pose))
+        else:
+            clearance_pose = list(clearance_pose)
+        clearance_pose[5] = gripper_current
 
         stage1_pose = list(clearance_pose)
         stage1_pose[0] = current_positions[0]  # keep base heading
@@ -259,12 +269,16 @@ class PalletizeRuntime:
 
         # Stage 3: slow drop – move joints 2–4 down from clearance to the
         # exact corner/cell position, then perform the gripper release.
-        _move(approach_pose, down_velocity, "Drop to cell")
+        approach_pose_no_grip = list(approach_pose)
+        if len(approach_pose_no_grip) < 6:
+            approach_pose_no_grip += [0] * (6 - len(approach_pose_no_grip))
+        approach_pose_no_grip[5] = gripper_current
+        _move(approach_pose_no_grip, down_velocity, "Drop to cell")
         if settle_time:
             time.sleep(settle_time)
 
         # Release is performed at the exact cell pose (approach_pose).
-        release_pose = list(approach_pose)
+        release_pose = list(approach_pose_no_grip)
         if len(release_pose) >= 6:
             release_pose[5] = _clamp_position(release_pose[5] + release_delta)
         else:

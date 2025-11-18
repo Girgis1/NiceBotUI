@@ -24,11 +24,6 @@ class TransportControlsMixin:
                 self.live_record_btn.setChecked(False)
                 return
             else:
-                current_target = getattr(self, "teleop_target", "both")
-                if current_target == "both":
-                    self.status_label.setText("⚠️ Select Left or Right arm before Live Recording.")
-                    self.live_record_btn.setChecked(False)
-                    return
                 controller = getattr(self, "motor_controller", None)
                 if not controller:
                     self.status_label.setText("❌ Motor controller unavailable")

@@ -25,7 +25,9 @@ class RecordStoreMixin:
             action_data = self.actions_manager.load_action(action)
             mode = action_data.get("mode", "solo") if action_data else "solo"
             icon = get_mode_icon(mode)
-            self.action_combo.addItem(f"{icon} {action}")
+            # Store the raw recording name as user data so we can
+            # load/save correctly even though the label includes an icon.
+            self.action_combo.addItem(f"{icon} {action}", action)
 
         index = self.action_combo.findText(current)
         if index >= 0:
@@ -41,11 +43,16 @@ class RecordStoreMixin:
             self.position_counter = 1
             return
 
-        action_data = self.actions_manager.load_action(name)
+        # The combo box label may include an icon prefix (e.g. "👤 MyAction").
+        # Always prefer the stored userData as the actual recording name.
+        raw_name = self.action_combo.currentData()
+        load_name = raw_name or name
+
+        action_data = self.actions_manager.load_action(load_name)
         if action_data:
-            self.current_action_name = name
+            self.current_action_name = load_name
             self.load_action_to_table(action_data)
-            self.status_label.setText(f"Loaded action: {name}")
+            self.status_label.setText(f"Loaded action: {load_name}")
 
     def load_action_to_table(self, action_data: Dict[str, Any]):
         """Load action data into table - handles composite recordings."""
@@ -176,7 +183,9 @@ class RecordStoreMixin:
         if ok and name:
             name = name.strip()
             if name:
-                self.action_combo.addItem(name)
+                # Store the bare recording name as user data so later
+                # lookups can ignore any icon/text decoration.
+                self.action_combo.addItem(name, name)
                 self.action_combo.setCurrentText(name)
                 self.table.setRowCount(0)
                 self.position_counter = 1

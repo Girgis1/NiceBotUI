@@ -207,20 +207,15 @@ class ActionsManager:
             }
         """
         legacy_actions = self._load_legacy_actions()
-        recording_dir = self.recordings_dir / name
-        manifest_path = recording_dir / "manifest.json"
-
-        # If this is a legacy-only action (no folder/manifest), return it quietly
         legacy = legacy_actions.get(name)
-        if (not recording_dir.exists() or not manifest_path.exists()) and legacy:
-            return self._build_legacy_payload(name, legacy)
 
         try:
-            # Load composite recording when manifest exists
-            if manifest_path.exists():
-                composite = CompositeRecording.load(name, self.recordings_dir)
-                if composite:
-                    return composite.get_full_recording_data()
+            # Always delegate folder lookup to CompositeRecording so that
+            # sanitised folder names (lowercased, spaces stripped, etc.)
+            # are handled consistently.
+            composite = CompositeRecording.load(name, self.recordings_dir)
+            if composite:
+                return composite.get_full_recording_data()
         except Exception as exc:
             # Only log noisy errors for non-legacy entries
             if not legacy:
