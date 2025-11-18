@@ -27,10 +27,26 @@ import pytz
 from utils.logging_utils import log_exception
 
 try:
-    from .sequence_step import SequenceStep, ActionStep, ModelStep, DelayStep, HomeStep, VisionStep
+    from .sequence_step import (
+        SequenceStep,
+        ActionStep,
+        ModelStep,
+        DelayStep,
+        HomeStep,
+        VisionStep,
+        PalletizeStep,
+    )
 except ImportError:
     # Allow running as standalone script for testing
-    from sequence_step import SequenceStep, ActionStep, ModelStep, DelayStep, HomeStep, VisionStep
+    from sequence_step import (
+        SequenceStep,
+        ActionStep,
+        ModelStep,
+        DelayStep,
+        HomeStep,
+        VisionStep,
+        PalletizeStep,
+    )
 
 
 TIMEZONE = pytz.timezone('Australia/Sydney')
@@ -228,6 +244,8 @@ class CompositeSequence:
         elif step_type == "vision":
             step["camera"] = kwargs.get("camera", {})
             step["trigger"] = kwargs.get("trigger", {})
+        elif step_type == "palletize":
+            step["palletize"] = kwargs.get("palletize", {})
         # home type has no extra fields
         
         self.steps.append(step)
@@ -450,6 +468,32 @@ class CompositeSequence:
         except Exception as exc:
             log_exception("CompositeSequence: failed to add home step", exc)
             print(f"[ERROR] Failed to add home step: {exc}")
+            return ""
+
+    def add_palletize_step(self, name: str, config: Dict, enabled: bool = True,
+                           delay_after: float = 0.0) -> str:
+        """Create and save a palletize step"""
+        try:
+            config_copy = json.loads(json.dumps(config or {}))
+            step_obj = PalletizeStep(name, config_copy, enabled, delay_after)
+
+            filename = f"{self._next_step_number:02d}_{name.lower().replace(' ', '_')}_palletize.json"
+            filepath = self.sequence_dir / filename
+
+            if step_obj.save(filepath):
+                step_id = self.add_step(
+                    "palletize",
+                    name,
+                    filename,
+                    enabled,
+                    delay_after,
+                    palletize=config_copy,
+                )
+                return step_id
+            return ""
+        except Exception as exc:
+            log_exception("CompositeSequence: failed to add palletize step", exc)
+            print(f"[ERROR] Failed to add palletize step: {exc}")
             return ""
     
     def get_step_data(self, filename: str) -> Optional[Dict]:
