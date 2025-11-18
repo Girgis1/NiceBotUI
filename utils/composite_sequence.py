@@ -27,10 +27,26 @@ import pytz
 from utils.logging_utils import log_exception
 
 try:
-    from .sequence_step import SequenceStep, ActionStep, ModelStep, DelayStep, HomeStep, VisionStep
+    from .sequence_step import (
+        SequenceStep,
+        ActionStep,
+        ModelStep,
+        DelayStep,
+        HomeStep,
+        VisionStep,
+        PalletizeStep,
+    )
 except ImportError:
     # Allow running as standalone script for testing
-    from sequence_step import SequenceStep, ActionStep, ModelStep, DelayStep, HomeStep, VisionStep
+    from sequence_step import (
+        SequenceStep,
+        ActionStep,
+        ModelStep,
+        DelayStep,
+        HomeStep,
+        VisionStep,
+        PalletizeStep,
+    )
 
 
 TIMEZONE = pytz.timezone('Australia/Sydney')
@@ -228,6 +244,18 @@ class CompositeSequence:
         elif step_type == "vision":
             step["camera"] = kwargs.get("camera", {})
             step["trigger"] = kwargs.get("trigger", {})
+        elif step_type == "palletize":
+            step["arm_index"] = kwargs.get("arm_index", 0)
+            step["corners"] = kwargs.get("corners", [])
+            step["divisions"] = kwargs.get("divisions", {})
+            step["down_offsets"] = kwargs.get("down_offsets", {})
+            step["release_offset"] = kwargs.get("release_offset", 0)
+            step["approach_velocity"] = kwargs.get("approach_velocity", 600)
+            step["down_velocity"] = kwargs.get("down_velocity", 400)
+            step["release_velocity"] = kwargs.get("release_velocity", 300)
+            step["retract_velocity"] = kwargs.get("retract_velocity", 600)
+            step["settle_time"] = kwargs.get("settle_time", 0.0)
+            step["release_hold"] = kwargs.get("release_hold", 0.0)
         # home type has no extra fields
         
         self.steps.append(step)
@@ -385,6 +413,69 @@ class CompositeSequence:
         except Exception as exc:
             log_exception("CompositeSequence: failed to add vision step", exc)
             print(f"[ERROR] Failed to add vision step: {exc}")
+            return ""
+
+    def add_palletize_step(
+        self,
+        name: str,
+        arm_index: int,
+        corners: List[Dict],
+        divisions: Dict,
+        approach_velocity: int,
+        down_velocity: int,
+        release_velocity: int,
+        retract_velocity: int,
+        down_offsets: Dict,
+        release_offset: int,
+        settle_time: float,
+        release_hold: float,
+        enabled: bool = True,
+        delay_after: float = 0.0,
+    ) -> str:
+        """Create and save a palletize step."""
+        try:
+            step_obj = PalletizeStep(
+                name,
+                arm_index,
+                corners,
+                divisions,
+                approach_velocity,
+                down_velocity,
+                release_velocity,
+                retract_velocity,
+                down_offsets,
+                release_offset,
+                settle_time,
+                release_hold,
+                enabled,
+                delay_after,
+            )
+            filename = f"{self._next_step_number:02d}_{name.lower().replace(' ', '_')}_palletize.json"
+            filepath = self.sequence_dir / filename
+            if step_obj.save(filepath):
+                step_id = self.add_step(
+                    "palletize",
+                    name,
+                    filename,
+                    enabled,
+                    delay_after,
+                    arm_index=arm_index,
+                    corners=corners,
+                    divisions=divisions,
+                    down_offsets=down_offsets,
+                    release_offset=release_offset,
+                    approach_velocity=approach_velocity,
+                    down_velocity=down_velocity,
+                    release_velocity=release_velocity,
+                    retract_velocity=retract_velocity,
+                    settle_time=settle_time,
+                    release_hold=release_hold,
+                )
+                return step_id
+            return ""
+        except Exception as exc:
+            log_exception("CompositeSequence: failed to add palletize step", exc)
+            print(f"[ERROR] Failed to add palletize step: {exc}")
             return ""
     
     def add_delay_step(self, name: str, duration: float, enabled: bool = True, 
