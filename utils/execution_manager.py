@@ -32,6 +32,7 @@ from utils.camera_backend import open_capture
 from utils.camera_hub import CameraStreamHub
 from utils.config_compat import get_active_arm_index, get_first_enabled_arm
 from utils.model_paths import build_checkpoint_path
+from utils.palletize_planner import PalletizePlanner
 from utils.execution import (
     ExecutionContext,
     execute_composite_recording,
@@ -68,6 +69,7 @@ class ExecutionWorker(QThread):
         self.options = execution_data or {}  # Alias for compatibility
         self._stop_requested = False
         self._last_vision_state_signature = None
+        self._palletize_indices: Dict[str, int] = {}
         preferred_arm = self.options.get("arm_index")
         self.arm_index = get_active_arm_index(self.config, preferred_arm, arm_type="robot")
         self.options["arm_index"] = self.arm_index
@@ -225,7 +227,8 @@ class ExecutionWorker(QThread):
             return
 
         self.motor_controller.speed_multiplier = self.speed_multiplier
-        
+        self._palletize_indices.clear()
+
         steps = sequence.get("steps", [])
         loop = self.options.get("loop", sequence.get("loop", False))
         
@@ -314,6 +317,11 @@ class ExecutionWorker(QThread):
                             if self._stop_requested:
                                 break
                             self.log_message.emit('warning', "Vision step skipped due to error")
+                    elif step_type == "palletize":
+                        if not self._execute_palletize_step(step, idx):
+                            if self._stop_requested:
+                                break
+                            self.log_message.emit('warning', "Palletize step skipped")
                     
                     else:
                         self.log_message.emit('warning', f"Unknown step type: {step_type}")
@@ -362,6 +370,11 @@ class ExecutionWorker(QThread):
             trigger = step.get("trigger", {})
             name = trigger.get("display_name") or step.get("name") or "Vision Trigger"
             return f"VISION • {name}"
+        if step_type == "palletize":
+            grid = step.get("grid", {})
+            cols = grid.get("corner12_divisions", 1)
+            rows = grid.get("corner23_divisions", 1)
+            return f"PALLETIZE • {cols}×{rows} grid"
         return f"{step_type.upper()}"
 
     def _reset_vision_tracking(self):
@@ -665,6 +678,55 @@ class ExecutionWorker(QThread):
                 })
 
         return success
+
+    def _get_controller_for_arm(self, arm_index: int) -> tuple[MotorController, bool]:
+        if arm_index == self.motor_controller.arm_index:
+            return self.motor_controller, False
+        controller = MotorController(self.config, arm_index=arm_index)
+        controller.speed_multiplier = self.speed_multiplier
+        return controller, True
+
+    def _execute_palletize_step(self, step: Dict, step_index: int) -> bool:
+        planner = PalletizePlanner(step)
+        validation = planner.validate()
+        if not validation.valid:
+            self.log_message.emit('warning', f"Palletize step invalid: {validation.message}")
+            return False
+
+        step_id = step.get("palletize_id") or f"palletize_{step_index}"
+        current_index = self._palletize_indices.get(step_id, 0)
+        total_cells = planner.total_cells()
+        arm_index = int(step.get("arm_index", self.arm_index))
+        controller, owned = self._get_controller_for_arm(arm_index)
+
+        try:
+            if not controller.bus:
+                if not controller.connect():
+                    self.log_message.emit('error', f"Palletize: failed to connect to arm {arm_index + 1}")
+                    return False
+
+            description = planner.describe_cell(current_index)
+            self.log_message.emit('info', f"Palletize: executing {description} on arm {arm_index + 1}")
+            motion_plan = planner.build_motion_plan(current_index)
+
+            for stage_name, target, velocity in motion_plan:
+                if self._stop_requested:
+                    return False
+                controller.set_positions(target, velocity=velocity, wait=True, keep_connection=True)
+                self.log_message.emit('info', f"Palletize {stage_name} complete @ v={velocity}")
+
+            self._palletize_indices[step_id] = (current_index + 1) % total_cells
+            self.log_message.emit('info', f"Palletize cell complete ({description})")
+            return True
+        except Exception as exc:
+            self.log_message.emit('error', f"Palletize step failed: {exc}")
+            return False
+        finally:
+            if owned:
+                try:
+                    controller.disconnect()
+                except Exception:
+                    pass
     
     def _execute_recording_inline(self, recording_name: str):
         """Execute a recording as part of a sequence (inline)"""

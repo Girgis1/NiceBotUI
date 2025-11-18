@@ -160,6 +160,9 @@ class SequencesManager:
                     enabled = step_dict.get("enabled", True)
                     delay_after = step_dict.get("delay_after", 0.0)
                     composite.add_vision_step(step_name, camera, trigger, enabled, delay_after)
+                elif step_type == "palletize":
+                    config = {k: v for k, v in step_dict.items() if k not in {"type", "step_type"}}
+                    composite.add_palletize_step(step_name, config)
             
             # Save manifest
             success = composite.save_manifest()
@@ -211,7 +214,11 @@ class SequencesManager:
                     simple_step["camera"] = step.get("camera", {})
                     simple_step["trigger"] = step.get("trigger", {})
                     simple_step["trigger"].setdefault("idle_mode", {"enabled": False, "interval_seconds": 2.0})
-                
+                elif step_type == "palletize":
+                    config = step.get("config", {})
+                    simple_step.update(config)
+                    simple_step.setdefault("name", step.get("name", "Palletize"))
+
                 simple_steps.append(simple_step)
             
             # Return in old format for compatibility

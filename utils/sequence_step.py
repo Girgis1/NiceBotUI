@@ -87,6 +87,8 @@ class SequenceStep:
                 return HomeStep.from_dict(data)
             elif step_type == "vision":
                 return VisionStep.from_dict(data)
+            elif step_type == "palletize":
+                return PalletizeStep.from_dict(data)
             else:
                 print(f"[ERROR] Unknown step type: {step_type}")
                 return None
@@ -237,6 +239,41 @@ class VisionStep(SequenceStep):
             name=data.get("name", data.get("trigger", {}).get("display_name", "Vision Trigger")),
             camera=data.get("camera", {}),
             trigger=data.get("trigger", {}),
+            enabled=data.get("enabled", True),
+            delay_after=data.get("delay_after", 0.0),
+        )
+        metadata = data.get("metadata", {})
+        step.created_at = metadata.get("created_at", step.created_at)
+        step.modified_at = metadata.get("modified_at", step.modified_at)
+        return step
+
+
+class PalletizeStep(SequenceStep):
+    """Automated palletize step configuration."""
+
+    def __init__(
+        self,
+        name: str,
+        config: Dict,
+        enabled: bool = True,
+        delay_after: float = 0.0,
+    ):
+        super().__init__("palletize", name, enabled, delay_after)
+        self.config = config or {}
+
+    def to_dict(self) -> dict:
+        data = super().to_dict()
+        data.update(self.config)
+        return data
+
+    @staticmethod
+    def from_dict(data: dict) -> 'PalletizeStep':
+        config = dict(data)
+        for key in ("step_type", "name", "enabled", "delay_after", "metadata"):
+            config.pop(key, None)
+        step = PalletizeStep(
+            name=data.get("name", "Palletize"),
+            config=config,
             enabled=data.get("enabled", True),
             delay_after=data.get("delay_after", 0.0),
         )

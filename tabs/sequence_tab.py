@@ -4,6 +4,7 @@ Combine actions, trained models, and delays into complex sequences
 """
 
 import sys
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -51,6 +52,28 @@ except ImportError:
                 },
                 "zones": [],
             },
+        }
+
+# Palletize designer dialog
+try:
+    from palletize_ui import PalletizeConfigDialog, create_default_palletize_config
+except ImportError:
+    PalletizeConfigDialog = None
+
+    def create_default_palletize_config(config=None):
+        return {
+            "type": "palletize",
+            "name": "Palletize Items",
+            "palletize_id": str(uuid.uuid4()),
+            "arm_index": 0,
+            "grid": {"corner12_divisions": 3, "corner23_divisions": 3},
+            "corners": [
+                {"name": f"Corner {idx}", "positions": None}
+                for idx in range(1, 5)
+            ],
+            "velocities": {"travel": 900, "down": 400, "release": 300, "retreat": 900},
+            "down_adjustments": {str(motor): 0 for motor in range(2, 6)},
+            "release_adjustment": 0,
         }
 
 
@@ -287,6 +310,24 @@ class SequenceTab(QWidget):
         """)
         self.add_vision_btn.clicked.connect(self.add_vision_step)
         add_bar.addWidget(self.add_vision_btn)
+
+        self.add_palletize_btn = QPushButton("+ Palletize")
+        self.add_palletize_btn.setMinimumHeight(45)
+        self.add_palletize_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #26A69A;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #1E8C80;
+            }
+        """)
+        self.add_palletize_btn.clicked.connect(self.add_palletize_step)
+        add_bar.addWidget(self.add_palletize_btn)
         
         self.add_delay_btn = QPushButton("⏱ Delay")
         self.add_delay_btn.setMinimumHeight(45)
@@ -538,6 +579,9 @@ class SequenceTab(QWidget):
         elif step_type == "vision":
             text = self._format_vision_step_text(step, number)
             color = QColor("#AA00FF")
+        elif step_type == "palletize":
+            text = self._format_palletize_step_text(step, number)
+            color = QColor("#26A69A")
         else:
             text = f"{number}. ❓ Unknown step"
             color = QColor("#909090")
@@ -626,12 +670,22 @@ class SequenceTab(QWidget):
             step = {"type": "delay", "duration": delay}
             self.add_step_to_list(step)
             self.status_label.setText(f"✓ Added {delay:.1f}s delay")
-    
+
     def add_home_step(self):
         """Add a home position step"""
         step = {"type": "home"}
         self.add_step_to_list(step)
         self.status_label.setText("✓ Added home step")
+
+    def add_palletize_step(self):
+        """Add a palletize automation step."""
+        step = create_default_palletize_config(self.config)
+        self.add_step_to_list(step)
+        self.status_label.setText("✓ Added palletize step")
+
+        last_item = self.steps_list.item(self.steps_list.count() - 1)
+        if last_item:
+            self.configure_palletize_step(last_item)
     
     def delete_selected_step(self):
         """Delete selected step"""
@@ -805,11 +859,13 @@ class SequenceTab(QWidget):
         
         step = item.data(Qt.UserRole) or {}
         step_type = step.get("type")
-        
+
         if step_type == "vision":
             self.configure_vision_step(item)
+        elif step_type == "palletize":
+            self.configure_palletize_step(item)
         else:
-            self.status_label.setText("Editing is only available for vision steps right now.")
+            self.status_label.setText("Select a vision or palletize step to edit.")
     
     def configure_vision_step(self, item: QListWidgetItem):
         """Open the vision designer dialog for the given item"""
@@ -848,6 +904,30 @@ class SequenceTab(QWidget):
                 self._report_vision_status("watching", f"Vision updated: {display_name}")
         else:
             self.status_label.setText("Vision step unchanged")
+
+    def configure_palletize_step(self, item: QListWidgetItem):
+        if PalletizeConfigDialog is None:
+            QMessageBox.warning(
+                self,
+                "Palletize Designer Missing",
+                "Palletize UI is not available. Ensure palletize_ui/designer.py exists.",
+            )
+            return
+
+        step = item.data(Qt.UserRole) or create_default_palletize_config(self.config)
+        dialog = PalletizeConfigDialog(self, step, self.config)
+        result = dialog.exec()
+
+        if result == QDialog.Accepted:
+            updated_step = dialog.get_step_data()
+            if updated_step:
+                updated_step["type"] = "palletize"
+                item.setData(Qt.UserRole, updated_step)
+                number = self.steps_list.row(item) + 1
+                item.setText(self._format_palletize_step_text(updated_step, number))
+                self.status_label.setText("✓ Palletize step updated")
+        else:
+            self.status_label.setText("Palletize step unchanged")
     
     def _format_vision_step_text(self, step: dict, number: int) -> str:
         """Format the list text for a vision step"""
@@ -871,6 +951,18 @@ class SequenceTab(QWidget):
             f"{number}. 👁️ Vision: {summary} • {camera_label} • "
             f"{mode.title()} • {zone_count} zone{'s' if zone_count != 1 else ''} • "
             f"metric={metrics} • {idle_text}"
+        )
+
+    def _format_palletize_step_text(self, step: dict, number: int) -> str:
+        grid = step.get("grid", {})
+        cols = int(grid.get("corner12_divisions", 1))
+        rows = int(grid.get("corner23_divisions", 1))
+        total = max(1, cols * rows)
+        arm_index = int(step.get("arm_index", 0)) + 1
+        name = step.get("name", "Palletize")
+        return (
+            f"{number}. 📦 {name}: {cols}×{rows} grid • Arm {arm_index} • {total} cell"
+            f"{'s' if total != 1 else ''}"
         )
 
     # ------------------------------------------------------------------
