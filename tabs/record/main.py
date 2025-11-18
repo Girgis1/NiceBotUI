@@ -5,7 +5,7 @@ Allows recording sequences of motor positions for playback
 
 import time
 from functools import partial
-from typing import Optional
+from typing import Optional, Tuple
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
@@ -27,6 +27,7 @@ from utils.motor_controller import MotorController
 from utils.app_state import AppStateStore
 from utils.logging_utils import log_exception
 from utils.teleop_controller import TeleopController, TeleopMode
+from utils.end_effector_ik import EndEffectorIKController
 
 from .record_store import RecordStoreMixin
 from .transport_controls import TransportControlsMixin
@@ -51,6 +52,7 @@ class RecordTab(
         self.state_store = AppStateStore.instance()
         self.active_arm_index = get_active_arm_index(self.config, arm_type="robot")
         self.motor_controller = MotorController(config, arm_index=self.active_arm_index)
+        self.ee_controller = EndEffectorIKController(self.motor_controller)
         self.teleop_controller = TeleopController(config)
         self.teleop_mode = TeleopMode.instance()
         self._robot_capable = True
@@ -423,6 +425,7 @@ class RecordTab(
         teleop_panel.setMinimumWidth(220)
         main_layout.addWidget(teleop_panel, stretch=1)
         self._sync_active_arm_to_target()
+        self._update_ee_target_label(force_refresh=True)
 
     def _apply_arm_selection(self, arm_index: int) -> None:
         resolved = set_active_arm_index(self.config, arm_index, arm_type="robot")
@@ -445,6 +448,8 @@ class RecordTab(
                 log_exception("RecordTab: failed to disconnect previous motor controller", exc, level="warning")
         try:
             self.motor_controller = MotorController(self.config, arm_index=self.active_arm_index)
+            if self.ee_controller:
+                self.ee_controller.set_motor_controller(self.motor_controller)
         except Exception as exc:
             log_exception(f"RecordTab: motor controller init failed for arm {self.active_arm_index}", exc, level="error")
             if hasattr(self, "status_label"):
@@ -851,6 +856,65 @@ class RecordTab(
 
         panel_layout.addLayout(grid)
 
+        # End effector IK controls
+        ik_label = QLabel("EE Keyboard IK")
+        ik_label.setStyleSheet("color: #4CAF50; font-size: 11px; font-weight: bold; padding-top: 6px;")
+        panel_layout.addWidget(ik_label)
+
+        ik_grid = QGridLayout()
+        ik_grid.setHorizontalSpacing(3)
+        ik_grid.setVerticalSpacing(3)
+
+        def create_ik_btn(text, axis, direction):
+            btn = QPushButton(text)
+            btn.setFixedHeight(40)
+            btn.setAutoRepeat(True)
+            btn.setAutoRepeatDelay(250)
+            btn.setAutoRepeatInterval(120)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #263238;
+                    color: #ffffff;
+                    border: 1px solid #37474F;
+                    border-radius: 4px;
+                    font-size: 11px;
+                    font-weight: bold;
+                }
+                QPushButton:hover { background-color: #37474F; }
+                QPushButton:pressed { background-color: #1E272C; }
+            """)
+            btn.pressed.connect(lambda ax=axis, d=direction: self._nudge_end_effector(ax, d))
+            return btn
+
+        ik_grid.addWidget(create_ik_btn("EE ↑", "y", 1), 0, 1)
+        ik_grid.addWidget(create_ik_btn("EE ←", "x", -1), 1, 0)
+        ik_grid.addWidget(create_ik_btn("EE →", "x", 1), 1, 2)
+        ik_grid.addWidget(create_ik_btn("EE ↓", "y", -1), 2, 1)
+
+        self.ee_target_label = QLabel("EE X: -- m\nEE Y: -- m")
+        self.ee_target_label.setAlignment(Qt.AlignCenter)
+        self.ee_target_label.setStyleSheet("color: #CFD8DC; font-size: 10px; padding: 4px; border: 1px solid #2c2c2c; border-radius: 4px;")
+        ik_grid.addWidget(self.ee_target_label, 1, 1)
+
+        reset_btn = QPushButton("Reset EE")
+        reset_btn.setFixedHeight(32)
+        reset_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #37474F;
+                color: #ffffff;
+                border: none;
+                border-radius: 4px;
+                font-size: 10px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #455A64; }
+            QPushButton:pressed { background-color: #263238; }
+        """)
+        reset_btn.clicked.connect(self._reset_end_effector_target)
+        ik_grid.addWidget(reset_btn, 3, 0, 1, 3)
+
+        panel_layout.addLayout(ik_grid)
+
         # Step control with up/down arrows
         step_row = QHBoxLayout()
         step_row.setSpacing(4)
@@ -998,6 +1062,43 @@ class RecordTab(
         panel_layout.addWidget(self.teleop_log_label)
 
         return teleop_panel
+
+    def _nudge_end_effector(self, axis: str, direction: int) -> None:
+        """Move the end effector target using IK controls."""
+
+        if not self.ee_controller or not self.ensure_teleop_ready():
+            return
+        success, target = self.ee_controller.nudge(axis, direction)
+        if success:
+            self.status_label.setText("✅ IK target updated")
+            self._update_ee_target_label(target)
+        else:
+            error = self.ee_controller.last_error or "IK move failed"
+            self.status_label.setText(f"⚠️ {error}")
+
+    def _reset_end_effector_target(self) -> None:
+        if not self.ee_controller or not self.ensure_teleop_ready():
+            return
+        success, target = self.ee_controller.reset_target()
+        if success:
+            self.status_label.setText("🔄 EE target reset")
+            self._update_ee_target_label(target)
+        else:
+            error = self.ee_controller.last_error or "IK reset failed"
+            self.status_label.setText(f"⚠️ {error}")
+
+    def _update_ee_target_label(self, target: Optional[Tuple[float, float]] = None, *, force_refresh: bool = False) -> None:
+        if not hasattr(self, "ee_target_label") or not self.ee_controller:
+            return
+        if force_refresh:
+            self.ee_controller.sync_with_robot()
+        if target is None:
+            target = self.ee_controller.last_target
+        if target:
+            x, y = target
+            self.ee_target_label.setText(f"EE X: {x:.3f} m\nEE Y: {y:.3f} m")
+        else:
+            self.ee_target_label.setText("EE X: -- m\nEE Y: -- m")
 
     def _teleop_button_style(self) -> str:
         return """
