@@ -87,6 +87,8 @@ class SequenceStep:
                 return HomeStep.from_dict(data)
             elif step_type == "vision":
                 return VisionStep.from_dict(data)
+            elif step_type == "palletize":
+                return PalletizeStep.from_dict(data)
             else:
                 print(f"[ERROR] Unknown step type: {step_type}")
                 return None
@@ -237,6 +239,41 @@ class VisionStep(SequenceStep):
             name=data.get("name", data.get("trigger", {}).get("display_name", "Vision Trigger")),
             camera=data.get("camera", {}),
             trigger=data.get("trigger", {}),
+            enabled=data.get("enabled", True),
+            delay_after=data.get("delay_after", 0.0),
+        )
+        metadata = data.get("metadata", {})
+        step.created_at = metadata.get("created_at", step.created_at)
+        step.modified_at = metadata.get("modified_at", step.modified_at)
+        return step
+
+
+class PalletizeStep(SequenceStep):
+    """Palletization step storing corner map and offsets."""
+
+    def __init__(self, name: str, config: Dict, enabled: bool = True, delay_after: float = 0.0):
+        super().__init__("palletize", name, enabled, delay_after)
+        self.config = config or {}
+        self.config.setdefault("name", name)
+
+    def to_dict(self) -> dict:
+        data = super().to_dict()
+        for key, value in self.config.items():
+            if key in {"metadata", "step_type"}:
+                continue
+            data[key] = value
+        data["step_type"] = "palletize"
+        data["type"] = "palletize"
+        return data
+
+    @staticmethod
+    def from_dict(data: dict) -> 'PalletizeStep':
+        config = {k: v for k, v in data.items() if k not in {"metadata", "step_type", "enabled", "delay_after"}}
+        name = config.get("name", data.get("name", "Palletise"))
+        config["name"] = name
+        step = PalletizeStep(
+            name=name,
+            config=config,
             enabled=data.get("enabled", True),
             delay_after=data.get("delay_after", 0.0),
         )
