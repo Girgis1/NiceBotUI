@@ -179,22 +179,25 @@ class PalletizeConfigWidget(QWidget):
         grid_layout.addWidget(self.div_y_spin, 1, 1)
         layout.addWidget(grid_group)
 
-        down_group = QGroupBox("Down / Release Offsets")
+        # Clearance offsets (motors 2–4) + gripper release delta (motor 6)
+        down_group = QGroupBox("Clearance / Release Offsets")
         down_layout = QGridLayout(down_group)
         self.down_spins: Dict[int, QSpinBox] = {}
         for col, motor_id in enumerate((2, 3, 4)):
-            label = QLabel(f"Motor {motor_id}")
+            label = QLabel(f"Motor {motor_id} clearance")
             spin = QSpinBox()
             spin.setRange(-1000, 1000)
             spin.setSingleStep(10)
             self.down_spins[motor_id] = spin
             down_layout.addWidget(label, 0, col)
             down_layout.addWidget(spin, 1, col)
-        down_layout.addWidget(QLabel("Motor 6 release delta"), 1, 0, 1, 2)
+        # Place release controls on their own row so they don't overwrite the clearance spins
+        release_row = 2
+        down_layout.addWidget(QLabel("Motor 6 release delta"), release_row, 0)
         self.release_spin = QSpinBox()
         self.release_spin.setRange(-1000, 1000)
         self.release_spin.setSingleStep(10)
-        down_layout.addWidget(self.release_spin, 1, 2, 1, 2)
+        down_layout.addWidget(self.release_spin, release_row, 1, 1, 3)
         layout.addWidget(down_group)
 
         velocity_group = QGroupBox("Motion Settings")

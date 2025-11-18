@@ -44,9 +44,10 @@ def create_default_palletize_config(config: Optional[dict] = None) -> dict:
         "release_velocity": 300,
         "settle_time": 0.15,
         "release_hold": 0.2,
-        # Lift offset applied to joint 2 (index 1) for safe approach
-        "lift_offset_joint2": -300,
-        "down_offsets": {"2": 200, "3": 60, "4": 0},
+        # Clearance offsets applied to joints 2–4 for the high approach pose.
+        # Positive values follow the usual motor convention (e.g. positive = down
+        # for joint 2); use negative values to lift above the cell.
+        "down_offsets": {"2": -300, "3": 0, "4": 0},
         "release_offset": 140,
     }
 
@@ -217,10 +218,9 @@ class PalletizeRuntime:
         release_velocity = _clamp_velocity(step.get("release_velocity", down_velocity))
         settle_time = max(0.0, float(step.get("settle_time", 0.0)))
         release_hold = max(0.0, float(step.get("release_hold", 0.0)))
-        down_offsets = _normalize_offsets(step.get("down_offsets"))
+        # Interpret down_offsets as clearance offsets for joints 2–4
+        clearance_offsets = _normalize_offsets(step.get("down_offsets"))
         release_delta = int(step.get("release_offset", 0))
-        # Lift offset for safe approach path (joint 2 / index 1)
-        lift_offset = int(step.get("lift_offset_joint2", -300))
 
         def _move(target: List[int], velocity: int, stage: str):
             if _should_stop():
@@ -233,45 +233,38 @@ class PalletizeRuntime:
             f"Approaching pallet cell {active_index + 1}/{total_cells} on arm {arm_index + 1}",
         )
 
-        # Stage 1: move joints 2–5 to their target cell values while lifting joint 2,
-        # keeping joint 1 (base rotation) at its current angle.
-        # Motor 5 rotates with grid cells (part of cell position from corners).
+        # Stage 1: move joints 2–4 to their clearance heights above the cell,
+        # keeping motor 1 (base) and motor 5 (wrist) at their current angles.
+        # This gives a straight "lift / radius" move with no rotation.
         current_positions = controller.read_positions()
-        if len(current_positions) == 6:
-            # Start from the final approach pose, but keep motor 1 at current and lift motor 2.
-            stage1_pose = list(approach_pose)
-            stage1_pose[0] = current_positions[0]
-            stage1_pose[1] = _clamp_position(stage1_pose[1] + lift_offset)
-            _move(stage1_pose, approach_velocity, "Approach (joints 2–5)")
-            if settle_time:
-                time.sleep(settle_time)
+        if len(current_positions) != 6:
+            raise RuntimeError("Palletize step failed: could not read 6 joint positions for clearance path")
 
-            # Stage 2: rotate motor 1 only to its final angle, staying at the lifted height.
-            stage2_pose = list(stage1_pose)
-            stage2_pose[0] = approach_pose[0]
-            _move(stage2_pose, approach_velocity, "Approach (rotate base)")
-            if settle_time:
-                time.sleep(settle_time)
+        # Clearance pose derived from the final cell pose plus configurable offsets
+        clearance_pose = _apply_offsets(approach_pose, clearance_offsets)
 
-            # Stage 3: slow drop – move joint 2 back down to the final approach pose.
-            _move(approach_pose, down_velocity, "Approach (drop)")
-            if settle_time:
-                time.sleep(settle_time)
-        else:
-            # Fallback: go directly to approach pose if we cannot read current positions.
-            _move(approach_pose, approach_velocity, "Approach")
-            if settle_time:
-                time.sleep(settle_time)
+        stage1_pose = list(clearance_pose)
+        stage1_pose[0] = current_positions[0]  # keep base heading
+        stage1_pose[4] = current_positions[4]  # keep wrist rotation
+        _move(stage1_pose, approach_velocity, "Approach (clearance height)")
+        if settle_time:
+            time.sleep(settle_time)
 
-        down_pose = _apply_offsets(approach_pose, down_offsets)
-        if down_pose != approach_pose:
-            _move(down_pose, down_velocity, "Down")
-            if settle_time:
-                time.sleep(settle_time)
-        else:
-            down_pose = list(approach_pose)
+        # Stage 2: rotate base (motor 1) and wrist (motor 5) to their final
+        # cell values while staying at the clearance height.
+        stage2_pose = list(clearance_pose)
+        _move(stage2_pose, down_velocity, "Approach (rotate base/wrist)")
+        if settle_time:
+            time.sleep(settle_time)
 
-        release_pose = list(down_pose)
+        # Stage 3: slow drop – move joints 2–4 down from clearance to the
+        # exact corner/cell position, then perform the gripper release.
+        _move(approach_pose, down_velocity, "Drop to cell")
+        if settle_time:
+            time.sleep(settle_time)
+
+        # Release is performed at the exact cell pose (approach_pose).
+        release_pose = list(approach_pose)
         if len(release_pose) >= 6:
             release_pose[5] = _clamp_position(release_pose[5] + release_delta)
         else:
@@ -281,11 +274,15 @@ class PalletizeRuntime:
         if release_hold:
             time.sleep(release_hold)
 
-        # Return gripper to pre-release pose before retreating
-        if release_pose != down_pose:
-            _move(down_pose, release_velocity, "Reset gripper")
-
-        _move(approach_pose, retract_velocity, "Retract")
+        # Stage 4: retreat back to the clearance pose above the cell to exit
+        # safely and prepare for the next cell. Keep motor 6 in its released
+        # (open) state while moving up.
+        clearance_exit_pose = list(clearance_pose)
+        if len(release_pose) >= 6 and len(clearance_exit_pose) >= 6:
+            clearance_exit_pose[5] = release_pose[5]
+        _move(clearance_exit_pose, retract_velocity, "Retract to clearance")
+        if settle_time:
+            time.sleep(settle_time)
 
         if own_controller:
             try:
