@@ -15,6 +15,7 @@ import subprocess
 import random
 import string
 import math
+import uuid
 from pathlib import Path
 from typing import Optional, Dict, List
 
@@ -37,6 +38,14 @@ from utils.execution import (
     execute_composite_recording,
     playback_live_recording,
     playback_position_recording,
+)
+from utils.palletizer import (
+    PalletizerStateStore,
+    apply_down_offsets,
+    apply_release_offset,
+    build_cell_positions,
+    describe_cell,
+    reorder_cells_for_snake,
 )
 
 
@@ -79,6 +88,8 @@ class ExecutionWorker(QThread):
         self.speed_multiplier = config.get("control", {}).get("speed_multiplier", 1.0)
         self.motor_controller.speed_multiplier = self.speed_multiplier
         self._model_hold_requested_home = False
+        self.palletizer_state = PalletizerStateStore()
+        self._aux_motor_controllers: Dict[int, MotorController] = {}
         try:
             self.camera_hub: Optional[CameraStreamHub] = CameraStreamHub.instance(config)
         except Exception:
@@ -314,7 +325,12 @@ class ExecutionWorker(QThread):
                             if self._stop_requested:
                                 break
                             self.log_message.emit('warning', "Vision step skipped due to error")
-                    
+                    elif step_type == "palletize":
+                        if not self._execute_palletize_step(step, idx, total_steps):
+                            if self._stop_requested:
+                                break
+                            self.log_message.emit('warning', "Palletize step skipped due to error")
+
                     else:
                         self.log_message.emit('warning', f"Unknown step type: {step_type}")
                     
@@ -334,6 +350,7 @@ class ExecutionWorker(QThread):
                 if policy_server_process.poll() is None:
                     policy_server_process.kill()
                 self.log_message.emit('info', "✓ Policy server stopped")
+            self._cleanup_aux_motor_controllers()
         
         # Success
         if not self._stop_requested:
@@ -362,6 +379,12 @@ class ExecutionWorker(QThread):
             trigger = step.get("trigger", {})
             name = trigger.get("display_name") or step.get("name") or "Vision Trigger"
             return f"VISION • {name}"
+        if step_type == "palletize":
+            grid = step.get("grid", {})
+            columns = grid.get("columns", 1)
+            rows = grid.get("rows", 1)
+            arm_index = step.get("arm_index", 0)
+            return f"PALLETIZE • {columns}×{rows} on Arm {arm_index + 1}"
         return f"{step_type.upper()}"
 
     def _reset_vision_tracking(self):
@@ -665,6 +688,87 @@ class ExecutionWorker(QThread):
                 })
 
         return success
+
+    def _execute_palletize_step(self, step: Dict, step_index: int, total_steps: int) -> bool:
+        grid = step.get("grid", {})
+        motion = step.get("motion", {})
+        corners = [corner.get("positions", []) for corner in grid.get("corners", [])]
+
+        if len(corners) < 4 or any(len(corner) < 6 for corner in corners):
+            self.log_message.emit('error', "Palletize step missing corner positions")
+            return False
+
+        columns = int(grid.get("columns") or grid.get("divisions_u") or 1)
+        rows = int(grid.get("rows") or grid.get("divisions_v") or 1)
+        cells = build_cell_positions(corners, columns, rows)
+        cells = reorder_cells_for_snake(cells, columns, bool(grid.get("snake")))
+        if not cells:
+            self.log_message.emit('warning', "Palletize step produced no target cells")
+            return False
+
+        uid = step.get("palletizer_uid") or f"pal_{uuid.uuid4().hex[:8]}"
+        step["palletizer_uid"] = uid
+        cell_index = self.palletizer_state.peek_next(uid, len(cells))
+        desc = describe_cell(cell_index, columns, bool(grid.get("snake")))
+        self.log_message.emit(
+            'info',
+            f"Palletize cell {cell_index + 1}/{len(cells)} (row {desc['row'] + 1}, col {desc['column'] + 1})",
+        )
+
+        approach = cells[cell_index]
+        down = apply_down_offsets(approach, motion.get("down_offsets", [0] * 6))
+        release = apply_release_offset(down, motion.get("release_offset", 0))
+
+        travel_velocity = int(motion.get("travel_velocity", 600))
+        down_velocity = int(motion.get("down_velocity", 400))
+        release_velocity = int(motion.get("release_velocity", 250))
+        retreat_velocity = int(motion.get("retreat_velocity", 600))
+
+        arm_index = int(step.get("arm_index", self.arm_index))
+        controller, _ = self._get_motor_controller_for_arm(arm_index)
+
+        try:
+            if not controller.bus:
+                if not controller.connect():
+                    self.log_message.emit('error', f"Failed to connect to Arm {arm_index + 1} for palletize step")
+                    return False
+
+            controller.set_positions(approach, velocity=travel_velocity, wait=True, keep_connection=True)
+            if self._stop_requested:
+                return False
+
+            controller.set_positions(down, velocity=down_velocity, wait=True, keep_connection=True)
+            if self._stop_requested:
+                return False
+
+            controller.set_positions(release, velocity=release_velocity, wait=True, keep_connection=True)
+            if self._stop_requested:
+                return False
+
+            controller.set_positions(approach, velocity=retreat_velocity, wait=True, keep_connection=True)
+        except Exception as exc:
+            self.log_message.emit('error', f"Palletize execution error: {exc}")
+            return False
+
+        self.palletizer_state.advance(uid, len(cells), sequence=self.execution_name)
+        return True
+
+    def _get_motor_controller_for_arm(self, arm_index: int) -> tuple[MotorController, bool]:
+        if arm_index == self.motor_controller.arm_index:
+            return self.motor_controller, False
+        controller = self._aux_motor_controllers.get(arm_index)
+        if controller is None:
+            controller = MotorController(self.config, arm_index=arm_index)
+            self._aux_motor_controllers[arm_index] = controller
+        return controller, True
+
+    def _cleanup_aux_motor_controllers(self) -> None:
+        for controller in self._aux_motor_controllers.values():
+            try:
+                controller.disconnect()
+            except Exception:
+                pass
+        self._aux_motor_controllers.clear()
     
     def _execute_recording_inline(self, recording_name: str):
         """Execute a recording as part of a sequence (inline)"""

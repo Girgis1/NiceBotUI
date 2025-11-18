@@ -22,6 +22,7 @@ from utils.sequences_manager import SequencesManager
 from utils.actions_manager import ActionsManager
 from utils.logging_utils import log_exception
 from utils.model_paths import list_model_task_dirs
+from utils.config_compat import get_arm_config, format_arm_label
 
 # Vision designer dialog (new modular UI)
 try:
@@ -52,6 +53,13 @@ except ImportError:
                 "zones": [],
             },
         }
+
+
+try:
+    from palletizer_ui import PalletizerConfigDialog, create_default_palletizer_config
+except ImportError:
+    PalletizerConfigDialog = None
+    from utils.palletizer import create_default_palletizer_config  # type: ignore[no-redef]
 
 
 class HomeStepWidget(QFrame):
@@ -269,7 +277,25 @@ class SequenceTab(QWidget):
         """)
         self.add_model_btn.clicked.connect(self.add_model_step)
         add_bar.addWidget(self.add_model_btn)
-        
+
+        self.add_palletize_btn = QPushButton("+ Palletize")
+        self.add_palletize_btn.setMinimumHeight(45)
+        self.add_palletize_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #26A69A;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #1E8E7E;
+            }
+        """)
+        self.add_palletize_btn.clicked.connect(self.add_palletize_step)
+        add_bar.addWidget(self.add_palletize_btn)
+
         self.add_vision_btn = QPushButton("+ Vision")
         self.add_vision_btn.setMinimumHeight(45)
         self.add_vision_btn.setStyleSheet("""
@@ -538,6 +564,9 @@ class SequenceTab(QWidget):
         elif step_type == "vision":
             text = self._format_vision_step_text(step, number)
             color = QColor("#AA00FF")
+        elif step_type == "palletize":
+            text = self._format_palletize_step_text(step, number)
+            color = QColor("#26A69A")
         else:
             text = f"{number}. ❓ Unknown step"
             color = QColor("#909090")
@@ -601,7 +630,29 @@ class SequenceTab(QWidget):
                 }
                 self.add_step_to_list(step)
             self.status_label.setText(f"✓ Added model: {task}")
-    
+
+    def add_palletize_step(self):
+        """Add a palletization step."""
+        if PalletizerConfigDialog is None:
+            from PySide6.QtWidgets import QMessageBox
+
+            QMessageBox.warning(
+                self,
+                "Palletize module missing",
+                "Palletizer UI is not available. Please ensure palletizer_ui is installed.",
+            )
+            return
+
+        step = create_default_palletizer_config(self.config)
+        dialog = PalletizerConfigDialog(self, step, self.config)
+        if dialog.exec() == QDialog.Accepted:
+            step = dialog.step_data
+        else:
+            return
+
+        self.add_step_to_list(step)
+        self.status_label.setText("✓ Added palletize step")
+
     def add_vision_step(self):
         """Add a vision configuration step"""
         step = create_default_vision_config()
@@ -768,6 +819,7 @@ class SequenceTab(QWidget):
         # Disable editing while running
         self.add_action_btn.setEnabled(False)
         self.add_model_btn.setEnabled(False)
+        self.add_palletize_btn.setEnabled(False)
         self.add_vision_btn.setEnabled(False)
         self.add_delay_btn.setEnabled(False)
         self.add_home_btn.setEnabled(False)
@@ -789,6 +841,7 @@ class SequenceTab(QWidget):
         # Re-enable editing
         self.add_action_btn.setEnabled(True)
         self.add_model_btn.setEnabled(True)
+        self.add_palletize_btn.setEnabled(True)
         self.add_vision_btn.setEnabled(True)
         self.add_delay_btn.setEnabled(True)
         self.add_home_btn.setEnabled(True)
@@ -805,11 +858,13 @@ class SequenceTab(QWidget):
         
         step = item.data(Qt.UserRole) or {}
         step_type = step.get("type")
-        
+
         if step_type == "vision":
             self.configure_vision_step(item)
+        elif step_type == "palletize":
+            self.configure_palletize_step(item)
         else:
-            self.status_label.setText("Editing is only available for vision steps right now.")
+            self.status_label.setText("Editing is only available for vision and palletize steps right now.")
     
     def configure_vision_step(self, item: QListWidgetItem):
         """Open the vision designer dialog for the given item"""
@@ -848,6 +903,30 @@ class SequenceTab(QWidget):
                 self._report_vision_status("watching", f"Vision updated: {display_name}")
         else:
             self.status_label.setText("Vision step unchanged")
+
+    def configure_palletize_step(self, item: QListWidgetItem):
+        """Open the palletizer dialog for a step."""
+        if PalletizerConfigDialog is None:
+            from PySide6.QtWidgets import QMessageBox
+
+            QMessageBox.warning(
+                self,
+                "Palletizer Missing",
+                "Palletizer designer is not available. Please ensure palletizer_ui exists.",
+            )
+            return
+
+        step = item.data(Qt.UserRole) or {}
+        dialog = PalletizerConfigDialog(self, step, self.config)
+        if dialog.exec() == QDialog.Accepted:
+            updated = dialog.step_data
+            updated["type"] = "palletize"
+            item.setData(Qt.UserRole, updated)
+            number = self.steps_list.row(item) + 1
+            item.setText(self._format_palletize_step_text(updated, number))
+            self.status_label.setText("✓ Palletize step updated")
+        else:
+            self.status_label.setText("Palletize step unchanged")
     
     def _format_vision_step_text(self, step: dict, number: int) -> str:
         """Format the list text for a vision step"""
@@ -872,6 +951,28 @@ class SequenceTab(QWidget):
             f"{mode.title()} • {zone_count} zone{'s' if zone_count != 1 else ''} • "
             f"metric={metrics} • {idle_text}"
         )
+
+    def _format_palletize_step_text(self, step: dict, number: int) -> str:
+        grid = step.get("grid", {})
+        columns = grid.get("columns", 1)
+        rows = grid.get("rows", 1)
+        corners = grid.get("corners", [])
+        captured = sum(1 for corner in corners if corner.get("captured"))
+        arm_label = self._format_arm_name(step.get("arm_index", 0))
+        total = max(1, columns * rows)
+        return (
+            f"{number}. 🧱 Palletize: {columns}×{rows} grid • "
+            f"{captured}/4 corners • {arm_label} • {total} cells"
+        )
+
+    def _format_arm_name(self, arm_index: int) -> str:
+        arm_cfg = get_arm_config(self.config, arm_index, "robot")
+        if arm_cfg:
+            try:
+                return format_arm_label(arm_index, arm_cfg)
+            except Exception:
+                pass
+        return f"Arm {arm_index + 1}"
 
     # ------------------------------------------------------------------
     # Dashboard integration helpers

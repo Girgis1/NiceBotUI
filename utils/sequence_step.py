@@ -12,6 +12,7 @@ Each step is self-contained and represents a unit of work in a sequence.
 """
 
 import json
+import uuid
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict
@@ -87,6 +88,8 @@ class SequenceStep:
                 return HomeStep.from_dict(data)
             elif step_type == "vision":
                 return VisionStep.from_dict(data)
+            elif step_type == "palletize":
+                return PalletizeStep.from_dict(data)
             else:
                 print(f"[ERROR] Unknown step type: {step_type}")
                 return None
@@ -237,6 +240,50 @@ class VisionStep(SequenceStep):
             name=data.get("name", data.get("trigger", {}).get("display_name", "Vision Trigger")),
             camera=data.get("camera", {}),
             trigger=data.get("trigger", {}),
+            enabled=data.get("enabled", True),
+            delay_after=data.get("delay_after", 0.0),
+        )
+        metadata = data.get("metadata", {})
+        step.created_at = metadata.get("created_at", step.created_at)
+        step.modified_at = metadata.get("modified_at", step.modified_at)
+        return step
+
+
+class PalletizeStep(SequenceStep):
+    """Palletize grid placement step."""
+
+    def __init__(
+        self,
+        name: str,
+        arm_index: int,
+        grid: Dict,
+        motion: Dict,
+        palletizer_uid: str,
+        enabled: bool = True,
+        delay_after: float = 0.0,
+    ):
+        super().__init__("palletize", name, enabled, delay_after)
+        self.arm_index = arm_index
+        self.grid = grid or {}
+        self.motion = motion or {}
+        self.palletizer_uid = palletizer_uid
+
+    def to_dict(self) -> dict:
+        data = super().to_dict()
+        data["arm_index"] = self.arm_index
+        data["grid"] = self.grid
+        data["motion"] = self.motion
+        data["palletizer_uid"] = self.palletizer_uid
+        return data
+
+    @staticmethod
+    def from_dict(data: dict) -> "PalletizeStep":
+        step = PalletizeStep(
+            name=data.get("name", "Palletize"),
+            arm_index=data.get("arm_index", 0),
+            grid=data.get("grid", {}),
+            motion=data.get("motion", {}),
+            palletizer_uid=data.get("palletizer_uid") or f"pal_{uuid.uuid4().hex[:8]}",
             enabled=data.get("enabled", True),
             delay_after=data.get("delay_after", 0.0),
         )
