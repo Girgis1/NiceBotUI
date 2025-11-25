@@ -103,6 +103,28 @@ def translate_worker_message(level: str, message: str) -> Optional[LogEntry]:
             fatal=True,
         )
 
+    if "resilience: motor dropout detected" in lowered or "resilience: retrying waypoint" in lowered:
+        return LogEntry(
+            level="warning",
+            message="Motor dropout detected; retrying to reach the waypoint.",
+            code="motor_resilience_retry",
+        )
+
+    if "resilience: motor bus recovered" in lowered:
+        return LogEntry(
+            level="success",
+            message="Motor link recovered; continuing the run.",
+            code="motor_resilience_recovered",
+        )
+
+    if "resilience: waypoint not confirmed" in lowered:
+        return LogEntry(
+            level="warning",
+            message="Waypoint not confirmed after retries; continuing.",
+            code="motor_resilience_continue",
+            dedupe=False,
+        )
+
     if "process exited with code" in lowered or "robot control app closed with code" in lowered:
         return LogEntry(
             level="error",

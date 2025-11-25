@@ -1,0 +1,64 @@
+╔════════════════════════════════════════════════════════════════════╗
+║           MOTOR DROPOUT DIAGNOSTICS - QUICK REFERENCE              ║
+╚════════════════════════════════════════════════════════════════════╝
+
+📋 STEP-BY-STEP WORKFLOW
+
+1️⃣  SYNC TO JETSON
+   Local machine:
+   $ ./sync_to_jetson.sh
+
+2️⃣  START DIAGNOSTICS ON JETSON
+   $ ssh jetson
+   $ cd ~/NiceBotUI
+   $ ./tools/start_motor_diagnostics.sh
+
+3️⃣  REPRODUCE THE ISSUE
+   • Run your normal motor operations
+   • Wait for dropout to occur
+   • Note the approximate time
+   • Let it run ~30 seconds longer
+   • Press Ctrl+C to stop
+
+4️⃣  RETRIEVE LOGS
+   Local machine:
+   $ ./sync_from_jetson.sh --logs-only
+
+5️⃣  ANALYZE TOGETHER
+   $ cat logs/motor_dropout_diag_*.log | less
+   • Search for "DROPOUT DETECTED"
+   • Look at "ANALYZING EVENTS" sections
+   • Check for power spikes, USB events
+
+═════════════════════════════════════════════════════════════════════
+
+🔍 WHAT THE TOOL MONITORS
+
+✓ USB device connects/disconnects (dmesg)
+✓ System power consumption (tegrastats)
+✓ Motor controller ports (/dev/ttyACM*)
+✓ Timestamps for correlation
+
+═════════════════════════════════════════════════════════════════════
+
+⚡ QUICK COMMANDS
+
+Run for 5 minutes then auto-stop:
+  $ ./tools/start_motor_diagnostics.sh 300
+
+Run in background:
+  $ nohup ./tools/start_motor_diagnostics.sh &
+
+View live:
+  $ tail -f logs/motor_dropout_diag_*.log
+
+Pull logs:
+  $ ./sync_from_jetson.sh --logs-only
+
+═════════════════════════════════════════════════════════════════════
+
+📖 FULL DOCUMENTATION
+   See: MOTOR_DROPOUT_DIAGNOSTICS.md
+
+═════════════════════════════════════════════════════════════════════
+

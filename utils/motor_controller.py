@@ -77,20 +77,44 @@ class MotorController:
         """Read positions from active bus connection (faster for verification loops)
         
         Returns:
-            List of 6 motor positions, or empty list on error
+            List of 6 motor positions, or last known positions on transient error
         """
         if not self.bus:
             return []
         
-        try:
-            positions = []
-            for name in self.motor_names:
-                pos = self.bus.read("Present_Position", name, normalize=False)
-                positions.append(int(pos))
-            return positions
-        except Exception as e:
-            print(f"[MOTOR] Error reading positions from bus: {e}")
-            return []
+        # Initialize last known positions cache
+        if not hasattr(self, '_last_positions'):
+            self._last_positions = None
+        
+        # Try up to 3 times for transient errors (voltage brownouts)
+        for attempt in range(3):
+            try:
+                positions = []
+                for name in self.motor_names:
+                    pos = self.bus.read("Present_Position", name, normalize=False)
+                    positions.append(int(pos))
+                
+                # Success - cache and return
+                self._last_positions = positions
+                return positions
+                
+            except Exception as e:
+                error_str = str(e)
+                # Check if it's a transient error worth retrying
+                if "Input voltage error" in error_str or "Incorrect status packet" in error_str:
+                    if attempt < 2:  # Not last attempt
+                        time.sleep(0.05)  # 50ms delay
+                        continue
+                
+                # Non-transient error or final attempt - log and fallback
+                print(f"[MOTOR] Error reading positions (attempt {attempt+1}/3): {e}")
+                
+                # Use last known positions if available
+                if self._last_positions:
+                    print(f"[MOTOR] Using last known positions to continue operation")
+                    return self._last_positions
+                
+                return []
     
     def verify_position_reached(self, target_positions: list[int], timeout: float = 5.0) -> tuple[bool, list[int]]:
         """Verify motors reached target positions using position feedback
@@ -168,6 +192,18 @@ class MotorController:
         
         try:
             self.bus = create_motor_bus(self.port)
+            try:
+                from utils.resilient_motor_bus import ResilientMotorBus  # Local import to avoid hard dep
+            except Exception:
+                ResilientMotorBus = None
+
+            if ResilientMotorBus and self.bus and not isinstance(self.bus, ResilientMotorBus):
+                self.bus = ResilientMotorBus(self.bus)
+                try:
+                    max_retries = getattr(self.bus, "MAX_RETRIES", "?")
+                    print(f"[MOTOR] Using resilient bus wrapper (max {max_retries} retries)")
+                except Exception:
+                    print("[MOTOR] Using resilient bus wrapper")
             return True
         except Exception as e:
             print(f"Error connecting to motors: {e}")

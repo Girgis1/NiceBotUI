@@ -7,6 +7,58 @@ from typing import Dict, List
 
 from .context import ExecutionContext
 
+RESCUE_RETRY_WINDOW = 2.0  # seconds to keep re-issuing the waypoint after a dropout
+RESCUE_RETRY_INTERVAL = 0.15  # seconds between retry sends
+
+
+def _within_tolerance(current: List[int], target: List[int], tolerance: int) -> bool:
+    """Return True if all joints are within tolerance."""
+    if not current or len(current) != len(target):
+        return False
+    return max(abs(current[i] - target[i]) for i in range(len(target))) <= tolerance
+
+
+def _rescue_waypoint(context: ExecutionContext, target: List[int], velocity: int) -> bool:
+    """Keep nudging the same waypoint for a short window when motors momentarily drop out."""
+    controller = context.motor_controller
+    tol = getattr(controller, "POSITION_TOLERANCE", 10)
+
+    if not controller.bus:
+        context.log_warning("Resilience: motor bus unavailable during retry window.")
+        return False
+
+    start = time.time()
+    warned = False
+
+    while (time.time() - start) < RESCUE_RETRY_WINDOW:
+        positions = controller.read_positions_from_bus()
+        if _within_tolerance(positions, target, tol):
+            if warned:
+                context.log_info("Resilience: motor bus recovered, target reached.")
+            return True
+
+        # Re-send the goal to keep the bus nudging toward target
+        try:
+            for idx, motor_name in enumerate(controller.motor_names):
+                controller.bus.write("Goal_Position", motor_name, target[idx], normalize=False)
+        except Exception as exc:  # Keep going; transient errors are expected here
+            if not warned:
+                context.log_warning(f"Resilience: retrying waypoint after bus error ({exc})")
+            warned = True
+            time.sleep(RESCUE_RETRY_INTERVAL)
+            continue
+
+        if not warned:
+            context.log_warning(
+                f"Resilience: motor dropout detected, retrying waypoint for up to {RESCUE_RETRY_WINDOW:.1f}s"
+            )
+            warned = True
+
+        time.sleep(RESCUE_RETRY_INTERVAL)
+
+    context.log_warning("Resilience: waypoint not confirmed after retries; continuing.")
+    return False
+
 
 def execute_position_component(context: ExecutionContext, component: Dict, speed_override: int) -> None:
     """Execute a position-set component inside a composite recording."""
@@ -39,9 +91,16 @@ def execute_position_component(context: ExecutionContext, component: Dict, speed
             wait=wait_for_completion,
             keep_connection=True,
         )
+        tol = getattr(context.motor_controller, "POSITION_TOLERANCE", 10)
+        reached = _within_tolerance(
+            context.motor_controller.read_positions_from_bus(), motor_positions, tol
+        ) or _rescue_waypoint(context, motor_positions, velocity)
 
         progress = int(((idx + 1) / total_positions) * 100)
-        context.log_info(f"  ✓ Reached {pos_name} ({progress}%)")
+        if reached:
+            context.log_info(f"  ✓ Reached {pos_name} ({progress}%)")
+        else:
+            context.log_warning(f"  ⚠️ Continuing without confirmed reach for {pos_name} ({progress}%)")
 
 
 def playback_position_recording(context: ExecutionContext, recording: Dict) -> None:
@@ -76,6 +135,12 @@ def playback_position_recording(context: ExecutionContext, recording: Dict) -> N
             wait=True,
             keep_connection=True,
         )
+        tol = getattr(context.motor_controller, "POSITION_TOLERANCE", 10)
+        reached = _within_tolerance(
+            context.motor_controller.read_positions_from_bus(), positions, tol
+        ) or _rescue_waypoint(context, positions, velocity)
+        if not reached:
+            context.log_warning("Resilience: waypoint not confirmed; moving on.")
 
         delay = delays.get(str(idx), 0)
         if delay > 0:
