@@ -51,6 +51,9 @@ class HomeSequenceRunner(QObject):
         self._current_worker: Optional[HomeMoveWorker] = None
         self._running = False
         self._had_failure = False
+        self._parallel_mode = False
+        self._parallel_threads: list[QThread] = []
+        self._pending_parallel = 0
 
     @property
     def is_running(self) -> bool:
@@ -102,9 +105,17 @@ class HomeSequenceRunner(QObject):
         self._queue = queue
         self._active_arm = None
         self._had_failure = False
+        self._parallel_mode = False
+        self._parallel_threads = []
+        self._pending_parallel = 0
         self._running = True
         self.started.emit([info.as_dict() for info in queue])
-        self._start_next_arm()
+        # If all arms requested and we have more than one, run in parallel
+        if selection == "all" and len(queue) > 1:
+            self._parallel_mode = True
+            self._start_parallel(queue)
+        else:
+            self._start_next_arm()
         return True
 
     def cancel(self) -> None:
@@ -243,3 +254,69 @@ class HomeSequenceRunner(QObject):
 
         if self._running:
             self._start_next_arm()
+
+    # ------------------------------------------------------------------
+    # Parallel homing helpers
+
+    def _start_parallel(self, queue: list[HomeArmInfo]) -> None:
+        """Start homing all arms concurrently."""
+        self._pending_parallel = len(queue)
+        for info in queue:
+            try:
+                self._start_parallel_arm(info)
+            except Exception as exc:
+                self._had_failure = True
+                log_exception("HomeSequenceRunner: failed to start parallel arm", exc, level="error", stack=True)
+                self.arm_finished.emit(info.as_dict(), False, f"Homing error: {exc}")
+                self._pending_parallel -= 1
+
+        if self._pending_parallel <= 0:
+            self._finish_parallel()
+
+    def _start_parallel_arm(self, info: HomeArmInfo) -> None:
+        """Start a single arm in parallel mode."""
+        self.arm_started.emit(info.as_dict())
+
+        request = HomeMoveRequest(
+            config=self._config,
+            velocity_override=info.velocity,
+            arm_index=info.arm_index,
+        )
+
+        worker = HomeMoveWorker(request)
+        thread = QThread(self)
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+        worker.progress.connect(self.progress.emit, Qt.QueuedConnection)
+        worker.finished.connect(lambda success, message, info=info: self._handle_parallel_finished(info, success, message), Qt.QueuedConnection)
+        worker.finished.connect(thread.quit, Qt.QueuedConnection)
+        thread.finished.connect(lambda: self._cleanup_parallel_thread(thread, worker), Qt.QueuedConnection)
+
+        self._parallel_threads.append(thread)
+        thread.start()
+
+    def _handle_parallel_finished(self, info: HomeArmInfo, success: bool, message: str) -> None:
+        try:
+            if not success:
+                self._had_failure = True
+            self.arm_finished.emit(info.as_dict(), success, message)
+        finally:
+            self._pending_parallel -= 1
+            if self._pending_parallel <= 0:
+                self._finish_parallel()
+
+    def _cleanup_parallel_thread(self, thread: QThread, worker: HomeMoveWorker) -> None:
+        try:
+            if thread.isRunning():
+                thread.quit()
+                thread.wait(1000)
+            worker.deleteLater()
+            thread.deleteLater()
+        except Exception as exc:
+            log_exception("HomeSequenceRunner: parallel thread cleanup failed", exc, level="warning")
+
+    def _finish_parallel(self) -> None:
+        self._running = False
+        message = "✅ All arms homed" if not self._had_failure else "⚠️ Homing finished with errors"
+        self.finished.emit(not self._had_failure, message)

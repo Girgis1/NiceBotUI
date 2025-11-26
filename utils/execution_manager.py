@@ -39,6 +39,7 @@ from utils.execution import (
     playback_live_recording,
     playback_position_recording,
 )
+from utils.home_move_worker import home_multiple_arms
 
 
 class ExecutionWorker(QThread):
@@ -845,35 +846,13 @@ class ExecutionWorker(QThread):
             return
         
         # Home each selected arm
-        for arm_index, arm_id, arm_name in arms_to_home:
-            home_positions = get_home_positions(self.config, arm_index)
-            home_velocity = get_home_velocity(self.config, arm_index)
-            
-            if not home_positions:
-                self.log_message.emit('warning', f"No home position configured for {arm_name}")
-                continue
-            
-            self.log_message.emit('info', f"Homing {arm_name} (Arm {arm_id}): {home_positions}")
-            
-            try:
-                arm_controller = get_motor_handle(arm_index, self.config)
-                
-                if not arm_controller.bus:
-                    if not arm_controller.connect():
-                        self.log_message.emit('error', f"Failed to connect to {arm_name}")
-                        continue
-                
-                # Move to home position
-                arm_controller.set_positions(
-                    home_positions,
-                    velocity=home_velocity,
-                    wait=True,
-                    keep_connection=False
-                )
-                self.log_message.emit('info', f"✓ {arm_name} reached home position")
-                
-            except Exception as e:
-                self.log_message.emit('error', f"Failed to home {arm_name}: {e}")
+        indexes = [idx for idx, _, _ in arms_to_home]
+        success, per_arm = home_multiple_arms(self.config, indexes)
+        for idx, arm_success, msg in per_arm:
+            arm_name = f"Arm {idx + 1}"
+            self.log_message.emit('info' if arm_success else 'error', f"{arm_name}: {msg}")
+        if not success:
+            self.log_message.emit('warning', "One or more arms failed to home.")
 
     def _stabilize_arm_after_model(self, hold_seconds: float = 1.0) -> bool:
         """Re-enable torque and hold current pose after model execution.

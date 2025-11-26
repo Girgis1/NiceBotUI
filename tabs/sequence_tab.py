@@ -3,6 +3,7 @@ Sequence Tab - Sequence Builder
 Combine actions, trained models, and delays into complex sequences
 """
 
+import time
 from typing import Optional
 
 from PySide6.QtWidgets import (
@@ -734,22 +735,32 @@ class SequenceTab(QWidget):
                 steps.append(step_data)
         return steps
     
-    def save_sequence(self):
-        """Save current sequence"""
-        name = self.sequence_combo.currentText().strip()
+    def save_sequence(self, name_override: Optional[str] = None, prompt_if_needed: bool = True) -> bool:
+        """Save current sequence.
+
+        Args:
+            name_override: Optional name to save as (bypasses prompt).
+            prompt_if_needed: When True, prompt if name is missing/default.
+        Returns:
+            True on success, False otherwise.
+        """
+        name = (name_override or self.sequence_combo.currentText() or "").strip()
         
-        if not name or name == "NewSequence01":
+        if (not name or name == "NewSequence01") and prompt_if_needed:
             name, ok = QInputDialog.getText(
                 self, "Save Sequence", "Sequence name:"
             )
             if not ok or not name:
-                return
+                return False
+        elif not name:
+            self.status_label.setText("❌ Sequence name is required")
+            return False
         
         steps = self.get_all_steps()
         
         if not steps:
             self.status_label.setText("❌ No steps to save")
-            return
+            return False
         
         loop = self.loop_btn.isChecked() if hasattr(self, 'loop_btn') else False
         success = self.sequences_manager.save_sequence(name, steps, loop)
@@ -768,6 +779,8 @@ class SequenceTab(QWidget):
                 self.sequence_combo.setCurrentIndex(index)
         else:
             self.status_label.setText("❌ Failed to save")
+        
+        return success
     
     def new_sequence(self):
         """Create a new sequence"""
@@ -800,23 +813,14 @@ class SequenceTab(QWidget):
             self.run_btn.setChecked(False)
             return
         
-        # Check if sequence is saved
-        if self.current_sequence_name == "NewSequence01":
-            self.status_label.setText("❌ Please save sequence before running")
-            self.run_btn.setChecked(False)
-            
-            # Offer to save
-            reply = QMessageBox.question(
-                self, "Save Sequence?",
-                "Sequence must be saved before running. Save now?",
-                QMessageBox.Yes | QMessageBox.No
-            )
-            if reply == QMessageBox.Yes:
-                self.save_sequence()
-                # Check if save was successful
-                if self.current_sequence_name == "NewSequence01":
-                    return  # User cancelled save
-            else:
+        # Ensure sequence is saved; auto-save unsaved/new sequences with a temp name
+        if not self.current_sequence_name or self.current_sequence_name == "NewSequence01":
+            temp_name = f"Preview_{int(time.time())}"
+            self.sequence_combo.setCurrentText(temp_name)
+            saved = self.save_sequence(name_override=temp_name, prompt_if_needed=False)
+            if not saved:
+                self.status_label.setText("❌ Could not auto-save sequence for preview")
+                self.run_btn.setChecked(False)
                 return
         
         self.is_running = True

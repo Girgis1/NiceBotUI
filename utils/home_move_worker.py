@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
+import threading
 
 from PySide6.QtCore import QObject, Signal, Slot
 
@@ -76,7 +77,7 @@ class HomeMoveWorker(QObject):
                 positions,
                 velocity=velocity,
                 wait=True,
-                keep_connection=False,
+                keep_connection=True,  # Keep connection for torque disable
             )
 
             # Disable torque after reaching home to let the arm rest
@@ -86,7 +87,92 @@ class HomeMoveWorker(QObject):
                         controller.bus.write("Torque_Enable", name, 0, normalize=False)
             except Exception:
                 pass
+            finally:
+                # Clean up connection
+                try:
+                    controller.disconnect()
+                except Exception:
+                    pass
         except Exception as exc:  # pragma: no cover - hardware specific
             self.finished.emit(False, f"Home move failed: {exc}")
         else:
             self.finished.emit(True, f"✓ Home position reached @ {velocity}")
+
+
+def home_arm_blocking(config: Mapping[str, Any], arm_index: int, velocity_override: Optional[int] = None) -> tuple[bool, str]:
+    """Blocking home for a single arm. Returns (success, message)."""
+    cfg = dict(config or {})
+    positions = get_home_positions(cfg, arm_index)
+    if not positions:
+        return False, f"No home position configured for arm {arm_index}. Set home first."
+
+    port = get_arm_port(cfg, arm_index, "robot")
+    if not port:
+        return False, f"Robot port not configured for arm {arm_index}. Check settings."
+
+    base_velocity = get_home_velocity(cfg, arm_index)
+    try:
+        velocity = int(max(50, min(1200, velocity_override or base_velocity)))
+    except Exception:
+        velocity = int(max(50, min(1200, base_velocity)))
+
+    try:
+        controller = get_motor_handle(arm_index, cfg)
+    except Exception as exc:
+        return False, f"Motor controller initialisation failed: {exc}"
+
+    try:
+        if not controller.connect():
+            return False, "Failed to connect to motors."
+
+        controller.set_positions(
+            positions,
+            velocity=velocity,
+            wait=True,
+            keep_connection=True,
+        )
+
+        # Disable torque after reaching home to let the arm rest
+        try:
+            if controller.bus:
+                for name in controller.motor_names:
+                    controller.bus.write("Torque_Enable", name, 0, normalize=False)
+        except Exception:
+            pass
+        finally:
+            try:
+                controller.disconnect()
+            except Exception:
+                pass
+    except Exception as exc:
+        return False, f"Home move failed: {exc}"
+
+    return True, f"✓ Home position reached @ {velocity}"
+
+
+def home_multiple_arms(config: Mapping[str, Any], arm_indexes: list[int], velocity_override: Optional[int] = None) -> tuple[bool, list[tuple[int, bool, str]]]:
+    """Home the selected arms in parallel. Returns aggregate success and per-arm results."""
+    results: list[tuple[int, bool, str]] = []
+
+    if not arm_indexes:
+        return True, results
+
+    threads = []
+    result_map: dict[int, tuple[bool, str]] = {}
+
+    def _run(idx: int):
+        result_map[idx] = home_arm_blocking(config, idx, velocity_override)
+
+    for idx in arm_indexes:
+        t = threading.Thread(target=_run, args=(idx,), daemon=True)
+        threads.append(t)
+        t.start()
+
+    for t in threads:
+        t.join()
+
+    for idx in arm_indexes:
+        success, msg = result_map.get(idx, (False, "Unknown error"))
+        results.append((idx, success, msg))
+
+    return all(r[1] for r in results), results
