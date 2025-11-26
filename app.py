@@ -206,7 +206,7 @@ class MainWindow(QMainWindow):
         self.tab_buttons.addButton(self.record_btn, 2)
         sidebar_layout.addWidget(self.record_btn)
 
-        self.train_btn = QPushButton("Train")
+        self.train_btn = QPushButton("🧠\nTrain")
         self.train_btn.setCheckable(True)
         self.train_btn.setStyleSheet(button_style)
         self.train_btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
@@ -244,7 +244,7 @@ class MainWindow(QMainWindow):
         self.dashboard_tab = DashboardTab(self.config, self, self.device_manager)
         self.sequence_tab = SequenceTab(self.config, self)
         self.record_tab = RecordTab(self.config, self)
-        self.train_tab = TrainTab(self.config, self)
+        self.train_tab = TrainTab(self.config, self, self.device_manager)
         
         # Connect sequence execution signal
         self.sequence_tab.execute_sequence_signal.connect(self.dashboard_tab.run_sequence)

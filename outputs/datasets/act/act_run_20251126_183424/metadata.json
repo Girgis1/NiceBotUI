@@ -1,0 +1,15 @@
+{
+  "name": "act_run_20251126_183424",
+  "dataset_id": "act_run_20251126_183424",
+  "repo_id": "local/act_act_run_20251126_183424_20251126_183430",
+  "target_episodes": 30,
+  "episode_time_s": 30,
+  "arm_mode": "bimanual",
+  "resume": true,
+  "notes": "",
+  "created_at": "2025-11-26T18:34:30.256875+11:00",
+  "updated_at": "2025-11-26T18:34:30.677022+11:00",
+  "completed_episodes": 0,
+  "trained": false,
+  "training_output_dir": null
+}

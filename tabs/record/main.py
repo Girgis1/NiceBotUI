@@ -50,7 +50,21 @@ class RecordTab(
         self.actions_manager = ActionsManager()
         self.state_store = AppStateStore.instance()
         self.active_arm_index = get_active_arm_index(self.config, arm_type="robot")
-        self.motor_controller = get_motor_handle(self.active_arm_index, config)
+        # Motor controller may not be available on dev machines or when
+        # config.json only has placeholder arms. Defer hard failures and let
+        # the tab degrade gracefully instead of crashing the whole app.
+        self.motor_controller = None
+        try:
+            self.motor_controller = get_motor_handle(self.active_arm_index, config)
+        except Exception as exc:
+            from utils.logging_utils import log_exception
+
+            log_exception(
+                f"RecordTab: motor controller init failed for arm {self.active_arm_index}",
+                exc,
+                level="error",
+            )
+
         self.teleop_controller = TeleopController(config)
         self.teleop_mode = TeleopMode.instance()
         self._robot_capable = True

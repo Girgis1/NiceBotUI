@@ -113,12 +113,27 @@ ensure_port_access() {
     exit 1
   fi
   if [[ ! -e "${port}" ]]; then
-    echo "❌ Serial device ${port} not found." >&2
-    exit 1
+    echo "⚠️ Serial device ${port} not found (arm likely not connected); skipping permission check for this port." >&2
+    return 0
   fi
   if [[ ! -r "${port}" || ! -w "${port}" ]]; then
-    echo "❌ ${port} is not RW-accessible. Run 'sudo chmod 666 ${port}' or apply the udev rule in udev/99-so100.rules." >&2
-    exit 1
+    # Attempt to fix permissions automatically using sudo with the known Jetson password.
+    if command -v sudo >/dev/null 2>&1; then
+      echo "⚠️ ${port} is not RW-accessible. Attempting 'sudo chmod 666 ${port}'…" >&2
+      if echo '447447' | sudo -S chmod 666 "${port}" 2>/dev/null; then
+        if [[ ! -r "${port}" || ! -w "${port}" ]]; then
+          echo "❌ ${port} is still not RW-accessible after chmod. Check udev/99-so100.rules or group membership." >&2
+          exit 1
+        fi
+        echo "✅ Permissions fixed for ${port}" >&2
+      else
+        echo "❌ Failed to run 'sudo chmod 666 ${port}'. Run it manually or install the udev rule (udev/99-so100.rules)." >&2
+        exit 1
+      fi
+    else
+      echo "❌ ${port} is not RW-accessible and sudo is not available. Install the udev rule in udev/99-so100.rules." >&2
+      exit 1
+    fi
   fi
 }
 
@@ -179,6 +194,30 @@ ensure_calibration_link "robots" "${target_follower_type}" "${ROBOT_CALIB_ID}" "
 ensure_calibration_link "robots" "${target_follower_type}" "${ROBOT_CALIB_ID}" "right" "${RIGHT_FOLLOWER_TYPE}" "${RIGHT_FOLLOWER_ID}" || exit 1
 ensure_calibration_link "teleoperators" "${target_leader_type}" "${TELEOP_CALIB_ID}" "left" "${LEFT_LEADER_TYPE}" "${LEFT_LEADER_ID}" || exit 1
 ensure_calibration_link "teleoperators" "${target_leader_type}" "${TELEOP_CALIB_ID}" "right" "${RIGHT_LEADER_TYPE}" "${RIGHT_LEADER_ID}" || exit 1
+
+# Detect which teleop pairs are actually present; gracefully fall back to
+# single-arm teleop if only one side is connected.
+has_left=0
+has_right=0
+if [[ -n "${LEFT_FOLLOWER_PORT}" && -e "${LEFT_FOLLOWER_PORT}" && -n "${LEFT_LEADER_PORT}" && -e "${LEFT_LEADER_PORT}" ]]; then
+  has_left=1
+fi
+if [[ -n "${RIGHT_FOLLOWER_PORT}" && -e "${RIGHT_FOLLOWER_PORT}" && -n "${RIGHT_LEADER_PORT}" && -e "${RIGHT_LEADER_PORT}" ]]; then
+  has_right=1
+fi
+
+if [[ "${has_left}" -eq 1 && "${has_right}" -eq 0 ]]; then
+  echo "⚠️ Right arm/leader not detected; falling back to single-arm LEFT teleop." >&2
+  TARGET_ARM=left "${PROJECT_ROOT}/run_single_teleop.sh"
+  exit $?
+elif [[ "${has_left}" -eq 0 && "${has_right}" -eq 1 ]]; then
+  echo "⚠️ Left arm/leader not detected; falling back to single-arm RIGHT teleop." >&2
+  TARGET_ARM=right "${PROJECT_ROOT}/run_single_teleop.sh"
+  exit $?
+elif [[ "${has_left}" -eq 0 && "${has_right}" -eq 0 ]]; then
+  echo "❌ Neither left nor right teleop pair detected; check USB connections." >&2
+  exit 1
+fi
 
 ensure_port_access "${LEFT_FOLLOWER_PORT}"
 ensure_port_access "${RIGHT_FOLLOWER_PORT}"

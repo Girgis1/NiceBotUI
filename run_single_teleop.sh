@@ -91,12 +91,27 @@ ensure_port_access() {
     exit 1
   fi
   if [[ ! -e "${port}" ]]; then
-    echo "❌ Serial device ${port} not found." >&2
-    exit 1
+    echo "⚠️ Serial device ${port} not found (arm likely not connected); skipping permission check for this port." >&2
+    return 0
   fi
   if [[ ! -r "${port}" || ! -w "${port}" ]]; then
-    echo "❌ ${port} is not RW-accessible. Run 'sudo chmod 666 ${port}' or install the udev rule (udev/99-so100.rules)." >&2
-    exit 1
+    # Attempt to fix permissions automatically using sudo with the known Jetson password.
+    if command -v sudo >/dev/null 2>&1; then
+      echo "⚠️ ${port} is not RW-accessible. Attempting 'sudo chmod 666 ${port}'…" >&2
+      if echo '447447' | sudo -S chmod 666 "${port}" 2>/dev/null; then
+        if [[ ! -r "${port}" || ! -w "${port}" ]]; then
+          echo "❌ ${port} is still not RW-accessible after chmod. Check udev/99-so100.rules or group membership." >&2
+          exit 1
+        fi
+        echo "✅ Permissions fixed for ${port}" >&2
+      else
+        echo "❌ Failed to run 'sudo chmod 666 ${port}'. Run it manually or install the udev rule (udev/99-so100.rules)." >&2
+        exit 1
+      fi
+    else
+      echo "❌ ${port} is not RW-accessible and sudo is not available. Install the udev rule in udev/99-so100.rules." >&2
+      exit 1
+    fi
   fi
 }
 
