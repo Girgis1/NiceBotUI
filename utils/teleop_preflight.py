@@ -32,11 +32,21 @@ class TeleopPreflight:
     def __init__(self, config: dict):
         self.config = config
         self.skip_prefight = bool(int(os.environ.get("TELEOP_SKIP_PREFLIGHT", "0") or 0))
+        self._jetson_flag = Path("/etc/nv_tegra_release")
+        self._bus_available = create_motor_bus.__name__ != "_missing_bus"
 
     def prepare(self, arm_mode: str) -> bool:
         if self.skip_prefight:
             safe_print("[TeleopPreflight] Skipping preflight (TELEOP_SKIP_PREFLIGHT=1)")
             return True
+
+        if not self._jetson_flag.exists():
+            safe_print("[TeleopPreflight] Skipping preflight on non-Jetson host.")
+            return False
+
+        if not self._bus_available:
+            safe_print("[TeleopPreflight] Feetech bus helpers unavailable; cannot run preflight.")
+            return False
 
         targets = self._select_ports(arm_mode)
         if not targets:
@@ -92,6 +102,9 @@ class TeleopPreflight:
         return targets
 
     def _reset_port(self, port: str, velocity: int = 4000, acceleration: int = 255) -> bool:
+        if not self._bus_available:
+            safe_print(f"[TeleopPreflight] Skipping {port} – motor bus unavailable.")
+            return False
         retries = 3
         for attempt in range(1, retries + 1):
             bus = None

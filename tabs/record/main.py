@@ -605,6 +605,7 @@ class RecordTab(
         if self.teleop_mode.active:
             return
         self.teleop_mode.enter(self.motor_controller.speed_multiplier)
+        self._apply_speed_multiplier_override(1.0)
         self.teleop_status_label.setText("⚠️ Teleop mode active - speed limiters disabled")
 
     def _handle_teleop_mode_exit(self, *, update_button: bool = True) -> None:
@@ -668,6 +669,13 @@ class RecordTab(
         control_cfg = self.config.setdefault("control", {})
         control_cfg["speed_multiplier"] = multiplier
         self.motor_controller.speed_multiplier = multiplier
+        self.state_store.set_state("control.speed_multiplier", multiplier)
+
+    def _apply_speed_multiplier_override(self, multiplier: float) -> None:
+        control_cfg = self.config.setdefault("control", {})
+        control_cfg["speed_multiplier"] = multiplier
+        self.motor_controller.speed_multiplier = multiplier
+        self.state_store.set_state("control.speed_multiplier", multiplier)
 
     def _read_positions_for_arm(self, arm_index: int, *, prefer_bus: bool = True) -> list[int] | None:
         controller = None

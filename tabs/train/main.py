@@ -14,6 +14,12 @@ from PySide6.QtCore import QTimer
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QPalette, QColor
 
+from utils.actions_manager import ActionsManager
+from utils.app_state import AppStateStore
+from utils.config_compat import get_active_arm_index
+from utils.motor_controller import MotorController
+from utils.teleop_controller import TeleopController
+
 
 class TrainTab(QWidget):
     """ACT training data collection tab with dashboard-style layout."""
@@ -26,6 +32,15 @@ class TrainTab(QWidget):
     def __init__(self, config: dict, parent=None):
         super().__init__(parent)
         self.config = config
+        self.state_store = AppStateStore.instance()
+        self.actions_manager = ActionsManager()
+        self.active_arm_index = get_active_arm_index(self.config, arm_type="robot")
+        self.motor_controller: Optional[MotorController] = None
+        self._bus_connected_locally = False
+        try:
+            self.motor_controller = MotorController(config, arm_index=self.active_arm_index)
+        except Exception:
+            self.motor_controller = None
 
         # Training state
         self.current_model = "pick_and_place_v2"
@@ -43,6 +58,12 @@ class TrainTab(QWidget):
         self.progress_bar = None
         self.timer_label = None
         self.episode_timer_obj = None
+        self.status_message = None
+        self.sample_timer = QTimer()
+        self.sample_timer.setInterval(50)
+        self.sample_timer.timeout.connect(self._capture_sample)
+        self.recorded_points: list[dict[str, Any]] = []
+        self.session_start_time: float | None = None
 
         self.init_ui()
 
@@ -127,6 +148,11 @@ class TrainTab(QWidget):
         status_label = QLabel("🤖 R:2/2 C:2/2")
         status_label.setStyleSheet("color: #4CAF50; font-size: 12px;")
         layout.addWidget(status_label)
+
+        # Session status
+        self.status_message = QLabel("READY")
+        self.status_message.setStyleSheet("color: #4CAF50; font-size: 12px; font-weight: bold;")
+        layout.addWidget(self.status_message)
 
         layout.addStretch()
         return status_bar
@@ -436,8 +462,21 @@ class TrainTab(QWidget):
 
     def _start_training(self):
         """Start training mode - show control buttons."""
+        if not self._hardware_ready():
+            return
+
+        if not self._ensure_bus_connected():
+            self._set_status_message("Motor bus unavailable", error=True)
+            return
+
         self.is_training = True
         self.training_started.emit()
+        self.is_recording = True
+        self.recorded_points = []
+        self.session_start_time = time.time()
+        self._start_episode_timer()
+        self.sample_timer.start()
+        self._set_status_message("Recording", error=False)
 
         # Hide big TRAIN button
         self.train_button.hide()
@@ -452,6 +491,9 @@ class TrainTab(QWidget):
         """Stop training mode - show big TRAIN button."""
         self.is_training = False
         self.training_stopped.emit()
+        self.is_recording = False
+        self.sample_timer.stop()
+        self._finalize_episode()
 
         # Stop episode timer
         if self.episode_timer_obj and self.episode_timer_obj.isActive():
@@ -462,6 +504,10 @@ class TrainTab(QWidget):
 
         # Show big TRAIN button
         self.train_button.show()
+
+        if self.motor_controller and self._bus_connected_locally:
+            self.motor_controller.disconnect()
+            self._bus_connected_locally = False
 
         # Update UI state
         self._update_ui_state()
@@ -484,6 +530,9 @@ class TrainTab(QWidget):
                 }
             """)
             self._start_episode_timer()
+            if not self.sample_timer.isActive():
+                self.sample_timer.start()
+            self._set_status_message("Recording", error=False)
         else:
             self.pause_btn.setText("[RESUME]\nTraining")
             self.pause_btn.setStyleSheet("""
@@ -499,6 +548,8 @@ class TrainTab(QWidget):
             """)
             if self.episode_timer_obj and self.episode_timer_obj.isActive():
                 self.episode_timer_obj.stop()
+            self.sample_timer.stop()
+            self._set_status_message("Paused", error=False)
 
     def _previous_episode(self):
         """Navigate to previous episode."""
@@ -564,8 +615,94 @@ class TrainTab(QWidget):
             else:
                 self.progress_bar.hide()
 
+    # ------------------------------------------------------------------
+    # Hardware + recording helpers
+
+    def _hardware_ready(self) -> bool:
+        if not TeleopController.is_jetson():
+            self._set_status_message("Jetson-only feature", error=True)
+            return False
+
+        teleop_running = bool(self.state_store.get("teleop.running", False))
+        if not teleop_running:
+            self._set_status_message("Start teleop before training", error=True)
+            return False
+        if not self.motor_controller:
+            self._set_status_message("No robot arm configured", error=True)
+            return False
+        return True
+
+    def _ensure_bus_connected(self) -> bool:
+        if self.motor_controller and self.motor_controller.bus:
+            return True
+        if not self.motor_controller:
+            return False
+        connected = self.motor_controller.connect()
+        self._bus_connected_locally = self._bus_connected_locally or connected
+        return connected
+
+    def _capture_sample(self):
+        if not self.is_recording or not self.motor_controller:
+            return
+
+        try:
+            positions = self.motor_controller.read_positions_from_bus() or self.motor_controller.read_positions()
+        except Exception:
+            self._set_status_message("Position read failed", error=True)
+            return
+        if not positions:
+            return
+
+        timestamp = time.time()
+        if self.session_start_time is None:
+            self.session_start_time = timestamp
+
+        self.recorded_points.append(
+            {
+                "timestamp": timestamp - (self.session_start_time or timestamp),
+                "positions": positions,
+                "arm_index": self.active_arm_index,
+                "model": self.current_model,
+            }
+        )
+
+    def _finalize_episode(self):
+        if not self.recorded_points:
+            return
+
+        name = f"{self.current_model}_ep{self.current_episode:02d}"
+        payload = {
+            "type": "live_recording",
+            "name": name,
+            "recorded_data": list(self.recorded_points),
+            "metadata": {
+                "model": self.current_model,
+                "episode": self.current_episode,
+                "arm_index": self.active_arm_index,
+                "duration": self.recorded_points[-1]["timestamp"] if self.recorded_points else 0,
+            },
+        }
+        saved = self.actions_manager.save_action(name, payload, action_type="live_recording")
+        if saved:
+            self._set_status_message(f"Saved {name}", error=False)
+        else:
+            self._set_status_message("Failed to save episode", error=True)
+        self.recorded_points = []
+
+    def _set_status_message(self, message: str, *, error: bool = False):
+        if self.status_message:
+            color = "#E53935" if error else "#4CAF50"
+            self.status_message.setStyleSheet(f"color: {color}; font-size: 12px; font-weight: bold;")
+            self.status_message.setText(message)
+        else:
+            print(f"[TRAIN] {message}")
+
     def closeEvent(self, event):
         """Clean up on close."""
+        if self.sample_timer and self.sample_timer.isActive():
+            self.sample_timer.stop()
         if self.episode_timer_obj and self.episode_timer_obj.isActive():
             self.episode_timer_obj.stop()
+        if self.motor_controller and self._bus_connected_locally:
+            self.motor_controller.disconnect()
         super().closeEvent(event)

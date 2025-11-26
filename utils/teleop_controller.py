@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 from pathlib import Path
@@ -36,6 +37,38 @@ PROGRAMMATIC_TELEOP_ENABLED = (
 
 JETSON_FLAG = Path("/etc/nv_tegra_release")
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+class CompositeBimanualRobot:
+    """Simple wrapper to route combined actions to two follower instances."""
+
+    def __init__(self, left_robot, right_robot):
+        self.left_robot = left_robot
+        self.right_robot = right_robot
+
+    def connect(self):
+        self.left_robot.connect()
+        self.right_robot.connect()
+
+    def is_connected(self):  # pragma: no cover - passthrough
+        return (
+            hasattr(self.left_robot, "is_connected")
+            and self.left_robot.is_connected()
+            and hasattr(self.right_robot, "is_connected")
+            and self.right_robot.is_connected()
+        )
+
+    def send_action(self, action):
+        if not isinstance(action, dict) or "left" not in action or "right" not in action:
+            raise ValueError("Composite robot expects action dict with left/right keys")
+        self.left_robot.send_action(action["left"])
+        self.right_robot.send_action(action["right"])
+
+    def disconnect(self):  # pragma: no cover - passthrough
+        with contextlib.suppress(Exception):
+            self.left_robot.disconnect()
+        with contextlib.suppress(Exception):
+            self.right_robot.disconnect()
 
 
 class ProgrammaticTeleopWorker(QThread):
@@ -74,14 +107,14 @@ class ProgrammaticTeleopWorker(QThread):
             # Create teleoperator and robot instances
             teleop_result, self.robot = self._create_teleop_instances()
 
-            # Handle mixed-type bimanual case
+            # Handle mixed-type or dual leader case
             if self.arm_target == "both" and isinstance(teleop_result, tuple):
-                # Mixed-type bimanual: (left_teleop, right_teleop)
+                # Dual teleops: (left_teleop, right_teleop)
                 self.left_teleop, self.right_teleop = teleop_result
-                self.teleop = None  # Not a single teleop instance
+                self.teleop = None
                 self._is_mixed_bimanual = True
             else:
-                # Single-arm or uniform bimanual
+                # Single-arm or combined bimanual teleop
                 self.teleop = teleop_result
                 self.left_teleop = None
                 self.right_teleop = None
@@ -89,19 +122,19 @@ class ProgrammaticTeleopWorker(QThread):
 
             # Connect and calibrate teleoperators
             if self._is_mixed_bimanual:
-                self._emit_log_safe("Connecting left teleoperator (SO100)...")
+                self._emit_log_safe("Connecting left teleoperator…")
                 self.left_teleop.connect()
-                self._emit_log_safe("Connecting right teleoperator (SO101)...")
+                self._emit_log_safe("Connecting right teleoperator…")
                 self.right_teleop.connect()
-                self._emit_log_safe("Calibrating left teleoperator...")
+                self._emit_log_safe("Calibrating left teleoperator…")
                 self.left_teleop.calibrate()
-                self._emit_log_safe("Calibrating right teleoperator...")
+                self._emit_log_safe("Calibrating right teleoperator…")
                 self.right_teleop.calibrate()
             else:
-                self._emit_log_safe("Connecting teleoperator...")
+                self._emit_log_safe("Connecting teleoperator…")
                 self.teleop.connect()
-                self._emit_log_safe("Calibrating teleoperator...")
-            self.teleop.calibrate()
+                self._emit_log_safe("Calibrating teleoperator…")
+                self.teleop.calibrate()
 
             self._emit_log_safe("Connecting robot...")
             self.robot.connect()
@@ -116,12 +149,7 @@ class ProgrammaticTeleopWorker(QThread):
                         left_action = self.left_teleop.get_action()
                         right_action = self.right_teleop.get_action()
 
-                        # Combine actions for bimanual robot
-                        # This assumes the robot expects a combined action format
-                        combined_action = {
-                            "left": left_action,
-                            "right": right_action
-                        }
+                        combined_action = {"left": left_action, "right": right_action}
                         self.robot.send_action(combined_action)
                     else:
                         # Single teleoperator case
@@ -165,29 +193,27 @@ class ProgrammaticTeleopWorker(QThread):
             return self._create_bimanual_instances()
 
     def _create_single_arm_instances(self):
-        """Create single-arm teleoperator and robot."""
+        """Create single-arm teleoperator and robot from config types."""
         arm_index = 0 if self.arm_target == "left" else 1
 
-        # Get ports from config
+        teleop_cfg = (self.config.get("teleop", {}) or {}).get("arms", [])
+        robot_cfg = (self.config.get("robot", {}) or {}).get("arms", [])
+        teleop_arm = teleop_cfg[arm_index] if arm_index < len(teleop_cfg) else {}
+        robot_arm = robot_cfg[arm_index] if arm_index < len(robot_cfg) else {}
+
         robot_port = get_arm_port(self.config, arm_index, "robot")
         teleop_port = get_arm_port(self.config, arm_index, "teleop")
 
         if not robot_port or not teleop_port:
             raise ValueError(f"Missing ports for {self.arm_target} arm teleop")
 
-        # Create teleoperator
-        teleop_config = lerobot.teleoperators.so100_leader.SO100LeaderConfig(
-            port=teleop_port,
-            id=f"{self.arm_target}_leader"
-        )
-        teleop = lerobot.teleoperators.so100_leader.SO100Leader(teleop_config)
+        teleop_type = (teleop_arm.get("type") or "SO100").upper()
+        robot_type = (robot_arm.get("type") or "SO101").upper()
+        teleop_id = teleop_arm.get("id") or f"{self.arm_target}_leader"
+        robot_id = robot_arm.get("id") or f"{self.arm_target}_follower"
 
-        # Create robot
-        robot_config = lerobot.robots.so101_follower.So101FollowerConfig(
-            port=robot_port,
-            id=f"{self.arm_target}_follower"
-        )
-        robot = lerobot.robots.so101_follower.So101Follower(robot_config)
+        teleop = self._build_leader(teleop_type, teleop_port, teleop_id)
+        robot = self._build_follower(robot_type, robot_port, robot_id)
 
         return teleop, robot
 
@@ -217,57 +243,91 @@ class ProgrammaticTeleopWorker(QThread):
             pass
 
     def _create_bimanual_instances(self):
-        """Create bimanual teleoperator and robot with mixed leader types.
+        """Create bimanual teleoperator and robot honoring per-arm types."""
+        teleop_cfg = (self.config.get("teleop", {}) or {}).get("arms", [])
+        robot_cfg = (self.config.get("robot", {}) or {}).get("arms", [])
 
-        Note: Left leader is SO100, right leader is SO101.
-        This requires separate teleoperator instances since BiSO100Leader
-        assumes both leaders are SO100.
-        """
-        # Get all ports
-        robot_ports = []
-        teleop_ports = []
+        if len(teleop_cfg) < 2 or len(robot_cfg) < 2:
+            raise ValueError("Bimanual teleop requires two configured teleop and robot arms")
 
-        for i in range(2):  # Left (0) and Right (1)
-            robot_port = get_arm_port(self.config, i, "robot")
-            teleop_port = get_arm_port(self.config, i, "teleop")
-            if robot_port:
-                robot_ports.append(robot_port)
-            if teleop_port:
-                teleop_ports.append(teleop_port)
+        left_teleop_type = (teleop_cfg[0].get("type") or "SO100").upper()
+        right_teleop_type = (teleop_cfg[1].get("type") or "SO100").upper()
+        left_robot_type = (robot_cfg[0].get("type") or "SO101").upper()
+        right_robot_type = (robot_cfg[1].get("type") or "SO101").upper()
 
-        if len(robot_ports) < 2 or len(teleop_ports) < 2:
+        left_teleop_port = get_arm_port(self.config, 0, "teleop")
+        right_teleop_port = get_arm_port(self.config, 1, "teleop")
+        left_robot_port = get_arm_port(self.config, 0, "robot")
+        right_robot_port = get_arm_port(self.config, 1, "robot")
+
+        if not all([left_teleop_port, right_teleop_port, left_robot_port, right_robot_port]):
             raise ValueError("Bimanual teleop requires 2 robot and 2 teleop ports")
 
-        # Create separate teleoperator instances for mixed types
-        # Left leader: SO100
-        left_teleop_config = lerobot.teleoperators.so100_leader.SO100LeaderConfig(
-            port=teleop_ports[0],  # Left leader (SO100)
-            id="left_leader_so100"
+        left_teleop = self._build_leader(
+            left_teleop_type,
+            left_teleop_port,
+            teleop_cfg[0].get("id") or "left_leader",
         )
-        left_teleop = lerobot.teleoperators.so100_leader.SO100Leader(left_teleop_config)
-
-        # Right leader: SO101
-        right_teleop_config = lerobot.teleoperators.so101_leader.SO101LeaderConfig(
-            port=teleop_ports[1],  # Right leader (SO101)
-            id="right_leader_so101"
+        right_teleop = self._build_leader(
+            right_teleop_type,
+            right_teleop_port,
+            teleop_cfg[1].get("id") or "right_leader",
         )
-        right_teleop = lerobot.teleoperators.so101_leader.SO101Leader(right_teleop_config)
 
-        # For bimanual with mixed types, we need to create a composite teleop interface
-        # This is a simplified approach - in practice, lerobot's bimanual teleop
-        # expects matching leader types. For now, we'll create a wrapper.
+        teleop_instance = None
+        if left_teleop_type == right_teleop_type == "SO100":
+            teleop_instance = lerobot.teleoperators.bi_so100_leader.BiSO100Leader(
+                lerobot.teleoperators.bi_so100_leader.BiSO100LeaderConfig(
+                    left_arm_port=left_teleop_port,
+                    right_arm_port=right_teleop_port,
+                    id="bimanual_leader_so100",
+                )
+            )
 
-        # Create bimanual robot (both followers are SO101)
-        robot_config = lerobot.robots.bi_so100_follower.BiSO100FollowerConfig(
-            left_arm_port=robot_ports[0],   # Left follower (SO101)
-            right_arm_port=robot_ports[1],  # Right follower (SO101)
-            id="bimanual_follower_so101"
+        left_robot = self._build_follower(
+            left_robot_type,
+            left_robot_port,
+            robot_cfg[0].get("id") or "left_follower",
         )
-        robot = lerobot.robots.bi_so100_follower.BiSO100Follower(robot_config)
+        right_robot = self._build_follower(
+            right_robot_type,
+            right_robot_port,
+            robot_cfg[1].get("id") or "right_follower",
+        )
 
-        # Return tuple with both teleops and robot
-        # The worker will need to handle this special case
-        return (left_teleop, right_teleop), robot
+        if left_robot_type == right_robot_type == "SO100":
+            robot_instance = lerobot.robots.bi_so100_follower.BiSO100Follower(
+                lerobot.robots.bi_so100_follower.BiSO100FollowerConfig(
+                    left_arm_port=left_robot_port,
+                    right_arm_port=right_robot_port,
+                    id="bimanual_follower_so100",
+                )
+            )
+        else:
+            robot_instance = CompositeBimanualRobot(left_robot, right_robot)
+
+        if teleop_instance:
+            return teleop_instance, robot_instance
+
+        return (left_teleop, right_teleop), robot_instance
+
+    def _build_leader(self, arm_type: str, port: str, arm_id: str):
+        if arm_type == "SO100":
+            cfg = lerobot.teleoperators.so100_leader.SO100LeaderConfig(port=port, id=arm_id)
+            return lerobot.teleoperators.so100_leader.SO100Leader(cfg)
+        if arm_type == "SO101":
+            cfg = lerobot.teleoperators.so101_leader.SO101LeaderConfig(port=port, id=arm_id)
+            return lerobot.teleoperators.so101_leader.SO101Leader(cfg)
+        raise ValueError(f"Unsupported teleop arm type: {arm_type}")
+
+    def _build_follower(self, arm_type: str, port: str, arm_id: str):
+        if arm_type == "SO100":
+            cfg = lerobot.robots.so100_follower.So100FollowerConfig(port=port, id=arm_id)
+            return lerobot.robots.so100_follower.So100Follower(cfg)
+        if arm_type == "SO101":
+            cfg = lerobot.robots.so101_follower.So101FollowerConfig(port=port, id=arm_id)
+            return lerobot.robots.so101_follower.So101Follower(cfg)
+        raise ValueError(f"Unsupported robot arm type: {arm_type}")
 
     def _cleanup(self):
         """Clean up teleop and robot connections."""
@@ -305,6 +365,8 @@ class TeleopMode(QObject):
         self._active = False
         self._saved_multiplier: Optional[float] = None
         self._state_store = AppStateStore.instance()
+        self._suppress_state = False
+        self._state_store.state_changed.connect(self._on_state_changed)
 
     @classmethod
     def instance(cls) -> "TeleopMode":
@@ -320,18 +382,38 @@ class TeleopMode(QObject):
         if not self._active:
             self._saved_multiplier = current_multiplier
             self._active = True
-            self._state_store.set_state("teleop.mode", True)
+            self._set_state("teleop.mode", True)
+            self._set_state("control.speed_multiplier_locked", True)
+            self._set_state("control.speed_multiplier", 1.0)
             self.changed.emit(True)
 
     def exit(self) -> Optional[float]:
         if not self._active:
             return None
         self._active = False
-        self._state_store.set_state("teleop.mode", False)
+        self._set_state("teleop.mode", False)
+        self._set_state("control.speed_multiplier_locked", False)
         self.changed.emit(False)
         saved = self._saved_multiplier
         self._saved_multiplier = None
+        if saved is not None:
+            self._set_state("control.speed_multiplier", saved)
         return saved
+
+    # ------------------------------------------------------------------
+    # State helpers
+
+    def _set_state(self, key: str, value) -> None:
+        self._suppress_state = True
+        self._state_store.set_state(key, value)
+        self._suppress_state = False
+
+    def _on_state_changed(self, key: str, value) -> None:
+        if self._suppress_state:
+            return
+        if self._active and key == "control.speed_multiplier" and value != 1.0:
+            # Enforce override while in teleop mode
+            self._set_state("control.speed_multiplier", 1.0)
 
 
 class TeleopController(QObject):
@@ -420,6 +502,11 @@ class TeleopController(QObject):
         arm_mode = arm_mode if arm_mode in ("left", "right", "both") else "both"
 
         if not self._check_permissions():
+            return False
+
+        if not self.is_jetson():
+            msg = "Teleop available only on the Jetson device."
+            self._emit_error(msg)
             return False
 
         if not self._preflight.prepare(arm_mode):
