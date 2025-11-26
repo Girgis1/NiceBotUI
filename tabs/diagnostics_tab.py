@@ -13,6 +13,7 @@ from PySide6.QtGui import QColor, QFont
 
 from utils.logging_utils import log_exception
 from utils.app_state import AppStateStore
+from utils.motor_manager import get_motor_handle
 
 
 class DiagnosticsTab(QWidget):
@@ -40,10 +41,11 @@ class DiagnosticsTab(QWidget):
     def __init__(self, config: dict, parent=None):
         super().__init__(parent)
         self.config = config
-        self.motor_controller = None
+        self.motor_handle = None
         self.current_arm_index = 0
         self.is_connected = False
         self._pending_reconnect = False
+        self._last_snapshot = None
         
         self.init_ui()
         
@@ -220,13 +222,10 @@ class DiagnosticsTab(QWidget):
     def connect_motors(self):
         """Connect to motor bus and start auto-refresh at 0.2s (5 Hz)"""
         try:
-            from utils.motor_controller import MotorController
-            
-            self.motor_controller = MotorController(self.config, arm_index=self.current_arm_index)
-            
-            if not self.motor_controller.connect():
+            self.motor_handle = get_motor_handle(self.current_arm_index, self.config)
+            if not self.motor_handle.connect():
                 self.status_changed.emit(f"❌ Failed to connect to Arm {self.current_arm_index + 1}")
-                self.motor_controller = None
+                self.motor_handle = None
                 return
             
             self.is_connected = True
@@ -243,19 +242,19 @@ class DiagnosticsTab(QWidget):
         except Exception as exc:
             log_exception("DiagnosticsTab: connect failed", exc)
             self.status_changed.emit(f"❌ Connection error: {exc}")
-            self.motor_controller = None
+            self.motor_handle = None
     
     def disconnect_motors(self):
         """Disconnect from motor bus"""
         self.refresh_timer.stop()
         
-        if self.motor_controller:
+        if self.motor_handle:
             try:
-                self.motor_controller.disconnect()
+                self.motor_handle.disconnect()
             except Exception as exc:
                 log_exception("DiagnosticsTab: disconnect failed", exc, level="warning")
             finally:
-                self.motor_controller = None
+                self.motor_handle = None
         
         self.is_connected = False
         
@@ -271,52 +270,25 @@ class DiagnosticsTab(QWidget):
             self._teleop_running = bool(value)
 
             if self._teleop_running and not was_running:
-                # Teleop started - fully disconnect to free serial bus
+                # Teleop started - pause diagnostics updates to avoid contention
                 self.refresh_timer.stop()
-                if self.is_connected:
-                    self._pending_reconnect = True
-                    self.disconnect_motors()
                 self.status_changed.emit("⏸️ Diagnostics paused during teleop")
             elif not self._teleop_running and was_running:
-                # Teleop stopped - resume diagnostics if we previously paused
-                if self._pending_reconnect:
-                    self._pending_reconnect = False
-                    QTimer.singleShot(500, self.connect_motors)
-                elif self.is_connected:
+                # Teleop stopped - resume diagnostics if connected
+                if self.is_connected:
                     self.refresh_timer.start(200)  # 5 Hz
                 self.status_changed.emit("▶️ Diagnostics resumed")
 
     def refresh_data(self):
         """Read and display current motor diagnostics"""
-        if not self.is_connected or not self.motor_controller or self._teleop_running:
+        if not self.is_connected or not self.motor_handle or self._teleop_running:
             return
         
         try:
-            bus = self.motor_controller.bus
-            if not bus:
+            snapshot = self.motor_handle.last_telemetry()
+            if not snapshot:
                 return
-            
-            # Read all diagnostic data for all motors
-            motor_data = []
-            for idx, name in enumerate(self.motor_controller.motor_names):
-                try:
-                    data = {
-                        'position': int(bus.read("Present_Position", name, normalize=False)),
-                        'goal': int(bus.read("Goal_Position", name, normalize=False)),
-                        'velocity': int(bus.read("Present_Velocity", name, normalize=False)),
-                        'load': int(bus.read("Present_Load", name, normalize=False)),
-                        'temperature': int(bus.read("Present_Temperature", name, normalize=False)),
-                        'current': int(bus.read("Present_Current", name, normalize=False)),
-                        'voltage': int(bus.read("Present_Voltage", name, normalize=False)),
-                        'moving': int(bus.read("Moving", name, normalize=False))
-                    }
-                    motor_data.append(data)
-                except Exception as exc:
-                    log_exception(f"DiagnosticsTab: Failed to read motor {idx + 1}", exc, level="warning")
-                    motor_data.append(None)
-            
-            # Update table
-            self.update_table(motor_data)
+            self.update_table(snapshot)
             
         except Exception as exc:
             log_exception("DiagnosticsTab: refresh_data failed", exc, level="error")

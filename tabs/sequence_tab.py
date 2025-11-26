@@ -22,6 +22,7 @@ from utils.palletize_runtime import (
     compute_pallet_cells,
     create_default_palletize_config,
 )
+from utils.motor_manager import MotorManager
 
 # Vision designer dialog (new modular UI)
 try:
@@ -855,6 +856,10 @@ class SequenceTab(QWidget):
         
         self.clear_running_highlight()
         self.status_label.setText("⏹ Sequence stopped")
+        try:
+            MotorManager.instance().emergency_stop_all()
+        except Exception:
+            pass
     
     def edit_step(self, item: QListWidgetItem):
         """Handle double-click to edit a step"""

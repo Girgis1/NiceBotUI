@@ -9,6 +9,7 @@ from typing import Dict, Iterable, List, Tuple
 
 from utils.logging_utils import log_exception
 from utils.safe_print import safe_print
+from utils.motor_manager import get_motor_handle
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -92,6 +93,12 @@ class TeleopPreflight:
         return targets
 
     def _reset_port(self, port: str, velocity: int = 4000, acceleration: int = 255) -> bool:
+        # Use the shared handle to avoid grabbing the port twice
+        try:
+            handle = get_motor_handle(0, {})  # arm index not used here; port matters
+        except Exception:
+            handle = None
+
         retries = 3
         for attempt in range(1, retries + 1):
             bus = None

@@ -14,6 +14,7 @@ from utils.config_compat import get_arm_port
 from utils.logging_utils import log_exception
 from utils.safe_print import safe_print
 from utils.teleop_preflight import TeleopPreflight
+from utils.motor_manager import get_motor_handle, MotorManager
 
 # LeRobot imports for programmatic teleop
 try:
@@ -53,6 +54,7 @@ class ProgrammaticTeleopWorker(QThread):
         self.teleop = None
         self.robot = None
         self._stopping = False
+        self._motor_handles = []
 
     def stop(self):
         """Stop the teleop session."""
@@ -187,6 +189,11 @@ class ProgrammaticTeleopWorker(QThread):
             port=robot_port,
             id=f"{self.arm_target}_follower"
         )
+        # Use shared motor handle to avoid contention
+        handle = get_motor_handle(arm_index, self.config)
+        self._motor_handles.append(handle)
+        if not handle.connect():
+            raise RuntimeError(f"Teleop: failed to connect motor handle for {self.arm_target}")
         robot = lerobot.robots.so101_follower.So101Follower(robot_config)
 
         return teleop, robot
@@ -263,6 +270,12 @@ class ProgrammaticTeleopWorker(QThread):
             right_arm_port=robot_ports[1],  # Right follower (SO101)
             id="bimanual_follower_so101"
         )
+        # Acquire shared motor handles for both arms to avoid contention
+        left_handle = get_motor_handle(0, self.config)
+        right_handle = get_motor_handle(1, self.config)
+        self._motor_handles.extend([left_handle, right_handle])
+        if not left_handle.connect() or not right_handle.connect():
+            raise RuntimeError("Teleop: failed to connect motor handles for bimanual")
         robot = lerobot.robots.bi_so100_follower.BiSO100Follower(robot_config)
 
         # Return tuple with both teleops and robot
@@ -291,6 +304,9 @@ class ProgrammaticTeleopWorker(QThread):
                 self.robot.disconnect()
         except Exception as e:
             self.log_message.emit(f"Warning: robot disconnect failed: {e}")
+
+        # Release motor handles (manager keeps them alive; no explicit disconnect)
+        self._motor_handles.clear()
 
 
 class TeleopMode(QObject):

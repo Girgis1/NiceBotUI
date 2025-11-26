@@ -7,7 +7,7 @@ from typing import Any, Mapping, Optional
 
 from PySide6.QtCore import QObject, Signal, Slot
 
-from .motor_controller import MotorController
+from .motor_manager import get_motor_handle
 from .config_compat import get_home_positions, get_home_velocity, get_arm_port
 
 
@@ -61,7 +61,7 @@ class HomeMoveWorker(QObject):
         self.progress.emit(f"Connecting to motors (arm {arm_index})...")
 
         try:
-            controller = MotorController(config, arm_index=arm_index)
+            controller = get_motor_handle(arm_index, config)
         except Exception as exc:  # pragma: no cover - controller init touches hardware libs
             self.finished.emit(False, f"Motor controller initialisation failed: {exc}")
             return
@@ -78,12 +78,15 @@ class HomeMoveWorker(QObject):
                 wait=True,
                 keep_connection=False,
             )
+
+            # Disable torque after reaching home to let the arm rest
+            try:
+                if controller.bus:
+                    for name in controller.motor_names:
+                        controller.bus.write("Torque_Enable", name, 0, normalize=False)
+            except Exception:
+                pass
         except Exception as exc:  # pragma: no cover - hardware specific
             self.finished.emit(False, f"Home move failed: {exc}")
         else:
             self.finished.emit(True, f"✓ Home position reached @ {velocity}")
-        finally:
-            try:
-                controller.disconnect()
-            except Exception:
-                pass

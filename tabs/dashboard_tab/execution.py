@@ -12,6 +12,7 @@ from utils.model_paths import (
     build_checkpoint_path,
     resolve_training_root,
 )
+from utils.motor_manager import MotorManager
 
 
 class DashboardExecutionMixin:
@@ -190,7 +191,7 @@ class DashboardExecutionMixin:
         self._fatal_error_active = False
         self._last_log_code = None
         self._last_log_message = None
-        self.start_stop_btn.setText("STOP")
+        self.start_stop_btn.setText("⏹ STOP")
         self.is_running = True
         self.start_time = datetime.now()
         self.timer.start(1000)  # Update elapsed time every second
@@ -402,6 +403,12 @@ class DashboardExecutionMixin:
         if self.worker and self.worker.isRunning():
             self.worker.stop()
             self.worker.wait(5000)  # Wait up to 5 seconds
+
+        # Emergency stop: drop torque immediately on all arms
+        try:
+            MotorManager.instance().emergency_stop_all()
+        except Exception:
+            pass
 
         # Reset UI
         self._reset_ui_after_run()
@@ -616,8 +623,10 @@ class DashboardExecutionMixin:
             self._last_log_code = None
             self._last_log_message = None
             self.is_running = False
+            self.start_stop_btn.blockSignals(True)
             self.start_stop_btn.setChecked(False)
             self.start_stop_btn.setText("START")
+            self.start_stop_btn.blockSignals(False)
             self.timer.stop()
             self._vision_state_active = False
             self._last_vision_signature = None

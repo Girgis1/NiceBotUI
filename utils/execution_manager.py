@@ -25,7 +25,7 @@ from PySide6.QtCore import QThread, Signal
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from utils.motor_controller import MotorController
+from utils.motor_manager import get_motor_handle
 from utils.actions_manager import ActionsManager
 from utils.sequences_manager import SequencesManager
 from utils.camera_backend import open_capture
@@ -76,7 +76,7 @@ class ExecutionWorker(QThread):
         # Managers
         self.actions_mgr = ActionsManager()
         self.sequences_mgr = SequencesManager()
-        self.motor_controller = MotorController(config, arm_index=self.arm_index)
+        self.motor_controller = get_motor_handle(self.arm_index, config)
         self.speed_multiplier = config.get("control", {}).get("speed_multiplier", 1.0)
         self.motor_controller.speed_multiplier = self.speed_multiplier
         self._model_hold_requested_home = False
@@ -702,7 +702,7 @@ class ExecutionWorker(QThread):
         controller = self.motor_controller
         owns_controller = False
         if arm_index != self.arm_index:
-            controller = MotorController(self.config, arm_index=arm_index)
+            controller = get_motor_handle(arm_index, self.config)
             controller.speed_multiplier = self.speed_multiplier
             owns_controller = True
 
@@ -720,10 +720,8 @@ class ExecutionWorker(QThread):
             return False
         finally:
             if owns_controller:
-                try:
-                    controller.disconnect()
-                except Exception:
-                    pass
+                # Shared handle - do not disconnect; manager keeps it alive
+                pass
     
     def _execute_recording_inline(self, recording_name: str):
         """Execute a recording as part of a sequence (inline)"""
@@ -820,7 +818,6 @@ class ExecutionWorker(QThread):
             home_arm_2: Whether to home arm 2
         """
         from utils.config_compat import get_home_positions, get_home_velocity
-        from utils.motor_controller import MotorController
         
         # Get all robot arms
         robot_arms = self.config.get("robot", {}).get("arms", [])
@@ -859,8 +856,7 @@ class ExecutionWorker(QThread):
             self.log_message.emit('info', f"Homing {arm_name} (Arm {arm_id}): {home_positions}")
             
             try:
-                # Create controller for this specific arm
-                arm_controller = MotorController(self.config, arm_index=arm_index)
+                arm_controller = get_motor_handle(arm_index, self.config)
                 
                 if not arm_controller.bus:
                     if not arm_controller.connect():
@@ -874,8 +870,6 @@ class ExecutionWorker(QThread):
                     wait=True,
                     keep_connection=False
                 )
-                
-                arm_controller.disconnect()
                 self.log_message.emit('info', f"✓ {arm_name} reached home position")
                 
             except Exception as e:

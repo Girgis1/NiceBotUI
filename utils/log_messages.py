@@ -117,12 +117,35 @@ def translate_worker_message(level: str, message: str) -> Optional[LogEntry]:
             code="motor_resilience_recovered",
         )
 
+    if "resilient" in lowered and "retry" in lowered and "motor" in lowered:
+        return LogEntry(
+            level="warning",
+            message="Motor bus retrying after a dropout.",
+            code="motor_resilience_retry",
+            dedupe=True,
+        )
+
+    if "resilient" in lowered and "recovered" in lowered:
+        return LogEntry(
+            level="success",
+            message="Motor link recovered; continuing the run.",
+            code="motor_resilience_recovered",
+        )
+
     if "resilience: waypoint not confirmed" in lowered:
         return LogEntry(
             level="warning",
             message="Waypoint not confirmed after retries; continuing.",
             code="motor_resilience_continue",
-            dedupe=False,
+            dedupe=True,
+        )
+
+    if "port is in use" in lowered and "txrxresult" in lowered:
+        return LogEntry(
+            level="warning",
+            message="Motor bus is busy; retrying with resilience.",
+            code="motor_port_busy",
+            dedupe=True,
         )
 
     if "process exited with code" in lowered or "robot control app closed with code" in lowered:

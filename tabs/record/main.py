@@ -23,7 +23,7 @@ from utils.config_compat import (
     get_active_arm_index,
     set_active_arm_index,
 )
-from utils.motor_controller import MotorController
+from utils.motor_manager import get_motor_handle, MotorManager
 from utils.app_state import AppStateStore
 from utils.logging_utils import log_exception
 from utils.teleop_controller import TeleopController, TeleopMode
@@ -50,7 +50,7 @@ class RecordTab(
         self.actions_manager = ActionsManager()
         self.state_store = AppStateStore.instance()
         self.active_arm_index = get_active_arm_index(self.config, arm_type="robot")
-        self.motor_controller = MotorController(config, arm_index=self.active_arm_index)
+        self.motor_controller = get_motor_handle(self.active_arm_index, config)
         self.teleop_controller = TeleopController(config)
         self.teleop_mode = TeleopMode.instance()
         self._robot_capable = True
@@ -437,14 +437,8 @@ class RecordTab(
         self._notify_arm_change()
 
     def _rebuild_motor_controller(self) -> None:
-        existing = getattr(self, "motor_controller", None)
-        if existing:
-            try:
-                existing.disconnect()
-            except Exception as exc:
-                log_exception("RecordTab: failed to disconnect previous motor controller", exc, level="warning")
         try:
-            self.motor_controller = MotorController(self.config, arm_index=self.active_arm_index)
+            self.motor_controller = get_motor_handle(self.active_arm_index, self.config)
         except Exception as exc:
             log_exception(f"RecordTab: motor controller init failed for arm {self.active_arm_index}", exc, level="error")
             if hasattr(self, "status_label"):
@@ -650,7 +644,7 @@ class RecordTab(
             controller = self.motor_controller
         else:
             try:
-                controller = MotorController(self.config, arm_index=arm_index)
+                controller = get_motor_handle(arm_index, self.config)
                 temporary = True
             except Exception as exc:
                 log_exception(f"RecordTab: failed to init motor controller for arm {arm_index}", exc, level="warning")
@@ -663,9 +657,8 @@ class RecordTab(
                     return positions
             return controller.read_positions()
         finally:
-            if temporary and controller:
-                with contextlib.suppress(Exception):
-                    controller.disconnect()
+            # Shared handles are kept alive; no disconnect here
+            pass
 
     def _capture_positions_for_target(self) -> list[tuple[int, list[int]]]:
         results: list[tuple[int, list[int]]] = []

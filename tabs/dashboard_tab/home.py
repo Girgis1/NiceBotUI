@@ -27,7 +27,12 @@ class DashboardHomeMixin:
     # ------------------------------------------------------------------ runner helpers
     def _ensure_home_sequence_runner(self) -> None:
         if hasattr(self, "_home_sequence_runner") and self._home_sequence_runner:
-            return
+            if not self._home_sequence_runner.is_running:
+                # Recreate to ensure clean state between runs
+                self._home_sequence_runner.deleteLater()
+                self._home_sequence_runner = None
+            else:
+                return
 
         self._home_sequence_runner = HomeSequenceRunner(self)
         self._home_sequence_runner.progress.connect(self._on_home_progress)

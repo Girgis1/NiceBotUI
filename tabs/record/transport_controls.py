@@ -9,6 +9,7 @@ from PySide6.QtCore import QTimer
 
 from utils.logging_utils import log_exception
 from utils.motor_controller import MotorController
+from utils.motor_manager import get_motor_handle, MotorManager
 
 
 class TransportControlsMixin:
@@ -269,7 +270,7 @@ class TransportControlsMixin:
             controller = cache.get(arm_index)
             if controller is None:
                 try:
-                    controller = MotorController(self.config, arm_index=arm_index)
+                    controller = get_motor_handle(arm_index, self.config)
                 except Exception as exc:
                     log_exception(f"RecordTab: playback controller init failed (arm {arm_index})", exc)
                     return None
@@ -442,6 +443,12 @@ class TransportControlsMixin:
         if not self.play_loop:
             print("[PLAYBACK] Disconnecting motors")
             self._disconnect_playback_controllers()
+
+        # Emergency stop for safety
+        try:
+            MotorManager.instance().emergency_stop_all()
+        except Exception:
+            pass
 
         self.status_label.setText("⏹ Playback stopped")
         self.playback_status.emit("stopped")

@@ -9,6 +9,9 @@ import sys
 # Add parent directory to path to import HomePos
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# Simple per-port guard to avoid multiple owners of the same serial device
+_PORT_OWNERS = {}
+
 try:
     from HomePos import read_current_position, create_motor_bus, MOTOR_NAMES, read_config
     MOTOR_CONTROL_AVAILABLE = True
@@ -191,19 +194,28 @@ class MotorController:
             raise RuntimeError("Motor control not available")
         
         try:
-            self.bus = create_motor_bus(self.port)
+            # Guard against duplicate connections to the same port
+            owner = _PORT_OWNERS.get(self.port)
+            if owner and owner is not self:
+                print(f"[MOTOR] Port {self.port} is already owned by another controller")
+                return False
+
+            bus = create_motor_bus(self.port)
             try:
                 from utils.resilient_motor_bus import ResilientMotorBus  # Local import to avoid hard dep
             except Exception:
                 ResilientMotorBus = None
 
-            if ResilientMotorBus and self.bus and not isinstance(self.bus, ResilientMotorBus):
-                self.bus = ResilientMotorBus(self.bus)
+            if ResilientMotorBus and bus and not isinstance(bus, ResilientMotorBus):
+                bus = ResilientMotorBus(bus)
                 try:
-                    max_retries = getattr(self.bus, "MAX_RETRIES", "?")
+                    max_retries = getattr(bus, "MAX_RETRIES", "?")
                     print(f"[MOTOR] Using resilient bus wrapper (max {max_retries} retries)")
                 except Exception:
                     print("[MOTOR] Using resilient bus wrapper")
+
+            self.bus = bus
+            _PORT_OWNERS[self.port] = self
             return True
         except Exception as e:
             print(f"Error connecting to motors: {e}")
@@ -217,6 +229,11 @@ class MotorController:
             except:
                 pass
             self.bus = None
+        try:
+            if _PORT_OWNERS.get(self.port) is self:
+                _PORT_OWNERS.pop(self.port, None)
+        except Exception:
+            pass
     
     def set_positions(self, positions: list[int], velocity: int = 600, wait: bool = True, keep_connection: bool = False):
         """Set motor positions with velocity and position verification (Option D - Hybrid Approach)
